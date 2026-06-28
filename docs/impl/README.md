@@ -17,6 +17,7 @@
 | [08-filesystem.md](08-filesystem.md) | 文件系统：概览（磁盘/挂载点/池）+ 磁盘详情（分区表） | `handlers/filesystem.rs`, `web/js/pages/filesystem.js`, `web/js/pages/disks.js` |
 | [09-zfs.md](09-zfs.md) | ZFS 管理：Zpool/数据集/快照 + 三级菜单 | `handlers/zfs.rs`, `web/js/pages/zfs.js` |
 | [10-file-manager.md](10-file-manager.md) | 文件管理器：目录树 + 列表/网格、上传/下载/重命名/删除/属性 | `handlers/files.rs`, `web/js/pages/files.js` |
+| [11-accounts.md](11-accounts.md) | 系统用户与用户组：解析 /etc/passwd、/etc/group 的只读列表 | `handlers/accounts.rs`, `web/js/pages/accounts.js` |
 
 ## 文档规范
 

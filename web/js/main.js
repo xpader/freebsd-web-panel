@@ -12,6 +12,7 @@ import { renderFsOverview } from './pages/filesystem.js';
 import { renderDisks } from './pages/disks.js';
 import { renderFiles } from './pages/files.js';
 import { renderZfsPools, renderZfsPoolDetail, renderZfsDatasets, renderZfsSnapshots } from './pages/zfs.js';
+import { renderSysUsers, renderSysGroups } from './pages/accounts.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -33,6 +34,9 @@ defineRoute('/sysctl', makePlannedPage('/sysctl', 'Sysctl 系统参数', '动态
 defineRoute('/rcconf', makePlannedPage('/rcconf', 'RC 配置', 'rc.conf 系统与服务启动配置', '通过 sysrc 管理 rc.conf 键值，按功能分类展示。'));
 defineRoute('/network', makePlannedPage('/network', '网络', '网络接口、IP、路由管理', '解析 ifconfig 输出，管理接口 IP/别名/路由并持久化。'));
 defineRoute('/services', makePlannedPage('/services', '服务', 'rc.d 服务管理', '列出可用/已启用服务，执行 start/stop/restart。'));
+// System accounts routes.
+defineRoute('/accounts/users', renderSysUsers);
+defineRoute('/accounts/groups', renderSysGroups);
 defineRoute('/pf', makePlannedPage('/pf', '防火墙 (PF)', 'Packet Filter 规则与状态', '查询 pfctl 状态/规则/表，编辑 /etc/pf.conf。'));
 defineRoute('/jails', makePlannedPage('/jails', 'Jail 容器', 'FreeBSD Jail 原生管理（libjail，不依赖第三方工具）', '通过 libjail FFI (jailparam_*) 管理生命周期，解析 /etc/jail.conf。'));
 // ZFS routes.

@@ -28,7 +28,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - 401 响应 → 清除 token + 重定向 `#/login`
 ### 三级导航 `web/js/ui/layout.js`
 
-顶部主菜单（7 标签）+ 左侧子菜单（随主菜单切换）+ 子子菜单（可折叠）。菜单结构为 `MENU` 常量数组：
+顶部主菜单（6 标签）+ 左侧子菜单（随主菜单切换）+ 子子菜单（可折叠）。菜单结构为 `MENU` 常量数组：
 
 ```
 概览     → [仪表盘]
@@ -37,8 +37,9 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 文件系统 → [概览, 磁盘, ZFS → [Zpool, 数据集, 快照]]
 虚拟化   → [Jail 容器, Bhyve 虚拟机]
 监控     → [CPU & 负载, 内存, 温度]
-系统     → [用户, 审计日志]
 ```
+
+面板自身管理（用户、审计日志）不在顶部主菜单，而是放在顶栏右侧的设置下拉菜单中：用户名左侧的「⚙ 设置」按钮，点击展开 `SETTINGS` 数组（用户、审计日志）。`groupOfPath` 同时检查 `MENU` 和 `SETTINGS`；当路径属于设置组时，设置按钮高亮，侧边栏显示其子项。
 
 菜单项支持 `children` 数组：
 - 有 `children` → 可折叠子组（组头可点击，导航到第一个子项 + 自动展开，`cursor: pointer`，箭头旋转动画）
@@ -47,7 +48,9 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 `renderLayout(app, currentPath, pageContent)` 渲染骨架：顶栏 + 侧栏 + 主内容区。`groupOfPath(path)` 计算路径所属的主菜单组（递归检查 `children`）。子项高亮为精确匹配（`currentPath === item.path`）。
 ```
 
-`renderLayout(app, currentPath, pageContent)` 渲染骨架：顶栏（品牌名 + 导航标签 + 用户名 + 退出）+ 侧栏（当前组子菜单）+ 主内容区。`groupOfPath(path)` 计算路径所属的主菜单组。
+`renderLayout(app, currentPath, pageContent)` 渲染骨架：顶栏（品牌名 + 导航标签 + 设置下拉 + 用户名下拉）+ 侧栏（当前组子菜单）+ 主内容区。`groupOfPath(path)` 计算路径所属的主菜单组。
+
+顶栏右侧两个下拉：设置菜单（⚙ 设置 → 用户、审计日志）和用户菜单（👤 昵称 → 退出登录）。两者点击切换、点击外部关闭、点击菜单项后关闭。
 
 ### 页面模块
 

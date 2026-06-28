@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod audit;
 pub mod auth;
 pub mod files;

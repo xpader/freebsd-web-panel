@@ -31,6 +31,9 @@ pub fn build(state: AppState) -> Router {
         .route("/api/users/{id}", put(handlers::users::update_user))
         .route("/api/users/{id}", delete(handlers::users::delete_user))
         .route("/api/audit", get(handlers::audit::list))
+        // --- System accounts (FreeBSD users & groups) ---
+        .route("/api/accounts/users", get(handlers::accounts::list_users))
+        .route("/api/accounts/groups", get(handlers::accounts::list_groups))
         // --- module stubs (planned) ---
         .route("/api/sysctl", get(handlers::mod_stubs::sysctl))
         .route("/api/rcconf", get(handlers::mod_stubs::rcconf))

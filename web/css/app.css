@@ -65,12 +65,70 @@ a:hover { color: var(--accent-hover); }
 .topnav-tab .icon { font-size: 14px; opacity: 0.85; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
 .user-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   color: var(--text-dim);
-  padding: 4px 10px;
-  background: var(--bg-elev2);
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
   border-radius: 6px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
 }
+.user-chip:hover { background: var(--bg-elev2); color: var(--text); }
+.user-chip .icon { font-size: 14px; opacity: 0.85; }
+#user-menu.open .user-chip { background: var(--bg-elev2); color: var(--text); }
+
+/* Settings dropdown (panel self-management) */
+.settings-menu { position: relative; }
+.settings-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-btn:hover { background: var(--bg-elev2); color: var(--text); }
+.settings-btn.active { color: var(--accent); }
+.settings-menu.open .settings-btn { background: var(--bg-elev2); color: var(--text); }
+.settings-btn .icon { font-size: 14px; }
+.settings-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 6px;
+  z-index: 30;
+}
+.settings-menu.open .settings-dropdown { display: block; }
+.settings-dropdown a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.settings-dropdown a:hover { background: var(--bg-elev2); color: var(--text); }
+.settings-dropdown a.active { color: var(--accent); }
+.settings-dropdown .icon { width: 16px; text-align: center; opacity: 0.8; }
 
 .body-wrap { display: flex; flex: 1; min-height: 0; }
 
@@ -304,6 +362,7 @@ tr:hover td { background: var(--bg-elev2); }
 /* ---- Toolbar ---- */
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
 .toolbar .search { max-width: 260px; }
+.toolbar .filter-input { width: auto; max-width: 260px; }
 
 /* ---- Modal ---- */
 .modal-overlay {

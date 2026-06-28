@@ -24,6 +24,15 @@ const MENU = [
       { path: '/sysctl', label: 'Sysctl 系统参数', icon: '⚙' },
       { path: '/rcconf', label: 'RC 配置', icon: '☰' },
       { path: '/services', label: '服务', icon: '▶' },
+      {
+        path: '/accounts/users',
+        label: '用户与组',
+        icon: '☻',
+        children: [
+          { path: '/accounts/users', label: '用户', icon: '☻' },
+          { path: '/accounts/groups', label: '用户组', icon: '☰' },
+        ],
+      },
     ],
   },
   {
@@ -78,16 +87,12 @@ const MENU = [
       { path: '/monitor/temp', label: '温度', icon: '🌡' },
     ],
   },
-  {
-    key: 'system',
-    label: '系统',
-    icon: '☻',
-    default: '/users',
-    items: [
-      { path: '/users', label: '用户', icon: '☻' },
-      { path: '/audit', label: '审计日志', icon: '☰' },
-    ],
-  },
+];
+
+// Settings menu (right-side dropdown) — panel self-management.
+const SETTINGS = [
+  { path: '/users', label: '用户', icon: '☻' },
+  { path: '/audit', label: '审计日志', icon: '☰' },
 ];
 
 // Determine which top-level group a path belongs to.
@@ -95,6 +100,7 @@ function groupOfPath(path) {
   for (const g of MENU) {
     if (pathBelongsToGroup(path, g.items)) return g.key;
   }
+  if (pathBelongsToGroup(path, SETTINGS)) return 'settings';
   return 'overview';
 }
 
@@ -110,9 +116,29 @@ function pathBelongsToGroup(path, items) {
   return false;
 }
 
+// Close the settings dropdown when clicking outside it.
+// Bound once on the document; re-binding on each render is a no-op.
+let settingsDocClickBound = false;
+function bindSettingsDocClick() {
+  if (settingsDocClickBound) return;
+  document.addEventListener('click', (e) => {
+    const settingsMenu = document.getElementById('settings-menu');
+    if (settingsMenu && !settingsMenu.contains(e.target)) settingsMenu.classList.remove('open');
+    const userMenu = document.getElementById('user-menu');
+    if (userMenu && !userMenu.contains(e.target)) {
+      userMenu.classList.remove('open');
+      const toggle = document.getElementById('nav-user');
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    }
+  });
+  settingsDocClickBound = true;
+}
+
 export function renderLayout(app, currentPath, pageContent) {
   const activeGroup = groupOfPath(currentPath);
-  const group = MENU.find((g) => g.key === activeGroup) || MENU[0];
+  const group = activeGroup === 'settings'
+    ? { items: SETTINGS }
+    : (MENU.find((g) => g.key === activeGroup) || MENU[0]);
 
   // Top menu tabs.
   const topHtml = MENU.map((g) => `
@@ -130,8 +156,27 @@ export function renderLayout(app, currentPath, pageContent) {
       <div class="topbar-brand">FreeBSD Web Panel</div>
       <nav class="topnav">${topHtml}</nav>
       <div class="topbar-right">
-        <span class="user-chip" id="nav-user">…</span>
-        <button class="btn-secondary btn-sm" onclick="window.__fwpLogout()">退出</button>
+        <div class="settings-menu" id="settings-menu">
+          <button class="settings-btn ${activeGroup === 'settings' ? 'active' : ''}" id="settings-toggle" aria-haspopup="true" aria-expanded="false">
+            <span class="icon">⚙</span>设置
+          </button>
+          <div class="settings-dropdown">
+            ${SETTINGS.map((s) => `
+              <a href="#${s.path}" class="${currentPath === s.path ? 'active' : ''}">
+                <span class="icon">${s.icon}</span>${s.label}
+              </a>`).join('')}
+          </div>
+        </div>
+        <div class="settings-menu" id="user-menu">
+          <button class="user-chip" id="nav-user" aria-haspopup="true" aria-expanded="false">
+            <span class="icon">👤</span><span class="user-name">…</span>
+          </button>
+          <div class="settings-dropdown">
+            <a href="#" id="nav-logout">
+              <span class="icon">⏻</span>退出登录
+            </a>
+          </div>
+        </div>
       </div>
     </div>
     <div class="body-wrap">
@@ -155,9 +200,49 @@ export function renderLayout(app, currentPath, pageContent) {
     });
   });
 
+  // Settings dropdown: toggle on button click, close on item selection.
+  const settingsToggle = document.getElementById('settings-toggle');
+  if (settingsToggle) {
+    settingsToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = document.getElementById('settings-menu');
+      const open = menu.classList.toggle('open');
+      settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  const settingsDropdown = document.querySelector('.settings-dropdown');
+  if (settingsDropdown) {
+    settingsDropdown.addEventListener('click', () => {
+      const menu = document.getElementById('settings-menu');
+      menu.classList.remove('open');
+      const toggle = document.getElementById('settings-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    });
+  }
+  bindSettingsDocClick();
+
+  // User dropdown: toggle on chip click, logout on item click.
+  const userToggle = document.getElementById('nav-user');
+  if (userToggle) {
+    userToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = document.getElementById('user-menu');
+      const open = menu.classList.toggle('open');
+      userToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  const navLogout = document.getElementById('nav-logout');
+  if (navLogout) {
+    navLogout.addEventListener('click', (e) => {
+      e.preventDefault();
+      const menu = document.getElementById('user-menu');
+      menu.classList.remove('open');
+      window.__fwpLogout();
+    });
+  }
   import('../api.js').then(({ api }) => {
     api.get('/api/auth/me').then((u) => {
-      const el = document.getElementById('nav-user');
+      const el = document.querySelector('.user-name');
       if (el) el.textContent = u.username;
     }).catch(() => {});
   });
