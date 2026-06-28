@@ -9,6 +9,7 @@ import { renderAudit } from './pages/audit.js';
 import { renderMonitorCpu, renderMonitorMemory, renderMonitorTemp } from './pages/monitor.js';
 import { makePlannedPage } from './pages/planned.js';
 import { renderFsOverview } from './pages/filesystem.js';
+import { renderDisks } from './pages/disks.js';
 import { renderZfsPools, renderZfsPoolDetail, renderZfsDatasets, renderZfsSnapshots } from './pages/zfs.js';
 
 // Auth routes.
@@ -25,6 +26,7 @@ defineRoute('/monitor', renderMonitorCpu);
 defineRoute('/monitor/memory', renderMonitorMemory);
 defineRoute('/monitor/temp', renderMonitorTemp);
 defineRoute('/filesystem', renderFsOverview);
+defineRoute('/filesystem/disks', renderDisks);
 defineRoute('/sysctl', makePlannedPage('/sysctl', 'Sysctl 系统参数', '动态内核参数 (sysctl) 管理', '通过 sysctl 命令读写运行时参数，并持久化到 /etc/sysctl.conf。'));
 defineRoute('/rcconf', makePlannedPage('/rcconf', 'RC 配置', 'rc.conf 系统与服务启动配置', '通过 sysrc 管理 rc.conf 键值，按功能分类展示。'));
 defineRoute('/network', makePlannedPage('/network', '网络', '网络接口、IP、路由管理', '解析 ifconfig 输出，管理接口 IP/别名/路由并持久化。'));

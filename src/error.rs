@@ -28,6 +28,8 @@ pub enum ApiError {
     Hash(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Command(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -47,6 +49,7 @@ impl ApiError {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            ApiError::Command(_) => (StatusCode::UNPROCESSABLE_ENTITY, "command_failed"),
             ApiError::Database(_) | ApiError::Hash(_) | ApiError::Io(_) | ApiError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }

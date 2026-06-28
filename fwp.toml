@@ -1,0 +1,15 @@
+[server]
+listen = "127.0.0.1:8080"
+web_root = "/usr/local/share/fwp/web"
+
+[paths]
+db = "/var/db/fwp/fwp.db"
+audit = "/var/db/fwp/audit.log"
+
+[auth]
+session_ttl = 28800
+
+[monitor]
+enabled = true
+interval_sec = 30
+retention_days = 30

@@ -10,7 +10,7 @@ import { formModal } from '../ui/formModal.js';
 export async function renderZfsPools(app) {
   renderLayout(app, '/zfs/pools', `
     <div class="page-header">
-      <h1>Zpool 管理</h1>
+      <h1>Zpool</h1>
       <p>ZFS 存储池状态，点击池名查看详情</p>
     </div>
     <div id="zfs-pools"><div class="empty"><span class="spinner"></span> 加载中…</div></div>
@@ -363,16 +363,21 @@ window.__fwpCreateSnap = async () => {
 window.__fwpCloneSnap = async (source) => {
   const result = await formModal(`克隆快照: ${source}`, [
     { key: 'target', label: '目标数据集名称', placeholder: '如 zroot/new-clone', required: true },
+    { key: 'mountpoint', label: '挂载点', placeholder: '留空则继承源数据集挂载点' },
   ]);
   if (!result) return;
-  api.post('/api/zfs/snapshot/clone', { source, target: result.target }).then(() => {
+  api.post('/api/zfs/snapshot/clone', { source, target: result.target, mountpoint: result.mountpoint || undefined }).then(() => {
     toast(`克隆成功: ${result.target}`); loadSnapshots();
   }).catch(e => toast(e.message || '克隆失败', 'error'));
 };
 
 window.__fwpDelSnap = async (full) => {
-  if (!await confirmDialog('删除快照', `确定删除 "${full}" 吗？`)) return;
-  api.del(`/api/zfs/snapshot/destroy?name=${encodeURIComponent(full)}`).then(() => {
+  const result = await confirmDialog('删除快照', `确定删除 "${full}" 吗？`, [
+    { key: 'recursive', label: '递归删除（连同依赖此快照的克隆数据集，-R）', checked: false },
+  ]);
+  if (!result || !result.confirmed) return;
+  const qs = `name=${encodeURIComponent(full)}${result.recursive ? '&recursive=true' : ''}`;
+  api.del(`/api/zfs/snapshot/destroy?${qs}`).then(() => {
     toast('快照已删除'); loadSnapshots();
   }).catch(e => toast(e.message || '删除失败', 'error'));
 };

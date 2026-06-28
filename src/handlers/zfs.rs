@@ -32,6 +32,18 @@ fn validate_name(name: &str) -> ApiResult<()> {
     Ok(())
 }
 
+/// Validate a mountpoint path: must start with '/', and contain no
+/// null bytes, newlines, or shell metacharacters.
+fn validate_mountpoint(mp: &str) -> ApiResult<()> {
+    if mp.is_empty() || !mp.starts_with('/') {
+        return Err(ApiError::BadRequest("mountpoint must be an absolute path".into()));
+    }
+    if mp.contains('\0') || mp.contains('\n') || mp.contains('\r') {
+        return Err(ApiError::BadRequest("mountpoint contains invalid characters".into()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NameQuery {
     pub name: String,
@@ -41,8 +53,8 @@ fn run(cmd: &str, args: &[&str]) -> ApiResult<String> {
     let output = Command::new(cmd).args(args).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Internal(if stderr.is_empty() {
-            format!("{cmd} failed").into()
+        return Err(ApiError::Command(if stderr.is_empty() {
+            format!("{cmd} failed")
         } else {
             stderr
         }));
@@ -533,19 +545,30 @@ pub async fn snapshot_create(
     Ok((StatusCode::CREATED, Json(serde_json::json!({"name": full}))))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SnapshotDestroyQuery {
+    pub name: String,
+    pub recursive: Option<bool>,
+}
+
 pub async fn snapshot_destroy(
     State(state): State<AppState>,
-    Query(q): Query<NameQuery>,
+    Query(q): Query<SnapshotDestroyQuery>,
 ) -> ApiResult<StatusCode> {
     let full = &q.name;
     validate_name(full)?;
     if !full.contains('@') {
         return Err(ApiError::BadRequest("not a snapshot name".into()));
     }
-    run(ZFS, &["destroy", full])?;
+    let recursive = q.recursive.unwrap_or(false);
+    if recursive {
+        run(ZFS, &["destroy", "-R", full])?;
+    } else {
+        run(ZFS, &["destroy", full])?;
+    }
     crate::audit::record(
         &state, None, "DELETE", "/api/zfs/snapshot/destroy", 200,
-        Some(format!("destroyed snapshot {full}")),
+        Some(format!("destroyed snapshot {full}{}", if recursive { " (recursive)" } else { "" })),
     );
     Ok(StatusCode::NO_CONTENT)
 }
@@ -581,6 +604,7 @@ pub async fn snapshot_rollback(
 pub struct SnapshotCloneBody {
     pub source: String,
     pub target: String,
+    pub mountpoint: Option<String>,
 }
 
 pub async fn snapshot_clone(
@@ -589,6 +613,7 @@ pub async fn snapshot_clone(
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     let source = body.source.trim();
     let target = body.target.trim();
+    let mountpoint = body.mountpoint.as_deref().map(str::trim).filter(|s| !s.is_empty());
     validate_name(source)?;
     validate_name(target)?;
     if !source.contains('@') {
@@ -597,7 +622,12 @@ pub async fn snapshot_clone(
     if target.contains('@') {
         return Err(ApiError::BadRequest("target must be a dataset name".into()));
     }
-    run(ZFS, &["clone", source, target])?;
+    if let Some(mp) = mountpoint {
+        validate_mountpoint(mp)?;
+        run(ZFS, &["clone", "-o", &format!("mountpoint={mp}"), source, target])?;
+    } else {
+        run(ZFS, &["clone", source, target])?;
+    }
     crate::audit::record(
         &state, None, "POST", "/api/zfs/snapshot/clone", 201,
         Some(format!("cloned {source} → {target}")),

@@ -8,7 +8,7 @@ import { confirmDialog } from '../ui/confirm.js';
 export async function renderUsers(app) {
   renderLayout(app, '/users', `
     <div class="page-header">
-      <h1>用户管理</h1>
+      <h1>用户</h1>
       <p>管理面板管理员账户</p>
     </div>
     <div class="toolbar">

@@ -51,6 +51,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/zfs/snapshot/rollback", post(handlers::zfs::snapshot_rollback))
         .route("/api/zfs/snapshot/clone", post(handlers::zfs::snapshot_clone))
         .route("/api/filesystem/overview", get(handlers::filesystem::overview))
+        .route("/api/filesystem/disks", get(handlers::filesystem::disk_detail))
         .route("/api/monitor/series", get(crate::monitor::series))
         .route("/api/monitor/latest", get(crate::monitor::latest))
         .layer(from_fn_with_state(state.clone(), require_auth));

@@ -23,7 +23,7 @@ const MENU = [
     items: [
       { path: '/sysctl', label: 'Sysctl 系统参数', icon: '⚙' },
       { path: '/rcconf', label: 'RC 配置', icon: '☰' },
-      { path: '/services', label: '服务管理', icon: '▶' },
+      { path: '/services', label: '服务', icon: '▶' },
     ],
   },
   {
@@ -43,14 +43,15 @@ const MENU = [
     default: '/filesystem',
     items: [
       { path: '/filesystem', label: '概览', icon: '◇' },
+      { path: '/filesystem/disks', label: '磁盘', icon: '▤' },
       {
         path: '/zfs',
         label: 'ZFS',
         icon: '◈',
         children: [
-          { path: '/zfs/pools', label: 'Zpool 管理', icon: '◉' },
-          { path: '/zfs/datasets', label: '数据集管理', icon: '◇' },
-          { path: '/zfs/snapshots', label: '快照管理', icon: '⎙' },
+          { path: '/zfs/pools', label: 'Zpool', icon: '◉' },
+          { path: '/zfs/datasets', label: '数据集', icon: '◇' },
+          { path: '/zfs/snapshots', label: '快照', icon: '⎙' },
         ],
       },
     ],
@@ -82,7 +83,7 @@ const MENU = [
     icon: '☻',
     default: '/users',
     items: [
-      { path: '/users', label: '用户管理', icon: '☻' },
+      { path: '/users', label: '用户', icon: '☻' },
       { path: '/audit', label: '审计日志', icon: '☰' },
     ],
   },

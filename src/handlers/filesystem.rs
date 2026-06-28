@@ -54,6 +54,47 @@ pub async fn overview() -> ApiResult<Json<FsOverview>> {
     }))
 }
 
+/// Detailed disk information — physical disk + partition table.
+#[derive(Debug, Serialize)]
+pub struct DiskDetail {
+    pub name: String,
+    pub descr: String,
+    pub size_bytes: u64,
+    pub sectorsize: u64,
+    pub mode: String,
+    pub ident: String,
+    pub lunid: String,
+    pub rotation_rate: String,
+    pub fwsectors: u64,
+    pub fwheads: u64,
+    /// Partition scheme from geom part (e.g. "GPT", "MBR"); None if no table.
+    pub scheme: Option<String>,
+    pub state: Option<String>,
+    pub first: Option<u64>,
+    pub last: Option<u64>,
+    pub entries: Option<u64>,
+    pub partitions: Vec<Partition>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Partition {
+    pub name: String,
+    pub mediasize_bytes: u64,
+    pub sectorsize: u64,
+    #[serde(rename = "type")]
+    pub ptype: String,
+    pub label: String,
+    pub index: u32,
+    pub start: u64,
+    pub end: u64,
+    pub offset_bytes: u64,
+    pub rawuuid: String,
+}
+
+pub async fn disk_detail() -> ApiResult<Json<Vec<DiskDetail>>> {
+    Ok(Json(list_disk_details()))
+}
+
 /// Parse `geom disk list` for physical disks. Skips zero-size devices (cd0).
 fn list_disks() -> Vec<Disk> {
     let out = Command::new("/sbin/geom")
@@ -111,6 +152,203 @@ fn list_disks() -> Vec<Disk> {
         });
     }
     disks
+}
+
+/// Parse `geom disk list` + `geom part list` for detailed disk information.
+/// Skips zero-size devices (cd0).
+fn list_disk_details() -> Vec<DiskDetail> {
+    // --- base disk fields from `geom disk list` ---
+    let mut disks: std::collections::HashMap<String, DiskDetail> = HashMap::new();
+    let out = Command::new("/sbin/geom").args(["disk", "list"]).output();
+    if let Ok(o) = out {
+        if o.status.success() {
+            let raw = String::from_utf8_lossy(&o.stdout);
+            let mut cur = DiskDetail {
+                name: String::new(), descr: String::new(), size_bytes: 0,
+                sectorsize: 0, mode: String::new(), ident: String::new(),
+                lunid: String::new(), rotation_rate: String::new(),
+                fwsectors: 0, fwheads: 0, scheme: None, state: None,
+                first: None, last: None, entries: None, partitions: vec![],
+            };
+            let mut have = false;
+            for line in raw.lines() {
+                let t = line.trim();
+                let t = if t.starts_with(|c: char| c.is_ascii_digit()) {
+                    t.split_once(". ").map(|(_, r)| r.trim()).unwrap_or(t)
+                } else {
+                    t
+                };
+                if let Some(v) = t.strip_prefix("Name:") {
+                    if have && cur.size_bytes > 0 {
+                        disks.insert(cur.name.clone(), cur);
+                    }
+                    cur = DiskDetail {
+                        name: v.trim().to_string(), descr: String::new(), size_bytes: 0,
+                        sectorsize: 0, mode: String::new(), ident: String::new(),
+                        lunid: String::new(), rotation_rate: String::new(),
+                        fwsectors: 0, fwheads: 0, scheme: None, state: None,
+                        first: None, last: None, entries: None, partitions: vec![],
+                    };
+                    have = true;
+                } else if have {
+                    if let Some(v) = t.strip_prefix("Mediasize:") {
+                        cur.size_bytes = v.split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+                    } else if let Some(v) = t.strip_prefix("Sectorsize:") {
+                        cur.sectorsize = v.trim().parse().unwrap_or(0);
+                    } else if let Some(v) = t.strip_prefix("Mode:") {
+                        cur.mode = v.trim().to_string();
+                    } else if let Some(v) = t.strip_prefix("descr:") {
+                        cur.descr = v.trim().to_string();
+                    } else if let Some(v) = t.strip_prefix("lunid:") {
+                        cur.lunid = v.trim().to_string();
+                    } else if let Some(v) = t.strip_prefix("ident:") {
+                        cur.ident = v.trim().to_string();
+                    } else if let Some(v) = t.strip_prefix("rotationrate:") {
+                        cur.rotation_rate = v.trim().to_string();
+                    } else if let Some(v) = t.strip_prefix("fwsectors:") {
+                        cur.fwsectors = v.trim().parse().unwrap_or(0);
+                    } else if let Some(v) = t.strip_prefix("fwheads:") {
+                        cur.fwheads = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            if have && cur.size_bytes > 0 {
+                disks.insert(cur.name.clone(), cur);
+            }
+        }
+    }
+
+    // --- partition table from `geom part list` ---
+    let out = Command::new("/sbin/geom").args(["part", "list"]).output();
+    if let Ok(o) = out {
+        if o.status.success() {
+            let raw = String::from_utf8_lossy(&o.stdout);
+            parse_geom_part(&raw, &mut disks);
+        }
+    }
+
+    // Preserve geom order: sort by name (ada0, ada1, da0, ...).
+    let mut details: Vec<DiskDetail> = disks.into_values().collect();
+    details.sort_by(|a, b| a.name.cmp(&b.name));
+    details
+}
+
+/// Parse `geom part list` output and attach partition info to matching disks.
+/// Each geom block: `Geom name: X`, top-level metadata, `Providers:` (partitions),
+/// then `Consumers:`. Provider lines start with `N. Name: foo`.
+fn parse_geom_part(raw: &str, disks: &mut HashMap<String, DiskDetail>) {
+    // State machine per geom block.
+    let mut cur_name: Option<String> = None;
+    // Sections within a block: top-level metadata, "providers", "consumers".
+    let mut in_providers = false;
+    let mut cur_part = Partition {
+        name: String::new(), mediasize_bytes: 0, sectorsize: 0,
+        ptype: String::new(), label: String::new(), index: 0,
+        start: 0, end: 0, offset_bytes: 0, rawuuid: String::new(),
+    };
+    let mut have_part = false;
+
+    let flush_part = |have_part: &mut bool, cur_name: &Option<String>, cur_part: &mut Partition, disks: &mut HashMap<String, DiskDetail>| {
+        if *have_part {
+            if let Some(n) = cur_name {
+                if let Some(d) = disks.get_mut(n) {
+                    d.partitions.push(Partition {
+                        name: cur_part.name.clone(),
+                        mediasize_bytes: cur_part.mediasize_bytes,
+                        sectorsize: cur_part.sectorsize,
+                        ptype: cur_part.ptype.clone(),
+                        label: cur_part.label.clone(),
+                        index: cur_part.index,
+                        start: cur_part.start,
+                        end: cur_part.end,
+                        offset_bytes: cur_part.offset_bytes,
+                        rawuuid: cur_part.rawuuid.clone(),
+                    });
+                }
+            }
+            *cur_part = Partition {
+                name: String::new(), mediasize_bytes: 0, sectorsize: 0,
+                ptype: String::new(), label: String::new(), index: 0,
+                start: 0, end: 0, offset_bytes: 0, rawuuid: String::new(),
+            };
+            *have_part = false;
+        }
+    };
+
+    for line in raw.lines() {
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix("Geom name:") {
+            // Flush last partition of previous block.
+            flush_part(&mut have_part, &cur_name, &mut cur_part, disks);
+            cur_name = Some(v.trim().to_string());
+            in_providers = false;
+            continue;
+        }
+        if t == "Providers:" {
+            in_providers = true;
+            continue;
+        }
+        if t == "Consumers:" {
+            flush_part(&mut have_part, &cur_name, &mut cur_part, disks);
+            in_providers = false;
+            continue;
+        }
+        let Some(n) = cur_name.clone() else { continue };
+
+        if in_providers {
+            // Provider header: "N. Name: ada0p1".
+            let stripped = t
+                .strip_prefix(|c: char| c.is_ascii_digit())
+                .and_then(|s| s.strip_prefix(". "))
+                .map(|s| s.trim());
+            if let Some(rest) = stripped {
+                if let Some(v) = rest.strip_prefix("Name:") {
+                    flush_part(&mut have_part, &cur_name, &mut cur_part, disks);
+                    cur_part.name = v.trim().to_string();
+                    have_part = true;
+                    continue;
+                }
+            }
+            if have_part {
+                if let Some(v) = t.strip_prefix("Mediasize:") {
+                    cur_part.mediasize_bytes = v.split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+                } else if let Some(v) = t.strip_prefix("Sectorsize:") {
+                    cur_part.sectorsize = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = t.strip_prefix("type:") {
+                    cur_part.ptype = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("label:") {
+                    cur_part.label = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("index:") {
+                    cur_part.index = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = t.strip_prefix("start:") {
+                    cur_part.start = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = t.strip_prefix("end:") {
+                    cur_part.end = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = t.strip_prefix("offset:") {
+                    cur_part.offset_bytes = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = t.strip_prefix("rawuuid:") {
+                    cur_part.rawuuid = v.trim().to_string();
+                }
+            }
+        } else {
+            // Top-level geom metadata.
+            if let Some(d) = disks.get_mut(&n) {
+                if let Some(v) = t.strip_prefix("scheme:") {
+                    d.scheme = Some(v.trim().to_string());
+                } else if let Some(v) = t.strip_prefix("state:") {
+                    d.state = Some(v.trim().to_string());
+                } else if let Some(v) = t.strip_prefix("first:") {
+                    d.first = v.trim().parse().ok();
+                } else if let Some(v) = t.strip_prefix("last:") {
+                    d.last = v.trim().parse().ok();
+                } else if let Some(v) = t.strip_prefix("entries:") {
+                    d.entries = v.trim().parse().ok();
+                }
+            }
+        }
+    }
+    // Flush trailing partition of last block.
+    flush_part(&mut have_part, &cur_name, &mut cur_part, disks);
 }
 
 /// Parse `mount` for mounted filesystems.
