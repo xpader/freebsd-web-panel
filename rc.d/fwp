@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# fwp — FreeBSD Web Panel startup script.
+#
+# PROVIDE: fwp
+# REQUIRE: DAEMON
+# KEYWORD: shutdown
+#
+# Add the following lines to /etc/rc.conf to enable fwp:
+#
+#   fwp_enable="YES"
+#   fwp_config="/usr/local/etc/fwp.toml"   # optional, default shown
+#   fwp_user="root"                         # optional, must be root
+#
+# See fwp.toml for runtime configuration.
+
+. /etc/rc.subr
+
+name=fwp
+rcvar=fwp_enable
+
+load_rc_config $name
+
+: ${fwp_enable:=NO}
+: ${fwp_config:=/usr/local/etc/fwp.toml}
+: ${fwp_user:=root}
+
+command=/usr/local/sbin/${name}
+command_args="--config ${fwp_config}"
+command_interpreter=
+pidfile=/var/run/${name}.pid
+
+start_cmd="${name}_start"
+
+fwp_start()
+{
+    check_process
+    if [ $? -eq 0 ]; then
+        echo "${name} already running (pid $(cat ${pidfile}))."
+        return 1
+    fi
+    echo "Starting ${name}."
+    /usr/sbin/daemon -f -p ${pidfile} -u ${fwp_user} ${command} ${command_args}
+}
+
+run_rc_command "$1"
