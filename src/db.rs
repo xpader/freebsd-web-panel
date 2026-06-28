@@ -67,6 +67,16 @@ fn migrate(conn: &Connection) -> ApiResult<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS metric_samples (
+            ts       INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            name     TEXT NOT NULL,
+            value    REAL NOT NULL,
+            PRIMARY KEY (ts, category, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_samples_query
+            ON metric_samples(category, name, ts);
         "#,
     )?;
     Ok(())
@@ -224,4 +234,90 @@ pub fn delete_session(conn: &Connection, token_hash: &str) -> ApiResult<()> {
 pub fn purge_expired_sessions(conn: &Connection, now: i64) -> ApiResult<()> {
     conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", params![now])?;
     Ok(())
+}
+
+// ---- Metric samples (monitoring) ----
+
+/// A single time-series data point.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MetricSample {
+    pub ts: i64,
+    pub category: String,
+    pub name: String,
+    pub value: f64,
+}
+
+/// Insert a batch of samples in a single transaction.
+pub fn insert_samples(conn: &Connection, samples: &[MetricSample]) -> ApiResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO metric_samples (ts, category, name, value) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for s in samples {
+            stmt.execute(params![s.ts, s.category, s.name, s.value])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Query a time series for a given category/name within [from_ts, to_ts].
+pub fn query_series(
+    conn: &Connection,
+    category: &str,
+    name: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> ApiResult<Vec<MetricSample>> {
+    let mut stmt = conn.prepare(
+        "SELECT ts, category, name, value FROM metric_samples \
+         WHERE category = ?1 AND name = ?2 AND ts >= ?3 AND ts <= ?4 \
+         ORDER BY ts ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![category, name, from_ts, to_ts], |r| {
+            Ok(MetricSample {
+                ts: r.get(0)?,
+                category: r.get(1)?,
+                name: r.get(2)?,
+                value: r.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Get the most recent sample for each (category, name) in a category.
+pub fn latest_in_category(conn: &Connection, category: &str) -> ApiResult<Vec<MetricSample>> {
+    let mut stmt = conn.prepare(
+        "SELECT m.ts, m.category, m.name, m.value FROM metric_samples m \
+         INNER JOIN ( \
+             SELECT name, MAX(ts) AS max_ts FROM metric_samples \
+             WHERE category = ?1 GROUP BY name \
+         ) latest ON m.name = latest.name AND m.ts = latest.max_ts \
+         WHERE m.category = ?1 \
+         ORDER BY m.name",
+    )?;
+    let rows = stmt
+        .query_map(params![category], |r| {
+            Ok(MetricSample {
+                ts: r.get(0)?,
+                category: r.get(1)?,
+                name: r.get(2)?,
+                value: r.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Delete samples older than the given timestamp (data retention).
+pub fn purge_old_samples(conn: &Connection, before_ts: i64) -> ApiResult<usize> {
+    let n = conn.execute(
+        "DELETE FROM metric_samples WHERE ts < ?1",
+        params![before_ts],
+    )?;
+    Ok(n)
 }

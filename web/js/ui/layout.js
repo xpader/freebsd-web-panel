@@ -53,6 +53,17 @@ const MENU = [
     ],
   },
   {
+    key: 'monitor',
+    label: '监控',
+    icon: '📊',
+    default: '/monitor',
+    items: [
+      { path: '/monitor', label: 'CPU & 负载', icon: '📊' },
+      { path: '/monitor/memory', label: '内存', icon: '▦' },
+      { path: '/monitor/temp', label: '温度', icon: '🌡' },
+    ],
+  },
+  {
     key: 'system',
     label: '系统',
     icon: '☻',
@@ -86,7 +97,7 @@ export function renderLayout(app, currentPath, pageContent) {
 
   // Sidebar items for the active group.
   const subHtml = group.items.map(item => `
-    <a href="#${item.path}" class="${currentPath === item.path || currentPath.startsWith(item.path + '/') ? 'active' : ''}">
+    <a href="#${item.path}" class="${currentPath === item.path ? 'active' : ''}">
       <span class="icon">${item.icon}</span>${item.label}
     </a>`).join('');
 

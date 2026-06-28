@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod monitor;
 mod state;
 mod web_assets;
 
@@ -71,7 +72,8 @@ async fn main() -> anyhow::Result<()> {
     if user_count == 0 {
         tracing::warn!("no users yet — first-run setup required via the web UI");
     }
-    let app = build(state);
+    let app = build(state.clone());
+    monitor::spawn_collector(state);
 
     // Parse listen address.
     let addr: SocketAddr = config.server.listen.parse().map_err(|e| {

@@ -6,6 +6,7 @@ import { renderLogin, renderSetup } from './pages/auth.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderUsers } from './pages/users.js';
 import { renderAudit } from './pages/audit.js';
+import { renderMonitorCpu, renderMonitorMemory, renderMonitorTemp } from './pages/monitor.js';
 import { makePlannedPage } from './pages/planned.js';
 
 // Auth routes.
@@ -17,6 +18,10 @@ defineRoute('/dashboard', renderDashboard);
 defineRoute('/users', renderUsers);
 defineRoute('/audit', renderAudit);
 
+// Monitor routes.
+defineRoute('/monitor', renderMonitorCpu);
+defineRoute('/monitor/memory', renderMonitorMemory);
+defineRoute('/monitor/temp', renderMonitorTemp);
 // Module placeholder routes.
 defineRoute('/sysctl', makePlannedPage('/sysctl', 'Sysctl 系统参数', '动态内核参数 (sysctl) 管理', '通过 sysctl 命令读写运行时参数，并持久化到 /etc/sysctl.conf。'));
 defineRoute('/rcconf', makePlannedPage('/rcconf', 'RC 配置', 'rc.conf 系统与服务启动配置', '通过 sysrc 管理 rc.conf 键值，按功能分类展示。'));

@@ -8,6 +8,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub paths: PathsConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub monitor: MonitorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +37,33 @@ pub struct AuthConfig {
     pub session_ttl: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorConfig {
+    /// Enable the background metric collector.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Sampling interval in seconds.
+    #[serde(default = "default_interval")]
+    pub interval_sec: u64,
+    /// How long to keep samples (days).
+    #[serde(default = "default_retention")]
+    pub retention_days: u64,
+}
+
+impl Default for MonitorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_sec: default_interval(),
+            retention_days: default_retention(),
+        }
+    }
+}
+
+fn default_true() -> bool { true }
+fn default_interval() -> u64 { 30 }
+fn default_retention() -> u64 { 30 }
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -49,6 +78,7 @@ impl Default for Config {
             auth: AuthConfig {
                 session_ttl: default_session_ttl(),
             },
+            monitor: MonitorConfig::default(),
         }
     }
 }

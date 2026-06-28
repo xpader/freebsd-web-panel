@@ -62,9 +62,9 @@ src/
 ├── auth.rs           # 密码哈希（argon2）、session token、require_auth 中间件、
 │                     # AuthUser 提取器（FromRequestParts）
 ├── audit.rs          # 追加式 JSON 审计日志（parking_lot::Mutex<File>）
+├── monitor.rs        # 监控采集器（后台 tokio 任务）+ 时序查询 API
 ├── web_assets.rs     # rust-embed + 磁盘回退的资源 handler
 └── handlers/
-    ├── mod.rs        # 模块声明
     ├── auth.rs       # login / logout / me
     ├── users.rs      # 用户 CRUD + bootstrap（首启创建管理员）
     ├── system.rs     # 系统信息 + 实时指标（CPU/内存/温度，通过 sysctl）
@@ -83,15 +83,17 @@ web/
     │   ├── confirm.js    # 基于 Promise 的确认对话框
     │   └── toast.js      # 通知
     └── pages/
-        ├── auth.js       # 登录 + 首启初始化向导
-        ├── dashboard.js  # 总览 + 实时轮询指标（3 秒间隔）
-        ├── users.js      # 用户管理
         ├── audit.js      # 审计日志查看
+        ├── monitor.js    # 监控图表（Chart.js 折线图 + 时间范围）
         └── planned.js    # 模块占位页工厂
 
-docs/plan/                # 设计文档（00-overview 到 90-monitoring）
+vendor/                   # 第三方库本地副本
+├── chart.umd.min.js              # Chart.js 4.4.7
+└── chartjs-adapter-date-fns.bundle.min.js  # Chart.js 时间轴适配器
+
+docs/plan/                # 设计计划文档（功能要做什么）
+docs/impl/                # 实现文档（功能怎么做的，开发/变更时必须维护）
 rc.d/fwp                  # FreeBSD rc.d 启动脚本
-```
 
 ## 编码约定
 
@@ -119,6 +121,23 @@ FreeBSD 管理通过 spawn 系统二进制并传校验过的参数完成。**禁
 
 本机已确认存在的关键工具：`/sbin/sysctl`、`/usr/sbin/sysrc`、`/sbin/ifconfig`、`/sbin/pfctl`、`/sbin/zfs`、`/sbin/zpool`、`/usr/sbin/jail`、`/usr/local/sbin/vm`（vm-bhyve 1.7.3）。
 
+## 文档维护（强制）
+
+项目维护两套文档，**开发或变更功能时必须同步维护**：
+
+- `docs/plan/` — 设计计划：功能的目标、架构决策、接口设计（实现前写的，也实现后的前瞻规划）
+- `docs/impl/` — 实现文档：功能实际怎么做的，含数据结构、算法、调用链、API、配置项、已知限制
+
+### 规则
+
+1. **开发新功能前**：先读 `docs/impl/` 中相关的已有实现文档，复用已有模式和约定。`docs/impl/README.md` 有索引。
+2. **实现新功能后**：在 `docs/impl/` 创建对应实现文档（编号续接），遵循 README 中的格式规范。
+3. **变更已有功能时**：更新对应的 `docs/impl/` 文档，保持与代码一致。
+4. **删除功能时**：删除或归档对应文档。
+5. **设计阶段**（未实现的功能规划）：写 `docs/plan/`；**实现完成后**：写 `docs/impl/`。
+
+不要让文档与代码脱节——过时的文档比没有文档更危险。
+
 ## 架构决策
 
 - **纯 HTTP**（无 TLS）——远程访问请前置反向代理。
@@ -129,4 +148,4 @@ FreeBSD 管理通过 spawn 系统二进制并传校验过的参数完成。**禁
 
 ## 待办
 
-框架（认证、布局、仪表盘、用户管理、审计）已完成。未实现模块返回 "planned" 占位。阶段计划见 `docs/plan/80-roadmap.md`，监控设计见 `docs/plan/90-monitoring.md`（待确认）。
+框架（认证、布局、仪表盘、用户管理、审计）+ 监控采集（CPU/内存/负载/温度）已完成。未实现模块返回 "planned" 占位。阶段计划见 `docs/plan/80-roadmap.md`。
