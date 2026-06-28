@@ -10,7 +10,11 @@
 
 Hash 路由（`#/dashboard`）。`defineRoute(path, handler)` 注册，`startRouter()` 监听 `hashchange`。
 
-匹配逻辑：精确匹配或前缀匹配（最长匹配优先）。未匹配返回 404 页。
+匹配逻辑：
+- 以 `/` 结尾的路由（如 `/zfs/pools/`）定义为**纯前缀路由**——只匹配子路径（`startsWith`），不匹配精确路径，用于详情页
+- 非斜杠路由只做精确匹配（如 `/zfs/pools` 匹配列表页）
+- 优先级：按原始路径长度排序，更长的优先
+- 未匹配返回 404 页
 
 认证守卫：无 token 时重定向到 `#/login`；有 token 时访问登录/初始化页重定向到 `#/dashboard`。
 
@@ -22,20 +26,25 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 - 自动附加 `Authorization: Bearer <token>`（从 `sessionStorage`）
 - 401 响应 → 清除 token + 重定向 `#/login`
-- 错误抛出 `{status, message}` 对象，调用方 try/catch
+### 三级导航 `web/js/ui/layout.js`
 
-### 两级导航 `web/js/ui/layout.js`
-
-顶部主菜单（6+1 标签）+ 左侧子菜单（随主菜单切换）。菜单结构为 `MENU` 常量数组：
+顶部主菜单（7 标签）+ 左侧子菜单（随主菜单切换）+ 子子菜单（可折叠）。菜单结构为 `MENU` 常量数组：
 
 ```
-概览 → [仪表盘]
-配置 → [Sysctl, RC 配置, 服务管理]
-网络 → [网络接口, 防火墙]
-文件系统 → [ZFS]
-虚拟化 → [Jail 容器, Bhyve 虚拟机]
-监控 → [CPU & 负载, 内存, 温度]
-系统 → [用户管理, 审计日志]
+概览     → [仪表盘]
+配置     → [Sysctl, RC 配置, 服务管理]
+网络     → [网络接口, 防火墙]
+文件系统 → [概览, ZFS → [Zpool 管理, 数据集管理, 快照管理]]
+虚拟化   → [Jail 容器, Bhyve 虚拟机]
+监控     → [CPU & 负载, 内存, 温度]
+系统     → [用户管理, 审计日志]
+```
+
+菜单项支持 `children` 数组：
+- 有 `children` → 可折叠子组（组头可点击，导航到第一个子项 + 自动展开，`cursor: pointer`，箭头旋转动画）
+- 无 `children` → 直接链接
+
+`renderLayout(app, currentPath, pageContent)` 渲染骨架：顶栏 + 侧栏 + 主内容区。`groupOfPath(path)` 计算路径所属的主菜单组（递归检查 `children`）。子项高亮为精确匹配（`currentPath === item.path`）。
 ```
 
 `renderLayout(app, currentPath, pageContent)` 渲染骨架：顶栏（品牌名 + 导航标签 + 用户名 + 退出）+ 侧栏（当前组子菜单）+ 主内容区。`groupOfPath(path)` 计算路径所属的主菜单组。
@@ -49,18 +58,22 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 | `users.js` | 用户管理 | 列表 + 创建/改密/删除（模态框） |
 | `audit.js` | 审计日志 | 表格，按方法/状态着色 |
 | `monitor.js` | 监控图表 | Chart.js 折线图 + 时间范围选择 |
+| `filesystem.js` | 文件系统概览 | 磁盘/挂载点/ZFS 池概览 |
+| `zfs.js` | ZFS 管理 | Zpool 列表/详情、数据集树、快照管理 |
 | `planned.js` | 模块占位页 | 工厂函数，生成"计划中"占位页 |
-
+- `confirm.js` — Promise 确认对话框（模态遮罩）
+- `formModal.js` — 可复用表单模态框（替代浏览器 `prompt()`，支持 text/select/textarea/password 字段，自动聚焦）
+- `layout.js` — 三级导航骨架
 ### 仪表盘实时更新 `dashboard.js`
 
 - `renderDashboard` 先调 `/api/system/info` 渲染静态卡片
 - 启动 `setInterval(refreshMetrics, 3000)` 每 3 秒调 `/api/system/metrics`
 - `refreshMetrics` 更新 CPU/内存/Swap 进度条 + 每核条 + 温度徽章
 - 重新进入仪表盘时 `clearInterval` 旧定时器再启动新的（不冗余守卫 `if(pollTimer)`）
-
-### UI 组件
-
-- `toast.js` — 右上角通知（成功/错误），3 秒自动消失
+- 指标进度条：`.bar` + `.bar-cpu`/`.bar-mem`/`.bar-swap` 渐变色，`transition: width 0.5s`
+- 三级子菜单：`.sub-group`（折叠容器）、`.sub-group-header`（`cursor: pointer`，hover 高亮）、`.sub-items`（展开时 `display:block`）、`.sub-item`（缩进 40px）
+- pool 卡片：`.pool-card`（hover 高亮 + `cursor: pointer`）、`.vdev-node`（阵列结构树缩进）
+- 表格、卡片、徽章、模态框、Toast 等通用样式
 - `confirm.js` — Promise 确认对话框（模态遮罩）
 - `layout.js` — 两级导航骨架
 

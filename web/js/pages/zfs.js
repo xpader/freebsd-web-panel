@@ -4,7 +4,7 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
-
+import { formModal } from '../ui/formModal.js';
 // ===== Zpool list page =====
 
 export async function renderZfsPools(app) {
@@ -205,9 +205,15 @@ async function loadDatasets() {
     const tree = await api.get('/api/zfs/datasets');
     const rows = [];
     function walk(ds, depth) {
+      const originHtml = ds.origin
+        ? `<div class="text-dim" style="font-size:11px;margin-top:2px;">⤷ 克隆自 <span class="mono" style="color:var(--accent);">${esc(ds.origin)}</span></div>`
+        : '';
       rows.push(`
         <tr>
-          <td class="mono" style="padding-left:${depth * 20 + 12}px;">${depth > 0 ? '└ ' : ''}${esc(ds.name)}</td>
+          <td class="mono" style="padding-left:${depth * 20 + 12}px;">
+            ${depth > 0 ? '└ ' : ''}<strong>${esc(ds.name)}</strong>
+            ${originHtml}
+          </td>
           <td><span class="badge badge-dim">${esc(ds.typ)}</span></td>
           <td class="mono">${fmtBytes(ds.used)}</td>
           <td class="mono">${fmtBytes(ds.available)}</td>
@@ -228,20 +234,24 @@ async function loadDatasets() {
   }
 }
 
-window.__fwpCreateDataset = () => {
-  const name = prompt('数据集名称（如 zroot/newds）：');
-  if (!name) return;
-  api.post('/api/zfs/datasets', { name }).then(() => {
+window.__fwpCreateDataset = async () => {
+  const result = await formModal('创建数据集', [
+    { key: 'name', label: '数据集名称', placeholder: '如 zroot/newds', required: true },
+  ]);
+  if (!result) return;
+  api.post('/api/zfs/datasets', { name: result.name }).then(() => {
     toast('数据集已创建');
     loadDatasets();
   }).catch(e => toast(e.message || '创建失败', 'error'));
 };
 
-window.__fwpDsSnap = (name) => {
-  const snap = prompt(`为 "${name}" 创建快照\n\n快照名称（如 backup-20260626）：`);
-  if (!snap) return;
-  api.post('/api/zfs/snapshots', { dataset: name, name: snap }).then(() => {
-    toast(`快照已创建: ${name}@${snap}`);
+window.__fwpDsSnap = async (name) => {
+  const result = await formModal(`创建快照: ${name}`, [
+    { key: 'name', label: '快照名称', placeholder: '如 backup-20260626', required: true },
+  ]);
+  if (!result) return;
+  api.post('/api/zfs/snapshots', { dataset: name, name: result.name }).then(() => {
+    toast(`快照已创建: ${name}@${result.name}`);
   }).catch(e => toast(e.message || '创建快照失败', 'error'));
 };
 
@@ -326,6 +336,7 @@ function renderSnapRows(snaps) {
       <td class="mono">${fmtBytes(s.referenced)}</td>
       <td class="text-dim mono">${fmtTime(s.creation)}</td>
       <td>
+        <button class="btn-secondary btn-sm" onclick="window.__fwpCloneSnap('${esc(s.name)}')">克隆</button>
         <button class="btn-secondary btn-sm" onclick="window.__fwpRollback('${esc(s.name)}')">回滚</button>
         <button class="btn-danger btn-sm" onclick="window.__fwpDelSnap('${esc(s.name)}')">删除</button>
       </td>
@@ -337,34 +348,41 @@ window.__fwpSnapFilter = () => {
   renderSnapRows(_allSnaps.filter(s => s.dataset.toLowerCase().includes(q) || s.snap_name.toLowerCase().includes(q)));
 };
 
-window.__fwpCreateSnap = () => {
-  const dataset = prompt('数据集名称（如 zroot/data）：');
-  if (!dataset) return;
-  const name = prompt('快照名称（如 backup-20260626）：');
-  if (!name) return;
-  api.post('/api/zfs/snapshots', { dataset, name }).then(() => {
-    toast('快照已创建');
-    loadSnapshots();
+
+window.__fwpCreateSnap = async () => {
+  const result = await formModal('创建快照', [
+    { key: 'dataset', label: '数据集', placeholder: '如 zroot/data', required: true },
+    { key: 'name', label: '快照名称', placeholder: '如 backup-20260626', required: true },
+  ]);
+  if (!result) return;
+  api.post('/api/zfs/snapshots', { dataset: result.dataset, name: result.name }).then(() => {
+    toast('快照已创建'); loadSnapshots();
   }).catch(e => toast(e.message || '创建失败', 'error'));
+};
+
+window.__fwpCloneSnap = async (source) => {
+  const result = await formModal(`克隆快照: ${source}`, [
+    { key: 'target', label: '目标数据集名称', placeholder: '如 zroot/new-clone', required: true },
+  ]);
+  if (!result) return;
+  api.post('/api/zfs/snapshot/clone', { source, target: result.target }).then(() => {
+    toast(`克隆成功: ${result.target}`); loadSnapshots();
+  }).catch(e => toast(e.message || '克隆失败', 'error'));
 };
 
 window.__fwpDelSnap = async (full) => {
   if (!await confirmDialog('删除快照', `确定删除 "${full}" 吗？`)) return;
   api.del(`/api/zfs/snapshot/destroy?name=${encodeURIComponent(full)}`).then(() => {
-    toast('快照已删除');
-    loadSnapshots();
+    toast('快照已删除'); loadSnapshots();
   }).catch(e => toast(e.message || '删除失败', 'error'));
 };
 
 window.__fwpRollback = async (full) => {
   if (!await confirmDialog('回滚快照', `确定回滚到 "${full}" 吗？\n\n警告：此操作将销毁该快照之后的所有数据和新快照！`)) return;
   api.post(`/api/zfs/snapshot/rollback?name=${encodeURIComponent(full)}`, { confirm: true }).then(() => {
-    toast('回滚成功');
-    loadSnapshots();
+    toast('回滚成功'); loadSnapshots();
   }).catch(e => toast(e.message || '回滚失败', 'error'));
 };
-
-// ===== utils =====
 
 function fmtBytes(b) {
   if (!b) return '0 B';

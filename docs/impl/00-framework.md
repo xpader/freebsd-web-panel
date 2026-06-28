@@ -63,11 +63,11 @@ pub type ApiResult<T> = Result<T, ApiError>;
 pub enum ApiError {
     Unauthorized, NotAuthenticated, Forbidden,
     NotFound(String), BadRequest(String), Conflict(String),
-    Database(rusqlite::Error), Hash(String), Internal(String),
+    Database(rusqlite::Error), Hash(String),
+    Io(std::io::Error), Internal(String),
 }
 ```
-
-`IntoResponse` 实现将错误映射为 HTTP 状态码 + JSON `{error, message}`。内部错误（DB/Hash/Internal）不泄露详情，仅记录 tracing 日志。
+`IntoResponse` 实现将错误映射为 HTTP 状态码 + JSON `{error, message}`。内部错误（DB/Hash/Io/Internal）不泄露详情，仅记录 tracing 日志。
 
 ## 外部依赖
 

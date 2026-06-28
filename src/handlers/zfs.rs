@@ -251,13 +251,14 @@ pub struct Dataset {
     pub mountpoint: String,
     pub typ: String,
     pub compression: String,
+    pub origin: Option<String>,
     pub children: Vec<Dataset>,
 }
 
 pub async fn dataset_list() -> ApiResult<Json<Vec<Dataset>>> {
     let raw = run(
         ZFS,
-        &["list", "-H", "-p", "-o", "name,used,avail,refer,mountpoint,type,compression"],
+        &["list", "-H", "-p", "-o", "name,used,avail,refer,mountpoint,type,compression,origin"],
     )?;
     let flat: Vec<Dataset> = raw
         .lines()
@@ -268,6 +269,7 @@ pub async fn dataset_list() -> ApiResult<Json<Vec<Dataset>>> {
                 return None;
             }
             let p = |i: usize| -> u64 { cols.get(i).and_then(|s| s.parse().ok()).unwrap_or(0) };
+            let origin = cols.get(7).filter(|s| **s != "-" && !s.is_empty()).map(|s| s.to_string());
             Some(Dataset {
                 name: cols[0].into(),
                 used: p(1),
@@ -276,6 +278,7 @@ pub async fn dataset_list() -> ApiResult<Json<Vec<Dataset>>> {
                 mountpoint: cols[4].into(),
                 typ: cols[5].into(),
                 compression: cols[6].into(),
+                origin,
                 children: vec![],
             })
         })
@@ -313,6 +316,7 @@ fn build_dataset_tree(flat: Vec<Dataset>) -> Vec<Dataset> {
             mountpoint: String::new(),
             typ: String::new(),
             compression: String::new(),
+            origin: None,
             children: vec![],
         });
         if let Some(children) = parent_map.get(name) {
@@ -573,6 +577,33 @@ pub async fn snapshot_rollback(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SnapshotCloneBody {
+    pub source: String,
+    pub target: String,
+}
+
+pub async fn snapshot_clone(
+    State(state): State<AppState>,
+    body: axum::Json<SnapshotCloneBody>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let source = body.source.trim();
+    let target = body.target.trim();
+    validate_name(source)?;
+    validate_name(target)?;
+    if !source.contains('@') {
+        return Err(ApiError::BadRequest("source must be a snapshot (contain @)".into()));
+    }
+    if target.contains('@') {
+        return Err(ApiError::BadRequest("target must be a dataset name".into()));
+    }
+    run(ZFS, &["clone", source, target])?;
+    crate::audit::record(
+        &state, None, "POST", "/api/zfs/snapshot/clone", 201,
+        Some(format!("cloned {source} → {target}")),
+    );
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"name": target}))))
+}
 pub async fn pool_scrub(
     State(state): State<AppState>,
     Path(name): Path<String>,
