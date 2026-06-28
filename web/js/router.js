@@ -1,5 +1,7 @@
 // Hash-based router.
 
+import { api } from './api.js';
+
 const routes = [];
 let currentRender = null;
 
@@ -7,7 +9,31 @@ export function defineRoute(path, handler) {
   routes.push({ path, handler });
 }
 
-function match() {
+// Whether an initial admin still needs to be created. Resolved lazily on the
+// first unauthenticated visit and cached so we don't re-query on every
+// navigation. Dropped after a successful bootstrap (see invalidateSetup).
+let needsSetup = null;   // null = unknown, boolean = resolved
+let setupReq = null;     // in-flight request, dedups concurrent callers
+
+async function resolveNeedsSetup() {
+  if (needsSetup !== null) return needsSetup;
+  if (!setupReq) {
+    setupReq = api
+      .get('/api/users/bootstrap')
+      .then((s) => { needsSetup = !!s.needs_setup; return needsSetup; })
+      .catch(() => { needsSetup = false; return false; })
+      .finally(() => { setupReq = null; });
+  }
+  return setupReq;
+}
+
+/// Drop the cache after the first admin is created so later unauthenticated
+/// visits route to login instead of setup.
+export function invalidateSetup() {
+  needsSetup = false;
+}
+
+async function match() {
   let hash = location.hash.slice(1) || '/';
   if (hash === '/') hash = '/dashboard';
 
@@ -30,17 +56,24 @@ function match() {
     best = { handler: () => notFound() };
   }
 
-  // Check auth: if not logged in and not on login/bootstrap, redirect.
   const token = sessionStorage.getItem('fwp_token');
   const isAuthRoute = hash === '/login' || hash === '/setup';
-  if (!token && !isAuthRoute) {
-    // Need to check bootstrap status first — handled in main.
-    location.hash = '#/login';
-    return;
-  }
+
+  // Logged-in users are never shown auth pages.
   if (token && isAuthRoute) {
     location.hash = '#/dashboard';
     return;
+  }
+
+  // Unauthenticated visitors are sent to first-run setup on a fresh install,
+  // or to login otherwise — chosen automatically rather than by the user.
+  if (!token) {
+    const setup = await resolveNeedsSetup();
+    const dest = setup ? '/setup' : '/login';
+    if (hash !== dest) {
+      location.hash = '#' + dest;
+      return;
+    }
   }
 
   const app = document.getElementById('app');

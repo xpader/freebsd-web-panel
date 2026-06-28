@@ -16,7 +16,7 @@ Hash 路由（`#/dashboard`）。`defineRoute(path, handler)` 注册，`startRou
 - 优先级：按原始路径长度排序，更长的优先
 - 未匹配返回 404 页
 
-认证守卫：无 token 时重定向到 `#/login`；有 token 时访问登录/初始化页重定向到 `#/dashboard`。
+认证守卫：无 token 时，路由器惰性查询公开接口 `GET /api/users/bootstrap`（结果缓存）——首启（`needs_setup=true`）重定向到 `#/setup`，否则重定向到 `#/login`，由系统自动区分而非用户手动选择。首启创建管理员后调用 `invalidateSetup()` 令缓存失效，后续未认证访问即走登录页。有 token 时访问登录/初始化页重定向到 `#/dashboard`。`match()` 为 `async`，`hashchange` 触发时不阻塞。
 
 ### API 客户端 `web/js/api.js`
 
@@ -53,7 +53,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 | 文件 | 页面 | 说明 |
 |---|---|---|
-| `auth.js` | 登录 + 初始化向导 | bootstrap 检查 → 显示对应表单 |
+| `auth.js` | 登录 + 初始化向导 | 由路由器守卫保证进入正确的页（首启→初始化，否则→登录）；登录成功存 token，初始化成功后令缓存失效并跳转登录 |
 | `dashboard.js` | 仪表盘 | 静态信息卡片 + 3 秒轮询实时指标 + 进度条 |
 | `users.js` | 用户 | 列表 + 创建/改密/删除（模态框） |
 | `audit.js` | 审计日志 | 表格，按方法/状态着色 |
@@ -72,7 +72,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - `refreshMetrics` 更新 CPU/内存/Swap 进度条 + 每核条 + 温度徽章
 - 重新进入仪表盘时 `clearInterval` 旧定时器再启动新的（不冗余守卫 `if(pollTimer)`）
 - 指标进度条：`.bar` + `.bar-cpu`/`.bar-mem`/`.bar-swap` 渐变色，`transition: width 0.5s`
-- 三级子菜单：`.sub-group`（折叠容器）、`.sub-group-header`（`cursor: pointer`，hover 高亮）、`.sub-items`（展开时 `display:block`）、`.sub-item`（缩进 40px）
+- 三级子菜单：`.sub-group`（折叠容器）、`.sub-group-header`（`cursor: pointer`，hover 高亮）、`.sub-items`（展开时 `display:block`，左侧 `margin-left: 27px` + 竖线引导线）、`.sidebar-nav .sub-item`（缩进，选中态 accent 色无左边框——选择器带 `.sidebar-nav` 前缀以提升特异性，盖过 `.sidebar-nav a` 的默认 `padding: 8px 20px`）
 - pool 卡片：`.pool-card`（hover 高亮 + `cursor: pointer`）、`.vdev-node`（阵列结构树缩进）
 - 表格、卡片、徽章、模态框、Toast 等通用样式
 - `confirm.js` — Promise 确认对话框（模态遮罩）
@@ -80,7 +80,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 ### CSS `web/css/app.css`
 
-- CSS 变量定义主题色（`--bg`, `--accent`, `--danger` 等）
+- CSS 变量定义主题色（`--bg`, `--accent`, `--danger` 等）；`:root { color-scheme: dark }` 声明深色主题，让浏览器自动渲染暗色滚动条及表单控件
 - 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.main`）
 - 登录页：`.login-wrap` flex 居中（`width:100%` 修复靠左问题）
 - 指标进度条：`.bar` + `.bar-cpu`/`.bar-mem`/`.bar-swap` 渐变色，`transition: width 0.5s`

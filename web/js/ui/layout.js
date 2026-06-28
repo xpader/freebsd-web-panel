@@ -44,6 +44,7 @@ const MENU = [
     items: [
       { path: '/filesystem', label: '概览', icon: '◇' },
       { path: '/filesystem/disks', label: '磁盘', icon: '▤' },
+      { path: '/filesystem/files', label: '文件管理器', icon: '📁' },
       {
         path: '/zfs',
         label: 'ZFS',

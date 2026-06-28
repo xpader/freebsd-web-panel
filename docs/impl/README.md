@@ -16,6 +16,7 @@
 | [07-web-assets.md](07-web-assets.md) | 静态资源服务：rust-embed 内嵌 + 磁盘回退 | `web_assets.rs` |
 | [08-filesystem.md](08-filesystem.md) | 文件系统：概览（磁盘/挂载点/池）+ 磁盘详情（分区表） | `handlers/filesystem.rs`, `web/js/pages/filesystem.js`, `web/js/pages/disks.js` |
 | [09-zfs.md](09-zfs.md) | ZFS 管理：Zpool/数据集/快照 + 三级菜单 | `handlers/zfs.rs`, `web/js/pages/zfs.js` |
+| [10-file-manager.md](10-file-manager.md) | 文件管理器：目录树 + 列表/网格、上传/下载/重命名/删除/属性 | `handlers/files.rs`, `web/js/pages/files.js` |
 
 ## 文档规范
 

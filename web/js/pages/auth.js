@@ -1,6 +1,7 @@
 // Login page + first-run setup.
 
 import { api, setToken } from '../api.js';
+import { invalidateSetup } from '../router.js';
 import { toast } from '../ui/toast.js';
 
 export async function renderLogin(app) {
@@ -20,9 +21,6 @@ export async function renderLogin(app) {
           </div>
           <button type="submit" style="width:100%;justify-content:center;">登录</button>
         </form>
-        <p class="mt-8 text-dim" style="font-size:12px;text-align:center;">
-          首次使用？<a href="#/setup">创建管理员账户</a>
-        </p>
       </div>
     </div>`;
 
@@ -49,19 +47,6 @@ export async function renderLogin(app) {
 }
 
 export async function renderSetup(app) {
-  // Check if setup is needed.
-  let status;
-  try {
-    status = await api.get('/api/users/bootstrap');
-  } catch {
-    status = { needs_setup: true };
-  }
-  if (!status.needs_setup) {
-    toast('已初始化，请直接登录', 'warn');
-    location.hash = '#/login';
-    return;
-  }
-
   app.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
@@ -100,6 +85,7 @@ export async function renderSetup(app) {
         username: form.username.value,
         password: form.password.value,
       });
+      invalidateSetup();
       toast(`管理员 ${res.username} 创建成功，请登录`);
       location.hash = '#/login';
     } catch (err) {

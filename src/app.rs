@@ -1,6 +1,7 @@
 //! Router assembly.
 
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
@@ -52,13 +53,28 @@ pub fn build(state: AppState) -> Router {
         .route("/api/zfs/snapshot/clone", post(handlers::zfs::snapshot_clone))
         .route("/api/filesystem/overview", get(handlers::filesystem::overview))
         .route("/api/filesystem/disks", get(handlers::filesystem::disk_detail))
+        // --- File manager ---
+        .route("/api/files/list", get(handlers::files::list))
+        .route("/api/files/stat", get(handlers::files::stat))
+        .route("/api/files/mkdir", post(handlers::files::mkdir))
+        .route("/api/files/rename", post(handlers::files::rename))
+        .route("/api/files", delete(handlers::files::delete))
+        .route("/api/files/download", get(handlers::files::download))
         .route("/api/monitor/series", get(crate::monitor::series))
         .route("/api/monitor/latest", get(crate::monitor::latest))
+        .layer(from_fn_with_state(state.clone(), require_auth));
+
+    // File upload sends raw bytes as the request body and can be large;
+    // disable axum's default 2 MiB body limit for this route only.
+    let upload_api = Router::new()
+        .route("/api/files/upload", post(handlers::files::upload))
+        .layer(DefaultBodyLimit::disable())
         .layer(from_fn_with_state(state.clone(), require_auth));
 
     Router::new()
         .merge(public)
         .merge(api)
+        .merge(upload_api)
         .fallback(crate::web_assets::serve_asset)
         .layer(CorsLayer::very_permissive())
         .layer(TraceLayer::new_for_http())

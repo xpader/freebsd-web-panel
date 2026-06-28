@@ -62,7 +62,7 @@
 
 ### 菜单集成
 
-`layout.js` 的「文件系统」主菜单含：「概览」（`/filesystem`）+「磁盘」（`/filesystem/disks`）+「ZFS」（`/zfs`）三个子项。
+`layout.js` 的「文件系统」主菜单含：「概览」（`/filesystem`）+「磁盘」（`/filesystem/disks`）+「文件管理器」（`/filesystem/files`，见 [10-file-manager.md](10-file-manager.md)）+「ZFS」（`/zfs`）四个子项。
 
 ## API
 
