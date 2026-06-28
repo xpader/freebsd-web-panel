@@ -15,6 +15,7 @@
 | [06-frontend.md](06-frontend.md) | 前端架构：SPA 路由、API 封装、两级菜单、布局 | `web/js/*.js`, `web/css/app.css` |
 | [07-web-assets.md](07-web-assets.md) | 静态资源服务：rust-embed 内嵌 + 磁盘回退 | `web_assets.rs` |
 | [08-filesystem.md](08-filesystem.md) | 文件系统概览：磁盘/挂载点/ZFS 存储池 | `handlers/filesystem.rs`, `web/js/pages/filesystem.js` |
+| [09-zfs.md](09-zfs.md) | ZFS 管理：Zpool/数据集/快照 + 三级菜单 | `handlers/zfs.rs`, `web/js/pages/zfs.js` |
 
 ## 文档规范
 

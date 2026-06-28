@@ -26,6 +26,8 @@ pub enum ApiError {
     Database(#[from] rusqlite::Error),
     #[error("password hashing error: {0}")]
     Hash(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -45,7 +47,7 @@ impl ApiError {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
-            ApiError::Database(_) | ApiError::Hash(_) | ApiError::Internal(_) => {
+            ApiError::Database(_) | ApiError::Hash(_) | ApiError::Io(_) | ApiError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }
         }
@@ -63,6 +65,10 @@ impl IntoResponse for ApiError {
             }
             ApiError::Hash(e) => {
                 tracing::error!(error = %e, "hash error");
+                "internal error".to_string()
+            }
+            ApiError::Io(e) => {
+                tracing::error!(error = %e, "io error");
                 "internal error".to_string()
             }
             ApiError::Internal(e) => {

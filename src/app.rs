@@ -38,7 +38,17 @@ pub fn build(state: AppState) -> Router {
         .route("/api/pf", get(handlers::mod_stubs::pf))
         .route("/api/jails", get(handlers::mod_stubs::jails))
         .route("/api/bhyve", get(handlers::mod_stubs::bhyve))
-        .route("/api/zfs", get(handlers::mod_stubs::zfs))
+        // --- ZFS ---
+        .route("/api/zfs/pools", get(handlers::zfs::pool_list))
+        .route("/api/zfs/pools/{name}", get(handlers::zfs::pool_status))
+        .route("/api/zfs/pools/{name}/scrub", post(handlers::zfs::pool_scrub))
+        .route("/api/zfs/pools/{name}/scrub/stop", post(handlers::zfs::pool_scrub_stop))
+        .route("/api/zfs/datasets", get(handlers::zfs::dataset_list).post(handlers::zfs::dataset_create))
+        .route("/api/zfs/dataset/destroy", delete(handlers::zfs::dataset_destroy))
+        .route("/api/zfs/dataset/properties", get(handlers::zfs::dataset_properties).put(handlers::zfs::dataset_set))
+        .route("/api/zfs/snapshots", get(handlers::zfs::snapshot_list).post(handlers::zfs::snapshot_create))
+        .route("/api/zfs/snapshot/destroy", delete(handlers::zfs::snapshot_destroy))
+        .route("/api/zfs/snapshot/rollback", post(handlers::zfs::snapshot_rollback))
         .route("/api/filesystem/overview", get(handlers::filesystem::overview))
         .route("/api/monitor/latest", get(crate::monitor::latest))
         .layer(from_fn_with_state(state.clone(), require_auth));
