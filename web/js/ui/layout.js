@@ -37,8 +37,9 @@ const MENU = [
     key: 'filesystem',
     label: '文件系统',
     icon: '◈',
-    default: '/zfs',
+    default: '/filesystem',
     items: [
+      { path: '/filesystem', label: '概览', icon: '◇' },
       { path: '/zfs', label: 'ZFS', icon: '◈' },
     ],
   },

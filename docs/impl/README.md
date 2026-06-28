@@ -14,6 +14,7 @@
 | [05-monitoring.md](05-monitoring.md) | 监控采集：后台任务、时序存储、查询 API、图表前端 | `monitor.rs`, `db.rs`, `web/js/pages/monitor.js` |
 | [06-frontend.md](06-frontend.md) | 前端架构：SPA 路由、API 封装、两级菜单、布局 | `web/js/*.js`, `web/css/app.css` |
 | [07-web-assets.md](07-web-assets.md) | 静态资源服务：rust-embed 内嵌 + 磁盘回退 | `web_assets.rs` |
+| [08-filesystem.md](08-filesystem.md) | 文件系统概览：磁盘/挂载点/ZFS 存储池 | `handlers/filesystem.rs`, `web/js/pages/filesystem.js` |
 
 ## 文档规范
 

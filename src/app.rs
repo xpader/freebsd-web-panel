@@ -39,7 +39,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/jails", get(handlers::mod_stubs::jails))
         .route("/api/bhyve", get(handlers::mod_stubs::bhyve))
         .route("/api/zfs", get(handlers::mod_stubs::zfs))
-        .route("/api/monitor/series", get(crate::monitor::series))
+        .route("/api/filesystem/overview", get(handlers::filesystem::overview))
         .route("/api/monitor/latest", get(crate::monitor::latest))
         .layer(from_fn_with_state(state.clone(), require_auth));
 
