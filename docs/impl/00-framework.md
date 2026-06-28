@@ -64,10 +64,10 @@ pub enum ApiError {
     Unauthorized, NotAuthenticated, Forbidden,
     NotFound(String), BadRequest(String), Conflict(String),
     Database(rusqlite::Error), Hash(String),
-    Io(std::io::Error), Internal(String),
+    Io(std::io::Error), Command(String), Internal(String),
 }
 ```
-`IntoResponse` 实现将错误映射为 HTTP 状态码 + JSON `{error, message}`。内部错误（DB/Hash/Io/Internal）不泄露详情，仅记录 tracing 日志。
+`IntoResponse` 实现将错误映射为 HTTP 状态码 + JSON `{error, message}`。内部错误（DB/Hash/Io/Internal）不泄露详情，仅记录 tracing 日志。`Command` 用于系统命令执行失败（非零退出码），映射到 `422 Unprocessable Entity`（kind=`command_failed`），**透传 stderr 原文**给用户以便排查（如 ZFS 报"dataset already exists"）。
 
 ## 外部依赖
 
