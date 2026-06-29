@@ -456,12 +456,14 @@ function showStatModal(info) {
     </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', async (e) => {
-    if (e.target === overlay || e.target.dataset.act === 'close') {
+    const actEl = e.target.closest('[data-act]');
+    const act = actEl?.dataset.act;
+    if (e.target === overlay || act === 'close') {
       overlay.remove();
-    } else if (e.target.dataset.act === 'chmod') {
+    } else if (act === 'chmod') {
       overlay.remove();
       await editPermissions(info);
-    } else if (e.target.dataset.act === 'chown') {
+    } else if (act === 'chown') {
       overlay.remove();
       await editOwner(info);
     }
