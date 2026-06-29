@@ -6,9 +6,11 @@
 //! passed as query parameters (file paths contain `/`, so path params won't
 //! work — same approach as the ZFS handlers).
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -126,6 +128,50 @@ fn type_char(ft: &std::fs::FileType, mode: u32) -> char {
     }
 }
 
+/// UID → username map, parsed once from /etc/passwd on first use.
+/// On duplicate UIDs (e.g. FreeBSD's root+toor both uid 0) the first entry
+/// in the file wins (root precedes toor).
+static UID_MAP: LazyLock<HashMap<u32, String>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    if let Ok(raw) = std::fs::read_to_string("/etc/passwd") {
+        for line in raw.lines() {
+            // Format: name:passwd:uid:gid:gecos:home:shell
+            let cols: Vec<&str> = line.split(':').collect();
+            if cols.len() >= 3 {
+                if let Ok(uid) = cols[2].parse::<u32>() {
+                    m.entry(uid).or_insert_with(|| cols[0].to_string());
+                }
+            }
+        }
+    }
+    m
+});
+
+/// GID → groupname map, parsed once from /etc/group on first use.
+static GID_MAP: LazyLock<HashMap<u32, String>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    if let Ok(raw) = std::fs::read_to_string("/etc/group") {
+        for line in raw.lines() {
+            // Format: name:passwd:gid:members
+            let cols: Vec<&str> = line.split(':').collect();
+            if cols.len() >= 3 {
+                if let Ok(gid) = cols[2].parse::<u32>() {
+                    m.insert(gid, cols[0].to_string());
+                }
+            }
+        }
+    }
+    m
+});
+
+fn user_of(uid: u32) -> String {
+    UID_MAP.get(&uid).cloned().unwrap_or_else(|| uid.to_string())
+}
+
+fn group_of(gid: u32) -> String {
+    GID_MAP.get(&gid).cloned().unwrap_or_else(|| gid.to_string())
+}
+
 #[derive(Debug, Serialize)]
 pub struct DirEntry {
     pub name: String,
@@ -139,6 +185,8 @@ pub struct DirEntry {
     pub permissions: String,
     pub uid: u32,
     pub gid: u32,
+    pub user: String,
+    pub group: String,
 }
 
 fn build_entry(full: &Path) -> Option<DirEntry> {
@@ -146,6 +194,8 @@ fn build_entry(full: &Path) -> Option<DirEntry> {
     let meta = std::fs::symlink_metadata(full).ok()?;
     let ft = meta.file_type();
     let mode = meta.mode();
+    let uid = meta.uid();
+    let gid = meta.gid();
     Some(DirEntry {
         name,
         path: full.to_string_lossy().to_string(),
@@ -156,8 +206,10 @@ fn build_entry(full: &Path) -> Option<DirEntry> {
         modified: meta.mtime(),
         mode,
         permissions: perm_string(type_char(&ft, mode), mode),
-        uid: meta.uid(),
-        gid: meta.gid(),
+        uid,
+        gid,
+        user: user_of(uid),
+        group: group_of(gid),
     })
 }
 
@@ -205,6 +257,8 @@ pub struct FileInfo {
     pub permissions: String,
     pub uid: u32,
     pub gid: u32,
+    pub user: String,
+    pub group: String,
     pub nlink: u64,
     pub inode: u64,
     pub blocks: u64,
@@ -218,6 +272,8 @@ pub async fn stat(Query(q): Query<PathQuery>) -> ApiResult<Json<FileInfo>> {
         .map_err(|_| ApiError::NotFound(format!("path not found: {}", path.display())))?;
     let ft = meta.file_type();
     let mode = meta.mode();
+    let uid = meta.uid();
+    let gid = meta.gid();
     let symlink_target = if ft.is_symlink() {
         std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
     } else {
@@ -246,8 +302,10 @@ pub async fn stat(Query(q): Query<PathQuery>) -> ApiResult<Json<FileInfo>> {
         changed: meta.ctime(),
         mode,
         permissions: perm_string(type_char(&ft, mode), mode),
-        uid: meta.uid(),
-        gid: meta.gid(),
+        uid,
+        gid,
+        user: user_of(uid),
+        group: group_of(gid),
         nlink: meta.nlink(),
         inode: meta.ino(),
         blocks: meta.blocks(),
@@ -371,4 +429,167 @@ pub async fn download(Query(q): Query<PathQuery>) -> ApiResult<Response> {
             .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
     Ok(resp)
+}
+
+// ===== chmod / chown =====
+
+#[derive(Debug, Deserialize)]
+pub struct ChmodBody {
+    /// Octal mode, e.g. 0o755.
+    pub mode: u32,
+}
+
+/// Change file mode (permissions). Uses fchmodat with AT_SYMLINK_NOFOLLOW
+/// so symlink permissions themselves are changed (matches `chmod -h`).
+pub async fn chmod(
+    State(state): State<AppState>,
+    Query(q): Query<PathQuery>,
+    body: axum::Json<ChmodBody>,
+) -> ApiResult<StatusCode> {
+    let path = normalize(&q.path)?;
+    let mode = body.mode & 0o7777;
+    set_mode_lchmod(&path, mode)?;
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        "/api/files/chmod",
+        200,
+        Some(format!("chmod {} {:o}", path.display(), mode)),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// chmod that does not follow symlinks. std::fs doesn't expose lchmod, so we
+/// use libc::fchmodat with AT_SYMLINK_NOFOLLOW via raw FFI.
+fn set_mode_lchmod(path: &Path, mode: u32) -> ApiResult<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| ApiError::BadRequest(format!("path has nul: {e}")))?;
+    const AT_FDCWD: i32 = -100;
+    const AT_SYMLINK_NOFOLLOW: i32 = 0x200;
+    let rc = unsafe { fchmodat(AT_FDCWD, c_path.as_ptr(), mode as i32, AT_SYMLINK_NOFOLLOW) };
+    if rc != 0 {
+        return Err(ApiError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+extern "C" {
+    fn fchmodat(dirfd: i32, pathname: *const std::os::raw::c_char, mode: i32, flags: i32) -> i32;
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChownBody {
+    /// Target uid (numeric). None keeps current.
+    pub uid: Option<u32>,
+    /// Target gid (numeric). None keeps current.
+    pub gid: Option<u32>,
+    /// Do not follow symlinks (operate on the link itself).
+    #[serde(default = "default_true")]
+    pub no_follow: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Change owner/group. Uses lchown (no follow) by default.
+pub async fn chown(
+    State(state): State<AppState>,
+    Query(q): Query<PathQuery>,
+    body: axum::Json<ChownBody>,
+) -> ApiResult<StatusCode> {
+    let path = normalize(&q.path)?;
+    let meta = std::fs::symlink_metadata(&path)
+        .map_err(|_| ApiError::NotFound(format!("not found: {}", path.display())))?;
+    let final_uid = body.uid.unwrap_or(meta.uid());
+    let final_gid = body.gid.unwrap_or(meta.gid());
+    do_lchown(&path, final_uid, final_gid)?;
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        "/api/files/chown",
+        200,
+        Some(format!(
+            "chown {} uid={} gid={}",
+            path.display(),
+            final_uid,
+            final_gid
+        )),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn do_lchown(path: &Path, uid: u32, gid: u32) -> ApiResult<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| ApiError::BadRequest(format!("path has nul: {e}")))?;
+    let rc = unsafe { lchown(c_path.as_ptr(), uid, gid) };
+    if rc != 0 {
+        return Err(ApiError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+extern "C" {
+    fn lchown(pathname: *const std::os::raw::c_char, owner: u32, group: u32) -> i32;
+}
+
+/// List system users and groups (name + uid/gid) for chown dropdowns.
+#[derive(Debug, Serialize)]
+pub struct SystemAccount {
+    pub name: String,
+    pub id: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SystemAccounts {
+    pub users: Vec<SystemAccount>,
+    pub groups: Vec<SystemAccount>,
+}
+
+pub async fn accounts() -> ApiResult<Json<SystemAccounts>> {
+    let mut users = Vec::new();
+    let mut seen_uid = std::collections::HashSet::new();
+    if let Ok(raw) = std::fs::read_to_string("/etc/passwd") {
+        for line in raw.lines() {
+            let cols: Vec<&str> = line.split(':').collect();
+            if cols.len() >= 3 {
+                if let Ok(uid) = cols[2].parse::<u32>() {
+                    if seen_uid.insert(uid) {
+                        users.push(SystemAccount {
+                            name: cols[0].to_string(),
+                            id: uid,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    users.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut groups = Vec::new();
+    let mut seen_gid = std::collections::HashSet::new();
+    if let Ok(raw) = std::fs::read_to_string("/etc/group") {
+        for line in raw.lines() {
+            let cols: Vec<&str> = line.split(':').collect();
+            if cols.len() >= 3 {
+                if let Ok(gid) = cols[2].parse::<u32>() {
+                    if seen_gid.insert(gid) {
+                        groups.push(SystemAccount {
+                            name: cols[0].to_string(),
+                            id: gid,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    groups.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(Json(SystemAccounts { users, groups }))
 }

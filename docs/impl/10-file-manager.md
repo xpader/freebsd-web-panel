@@ -63,16 +63,29 @@
 | DELETE | `/api/files` | `?path=` | 删除文件（文件 / 递归目录） |
 | POST | `/api/files/upload` | `?path=&filename=`，body=原始字节 | 上传文件 |
 | GET | `/api/files/download` | `?path=` | 下载文件（目录返回 400） |
+| GET | `/api/files/accounts` | — | 系统用户/组列表（供 chown 下拉选择） |
+| PUT | `/api/files/chmod` | `?path=`，body=`{mode}` | 修改权限（八进制 mode，含 setuid/sticky） |
+| PUT | `/api/files/chown` | `?path=`，body=`{uid?, gid?}` | 修改所有者/组，未提供的字段保持不变 |
+
+### chmod / chown
+
+**chmod** `chmod`：请求体 `{mode: u32}`（八进制，经 `& 0o7777` 截断）。通过 `fchmodat(AT_FDCWD, path, mode, AT_SYMLINK_NOFOLLOW)` FFI 调用——不跟随符号链接，直接修改链接自身的权限（等价 `chmod -h`）。std::fs 不提供 lchmod，故用裸 FFI 声明 `extern "C" fn fchmodat`。
+
+**chown** `chown`：请求体 `{uid?: u32, gid?: u32}`。通过 `lchown(path, uid, gid)` FFI 调用——不跟随符号链接。未提供的字段从当前 `symlink_metadata` 读取保持不变。
+
+**accounts** `accounts`：解析 `/etc/passwd`（去重 UID）和 `/etc/group`（去重 GID），返回 `{users: [{name,id}], groups: [{name,id}]}`，按名称排序。供前端 chown 下拉框使用。
 
 ## 外部依赖
 
-- 无系统命令调用，纯 `std::fs` + `std::os::unix::fs::MetadataExt`
+- chmod/chown 通过裸 FFI（`fchmodat` + `lchown`，FreeBSD libc），无系统命令调用
+- 其余纯 `std::fs` + `std::os::unix::fs::MetadataExt`
 - 前端无第三方库
 
 ## 已知限制 / TODO
 
 - 上传/下载均将整个文件读入内存（超大文件会占内存），未做流式传输；上传默认无大小限制（已禁用 axum 2 MiB 限制）
-- 所有者仅显示 UID/GID 数值，未解析为用户/组名（需 getpwuid/getgrgid FFI）
+- 所有者/组解析自 `/etc/passwd`、`/etc/group`（首次访问 `LazyLock` 缓存），非系统 UID/GID 回退为数字
+- chmod/chown 不递归（不支持 `-R`）
 - 无分页；目录条目极多时全量返回
 - 无文件内容预览 / 编辑、无打包下载、无递归上传
 - 无配额 / 可访问根限制，可访问整个文件系统（依赖认证保护）

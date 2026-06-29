@@ -81,6 +81,24 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - `confirm.js` — Promise 确认对话框（模态遮罩）
 - `layout.js` — 两级导航骨架
 
+### 国际化 `web/js/i18n/`
+
+- **框架**：i18next，`i18n/index.js` 初始化并导出 `t(key, params)` / `getLocale()` / `setLocale()`
+- **翻译表**：`i18n/translations.js` 导出 `en`（fallback）和 `zh` 两个对象，key 用点分命名空间（`common.name`、`fm.permissions`、`zfs.state`）
+- **语言切换**：顶栏右侧语言按钮，切换后整页重渲染；locale 持久化到 `localStorage`
+
+#### 翻译键命名规范（强制）
+
+翻译文件顶部有注释块（必读），核心原则：
+
+**同一含义只用一个 key**——同一个词（如"所有者"/"权限"/"大小"）出现在列表表头、属性弹窗、权限编辑器等不同位置时，必须共用同一个 key，不要按使用场景拆成多个翻译完全相同的 key。
+
+- 新增 key 前先检查是否已有等价词（同义、同翻译），有就直接复用
+- 跨页面通用的词（`name`/`size`/`time`/`user`/`delete` 等）放 `common` 命名空间
+- 只有语义确实不同时才创建新 key
+
+反面教材（已删除）：`colOwner` + `statOwner` + `permOwner`——三个 key 翻译完全相同（"所有者"），只是出现在列表/属性/权限编辑器不同位置。正确做法：`owner`（一个 key，所有位置共用）。
+
 ### CSS `web/css/app.css`
 
 - CSS 变量定义主题色（`--bg`, `--accent`, `--danger` 等）；`:root { color-scheme: dark }` 声明深色主题，让浏览器自动渲染暗色滚动条及表单控件
@@ -98,5 +116,4 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 - 无前端路由历史（hash 变化不支持浏览器前进/后退语义完整）
 - 无响应式适配（小屏幕侧边栏不折叠）
-- 无国际化框架（硬编码中文）
 - 无前端测试

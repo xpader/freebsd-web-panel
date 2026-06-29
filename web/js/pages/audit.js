@@ -12,7 +12,7 @@ export async function renderAudit(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>${t('audit.colTime')}</th><th>${t('audit.colUser')}</th><th>${t('audit.colMethod')}</th><th>${t('audit.colPath')}</th><th>${t('audit.colStatus')}</th><th>${t('audit.colDetail')}</th></tr></thead>
+        <thead><tr><th>${t('audit.time')}</th><th>${t('audit.user')}</th><th>${t('audit.method')}</th><th>${t('audit.path')}</th><th>${t('audit.status')}</th><th>${t('audit.detail')}</th></tr></thead>
         <tbody id="audit-tbody">
           <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>

@@ -119,7 +119,7 @@ function diskCard(d) {
       <div style="padding:0 18px 18px;">
         <h2 style="font-size:14px;margin:8px 0 8px;">${t('disks.partTable', { n: d.partitions.length })}</h2>
         <table>
-          <thead><tr><th>${t('common.device')}</th><th>${t('common.type')}</th><th>${t('disks.colLabel')}</th><th>${t('common.size')}</th><th>${t('disks.colStartSector')}</th><th>${t('disks.colEndSector')}</th><th>${t('disks.colUuid')}</th></tr></thead>
+          <thead><tr><th>${t('common.device')}</th><th>${t('common.type')}</th><th>${t('disks.label')}</th><th>${t('common.size')}</th><th>${t('disks.startSector')}</th><th>${t('disks.endSector')}</th><th>${t('disks.uuid')}</th></tr></thead>
           <tbody>${partRows}</tbody>
         </table>
       </div>

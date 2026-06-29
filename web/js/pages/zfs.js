@@ -192,7 +192,7 @@ export async function renderZfsDatasets(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>${t('common.name')}</th><th>${t('common.type')}</th><th>${t('common.used')}</th><th>${t('zfs.colAvail')}</th><th>${t('zfs.colMountpoint')}</th><th>${t('zfs.colCompression')}</th><th>${t('common.actions')}</th></tr></thead>
+        <thead><tr><th>${t('common.name')}</th><th>${t('common.type')}</th><th>${t('common.used')}</th><th>${t('common.available')}</th><th>${t('zfs.mountpoint')}</th><th>${t('zfs.compression')}</th><th>${t('common.actions')}</th></tr></thead>
         <tbody id="ds-tbody"><tr><td colspan="7" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr></tbody>
       </table>
     </div>
@@ -221,8 +221,8 @@ async function loadDatasets() {
           <td class="mono">${esc(ds.mountpoint)}</td>
           <td class="mono">${esc(ds.compression)}</td>
           <td>
-            <button class="btn-secondary btn-sm" onclick="window.__fwpDsSnap('${esc(ds.name)}')">${t('zfs.dsSnapshot')}</button>
-            <button class="btn-secondary btn-sm" onclick="window.__fwpDsProps('${esc(ds.name)}')">${t('zfs.dsProps')}</button>
+            <button class="btn-secondary btn-sm" onclick="window.__fwpDsSnap('${esc(ds.name)}')">${t('zfs.snapshot')}</button>
+            <button class="btn-secondary btn-sm" onclick="window.__fwpDsProps('${esc(ds.name)}')">${t('zfs.properties')}</button>
             ${ds.name.includes('/') ? `<button class="btn-danger btn-sm" onclick="window.__fwpDelDs('${esc(ds.name)}')">${t('common.delete')}</button>` : ''}
           </td>
         </tr>`);
@@ -243,7 +243,7 @@ window.__fwpCreateDataset = async () => {
   api.post('/api/zfs/datasets', { name: result.name }).then(() => {
     toast(t('zfs.dsCreated'));
     loadDatasets();
-  }).catch(e => toast(e.message || t('zfs.dsCreateFailedShort'), 'error'));
+  }).catch(e => toast(e.message || t('common.operationFailed'), 'error'));
 };
 
 window.__fwpDsSnap = async (name) => {
@@ -261,7 +261,7 @@ window.__fwpDelDs = async (name) => {
   api.del(`/api/zfs/dataset/destroy?name=${encodeURIComponent(name)}`).then(() => {
     toast(t('zfs.dsDeleted'));
     loadDatasets();
-  }).catch(e => toast(e.message || t('zfs.dsDeleteFailed'), 'error'));
+  }).catch(e => toast(e.message || t('common.deleteFailed'), 'error'));
 };
 
 window.__fwpDsProps = async (name) => {
@@ -276,7 +276,7 @@ window.__fwpDsProps = async (name) => {
       <h3>${t('zfs.propsTitle', { name: esc(name) })}</h3>
       <div style="max-height:400px;overflow-y:auto;">
         <table style="font-size:12px;">
-          <thead><tr><th>${t('common.name')}</th><th>${t('zfs.colValue')}</th><th>${t('zfs.colSource')}</th></tr></thead>
+          <thead><tr><th>${t('common.name')}</th><th>${t('zfs.value')}</th><th>${t('zfs.source')}</th></tr></thead>
           <tbody>
             ${props.map(p => `<tr><td class="mono">${esc(p.name)}</td><td class="mono">${esc(p.value)}</td><td class="text-dim mono">${esc(p.source)}</td></tr>`).join('')}
           </tbody>
@@ -306,7 +306,7 @@ export async function renderZfsSnapshots(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>${t('zfs.dsLabel')}</th><th>${t('zfs.colSnapshot')}</th><th>${t('common.used')}</th><th>${t('zfs.colRefer')}</th><th>${t('common.colCreatedAt')}</th><th>${t('common.actions')}</th></tr></thead>
+        <thead><tr><th>${t('zfs.dsLabel')}</th><th>${t('zfs.snapshot')}</th><th>${t('common.used')}</th><th>${t('zfs.refer')}</th><th>${t('common.createdAt')}</th><th>${t('common.actions')}</th></tr></thead>
         <tbody id="snap-tbody"><tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr></tbody>
       </table>
     </div>
@@ -380,7 +380,7 @@ window.__fwpDelSnap = async (full) => {
   const qs = `name=${encodeURIComponent(full)}${result.recursive ? '&recursive=true' : ''}`;
   api.del(`/api/zfs/snapshot/destroy?${qs}`).then(() => {
     toast(t('zfs.snapDeleted')); loadSnapshots();
-  }).catch(e => toast(e.message || t('zfs.snapDeleteFailed'), 'error'));
+  }).catch(e => toast(e.message || t('common.deleteFailed'), 'error'));
 };
 
 window.__fwpRollback = async (full) => {

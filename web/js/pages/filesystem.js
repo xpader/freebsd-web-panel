@@ -79,7 +79,7 @@ export async function renderFsOverview(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>${t('common.device')}</th><th>${t('fs.colModel')}</th><th>${t('fs.colSize')}</th><th>${t('fs.colRpm')}</th></tr></thead>
+        <thead><tr><th>${t('common.device')}</th><th>${t('fs.model')}</th><th>${t('common.size')}</th><th>${t('fs.rpm')}</th></tr></thead>
         <tbody>${diskRows}</tbody>
       </table>
     </div>
@@ -89,7 +89,7 @@ export async function renderFsOverview(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>${t('common.device')}</th><th>${t('fs.colMountpoint')}</th><th>${t('fs.colFstype')}</th><th>${t('fs.colTotal')}</th><th>${t('common.used')}</th><th>${t('fs.colAvailable')}</th><th>${t('fs.colUsage')}</th></tr></thead>
+        <thead><tr><th>${t('common.device')}</th><th>${t('fs.mountpoint')}</th><th>${t('fs.fstype')}</th><th>${t('common.total')}</th><th>${t('common.used')}</th><th>${t('common.available')}</th><th>${t('common.usage')}</th></tr></thead>
         <tbody>${mountRows}</tbody>
       </table>
     </div>`;

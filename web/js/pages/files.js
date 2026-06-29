@@ -240,29 +240,35 @@ function listHtml(entries) {
   if (!entries.length) return '<div class="empty">' + t('fm.emptyDir') + '</div>';
   const rows = entries.map((e) => {
     const icon = fileIcon(e);
-    const dl = e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.tDownload')}">⤓</button>`;
+    const dl = e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.download')}">⤓</button>`;
     return `
       <tr>
         <td class="fm-name-cell">
-          <span class="fm-row-ico">${icon}</span>
-          ${e.is_dir
-            ? `<a class="fm-name-link" data-dir="${esc(e.path)}">${esc(e.name)}</a>`
-            : `<span class="fm-name">${esc(e.name)}</span>`}
+          <div class="fm-cell-flex">
+            <span class="fm-row-ico">${icon}</span>
+            ${e.is_dir
+              ? `<a class="fm-name-link" data-dir="${esc(e.path)}">${esc(e.name)}</a>`
+              : `<span class="fm-name">${esc(e.name)}</span>`}
+          </div>
         </td>
         <td class="mono">${e.is_dir ? '—' : fmtBytes(e.size)}</td>
-        <td class="text-dim mono">${esc(e.permissions)}</td>
+        <td class="text-dim mono">${esc(e.user)}</td>
+        <td class="text-dim mono">${esc(e.group)}</td>
+        <td class="mono ${(e.mode & 0o111) ? 'fm-perm-exec' : 'text-dim'}">${esc(e.permissions)}</td>
         <td class="text-dim">${fmtDate(e.modified)}</td>
-        <td class="fm-acts">
+        <td>
+          <div class="fm-acts">
           ${dl}
-          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.tRename')}">✎</button>
-          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.tStat')}">ℹ</button>
-          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('fm.tDelete')}">🗑</button>
+          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.rename')}">✎</button>
+          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.properties')}">ℹ</button>
+          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('common.delete')}">🗑</button>
+          </div>
         </td>
       </tr>`;
   }).join('');
   return `
     <table class="fm-table">
-      <thead><tr><th>${t('common.name')}</th><th>${t('common.size')}</th><th>${t('fm.colPermissions')}</th><th>${t('fm.colModified')}</th><th>${t('common.actions')}</th></tr></thead>
+      <thead><tr><th>${t('common.name')}</th><th>${t('common.size')}</th><th>${t('fm.owner')}</th><th>${t('fm.group')}</th><th>${t('fm.permissions')}</th><th>${t('fm.modified')}</th><th>${t('common.actions')}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
@@ -278,10 +284,10 @@ function gridHtml(entries) {
         <div class="fm-grid-name" title="${esc(e.name)}">${esc(e.name)}</div>
         <div class="fm-grid-meta mono">${e.is_dir ? t('fm.folder') : fmtBytes(e.size)}</div>
         <div class="fm-grid-acts">
-          ${e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.tDownload')}">⤓</button>`}
-          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.tRename')}">✎</button>
-          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.tStat')}">ℹ</button>
-          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('fm.tDelete')}">🗑</button>
+          ${e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.download')}">⤓</button>`}
+          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.rename')}">✎</button>
+          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.properties')}">ℹ</button>
+          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('common.delete')}">🗑</button>
         </div>
       </div>`;
   }).join('');
@@ -351,7 +357,7 @@ async function downloadFile(path) {
 }
 
 async function onMkdir() {
-  const name = await promptText(t('fm.mkdirTitle'), t('fm.mkdirLabel'), '');
+  const name = await promptText(t('fm.mkdir'), t('fm.mkdirLabel'), '');
   if (!name) return;
   const target = joinPath(currentDir, name);
   try {
@@ -367,7 +373,7 @@ async function onMkdir() {
 
 async function onRename(path) {
   const oldName = path.split('/').filter(Boolean).pop() || '';
-  const newName = await promptText(t('fm.renameTitle'), t('fm.renameLabel'), oldName);
+  const newName = await promptText(t('fm.rename'), t('fm.renameLabel'), oldName);
   if (!newName || newName === oldName) return;
   const parent = path.split('/').filter(Boolean).slice(0, -1).join('/') || '/';
   const target = joinPath(parent, newName);
@@ -385,7 +391,7 @@ async function onRename(path) {
 async function onDelete(path, isDir) {
   const name = path.split('/').filter(Boolean).pop() || path;
   const ok = await confirmDialog(
-    t('fm.deleteTitle'),
+    t('common.delete'),
     isDir ? t('fm.deleteConfirmDir', { name }) : t('fm.deleteConfirmFile', { name }),
   );
   if (!ok) return;
@@ -414,31 +420,204 @@ async function onStat(path) {
 function showStatModal(info) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  const kind = info.is_dir ? t('fm.kindDir') : info.is_symlink ? t('fm.kindSymlink') : t('fm.kindFile');
+  const kind = info.is_dir ? t('fm.folder') : info.is_symlink ? t('fm.symlink') : t('fm.file');
   overlay.innerHTML = `
     <div class="modal" style="max-width:560px;">
       <h3>${t('fm.statTitle', { name: esc(info.name) })}</h3>
       <div class="fm-stat-grid">
-        ${statRow(t('fm.statPath'), info.path, 'mono')}
-        ${statRow(t('fm.statKind'), kind)}
-        ${info.symlink_target ? statRow(t('fm.statTarget'), info.symlink_target, 'mono') : ''}
-        ${statRow(t('fm.statSize'), info.is_dir ? '—' : t('fm.statSizeVal', { fmt: fmtBytes(info.size), bytes: info.size.toLocaleString() }), 'mono')}
-        ${statRow(t('fm.statPermissions'), info.permissions, 'mono')}
-        ${statRow(t('fm.statOwner'), t('fm.statOwnerVal', { uid: info.uid, gid: info.gid }), 'mono')}
-        ${statRow(t('fm.statInode'), `${info.inode}`, 'mono')}
-        ${statRow(t('fm.statNlink'), `${info.nlink}`, 'mono')}
-        ${statRow(t('fm.statModified'), fmtDate(info.modified))}
-        ${statRow(t('fm.statAccessed'), fmtDate(info.accessed))}
-        ${statRow(t('fm.statChanged'), fmtDate(info.changed))}
-        ${statRow(t('fm.statBlocks'), info.blocks ? `${fmtBytes(info.blocks * 512)}` : '—', 'mono')}
+        ${statRow(t('fm.path'), info.path, 'mono')}
+        ${statRow(t('common.type'), kind)}
+        ${info.symlink_target ? statRow(t('fm.target'), info.symlink_target, 'mono') : ''}
+        ${statRow(t('common.size'), info.is_dir ? '—' : t('fm.sizeVal', { fmt: fmtBytes(info.size), bytes: info.size.toLocaleString() }), 'mono')}
+        <div class="fm-stat-row">
+          <div class="fm-stat-label">${t('fm.permissions')}</div>
+          <div class="fm-stat-val"><span class="mono">${esc(info.permissions)}</span><button class="fm-act" data-act="chmod" style="margin-left:6px;" title="${t('fm.editPermissions')}">✎</button></div>
+        </div>
+        <div class="fm-stat-row">
+          <div class="fm-stat-label">${t('fm.owner')}</div>
+          <div class="fm-stat-val mono">${esc(info.user)} (${info.uid}) / ${esc(info.group)} (${info.gid})<button class="fm-act" data-act="chown" style="margin-left:6px;" title="${t('fm.editOwner')}">✎</button></div>
+        </div>
+        ${statRow(t('fm.inode'), `${info.inode}`, 'mono')}
+        ${statRow(t('fm.hardLinks'), `${info.nlink}`, 'mono')}
+        ${statRow(t('fm.modified'), fmtDate(info.modified))}
+        ${statRow(t('fm.accessed'), fmtDate(info.accessed))}
+        ${statRow(t('fm.changed'), fmtDate(info.changed))}
+        ${statRow(t('fm.blocks'), info.blocks ? `${fmtBytes(info.blocks * 512)}` : '—', 'mono')}
       </div>
       <div class="modal-actions">
         <button class="btn-secondary" data-act="close">${t('common.close')}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.dataset.act === 'close') overlay.remove();
+  overlay.addEventListener('click', async (e) => {
+    if (e.target === overlay || e.target.dataset.act === 'close') {
+      overlay.remove();
+    } else if (e.target.dataset.act === 'chmod') {
+      overlay.remove();
+      await editPermissions(info);
+    } else if (e.target.dataset.act === 'chown') {
+      overlay.remove();
+      await editOwner(info);
+    }
+  });
+}
+
+async function editPermissions(info) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  const mode = info.mode & 0o7777;
+  const rows = [
+    { label: t('fm.owner'), bits: { r: 0o400, w: 0o200, x: 0o100 }, special: { s: 0o4000, label: 'setuid' } },
+    { label: t('fm.group'), bits: { r: 0o040, w: 0o020, x: 0o010 }, special: { s: 0o2000, label: 'setgid' } },
+    { label: t('fm.other'), bits: { r: 0o004, w: 0o002, x: 0o001 }, special: { s: 0o1000, label: 'sticky' } },
+  ];
+  const gridHtml = rows.map((row) => `
+    <div class="fm-perm-row">
+      <span class="fm-perm-who">${row.label}</span>
+      <label class="fm-perm-check"><input type="checkbox" data-bit="${row.bits.r}" ${mode & row.bits.r ? 'checked' : ''}/>${t('fm.read')}</label>
+      <label class="fm-perm-check"><input type="checkbox" data-bit="${row.bits.w}" ${mode & row.bits.w ? 'checked' : ''}/>${t('fm.write')}</label>
+      <label class="fm-perm-check"><input type="checkbox" data-bit="${row.bits.x}" ${mode & row.bits.x ? 'checked' : ''}/>${t('fm.execute')}</label>
+      <label class="fm-perm-check"><input type="checkbox" data-bit="${row.special.s}" ${mode & row.special.s ? 'checked' : ''}/>${row.special.label}</label>
+    </div>`).join('');
+
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>${t('fm.editPermissions')} — ${esc(info.name)}</h3>
+      <div class="fm-perm-grid">${gridHtml}</div>
+      <div class="fm-perm-preview">
+        <span class="text-dim">${t('fm.permissions')}:</span>
+        <span class="mono" id="fm-perm-str">${esc(permStringFull(mode))}</span>
+        <span class="text-dim">${t('fm.octalMode')}:</span>
+        <span class="mono" id="fm-perm-oct">${octStr(mode)}</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
+        <button data-act="ok">${t('common.ok')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const previewStr = overlay.querySelector('#fm-perm-str');
+  const previewOct = overlay.querySelector('#fm-perm-oct');
+
+  function readMode() {
+    let m = 0;
+    overlay.querySelectorAll('[data-bit]').forEach((cb) => {
+      if (cb.checked) m |= parseInt(cb.getAttribute('data-bit'), 10);
+    });
+    return m;
+  }
+  overlay.querySelectorAll('[data-bit]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const m = readMode();
+      previewStr.textContent = permStringFull(m);
+      previewOct.textContent = octStr(m);
+    });
+  });
+
+  return new Promise((resolve) => {
+    overlay.addEventListener('click', async (e) => {
+      if (e.target === overlay || e.target.dataset.act === 'cancel') {
+        overlay.remove();
+        resolve();
+      } else if (e.target.dataset.act === 'ok') {
+        const newMode = readMode();
+        overlay.remove();
+        try {
+          await api.put(`/api/files/chmod?path=${encodeURIComponent(info.path)}`, { mode: newMode });
+          toast(t('fm.permSaved'));
+          await loadListing(currentDir);
+        } catch (err) {
+          toast(t('fm.saveFailed', { msg: err.message || '' }), 'error');
+        }
+        resolve();
+      }
+    });
+  });
+}
+
+// Build a 9-char ls-style permission string (without leading type char) from a numeric mode.
+function permStringFull(mode) {
+  const chars = [
+    [0o4000, 0o100, 's', 'S', 'r'],
+    [0o2000, 0o010, 's', 'S', 'r'],
+  ];
+  let s = '';
+  // owner
+  s += mode & 0o400 ? 'r' : '-';
+  s += mode & 0o200 ? 'w' : '-';
+  s += mode & 0o4000 ? (mode & 0o100 ? 's' : 'S') : (mode & 0o100 ? 'x' : '-');
+  // group
+  s += mode & 0o040 ? 'r' : '-';
+  s += mode & 0o020 ? 'w' : '-';
+  s += mode & 0o2000 ? (mode & 0o010 ? 's' : 'S') : (mode & 0o010 ? 'x' : '-');
+  // other
+  s += mode & 0o004 ? 'r' : '-';
+  s += mode & 0o002 ? 'w' : '-';
+  s += mode & 0o1000 ? (mode & 0o001 ? 't' : 'T') : (mode & 0o001 ? 'x' : '-');
+  return s;
+}
+
+function octStr(mode) {
+  return mode.toString(8).padStart(4, '0');
+}
+
+async function editOwner(info) {
+  let accts;
+  try {
+    accts = await api.get('/api/files/accounts');
+  } catch (err) {
+    toast(t('fm.saveFailed', { msg: err.message || '' }), 'error');
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  const userOpts = accts.users
+    .map((u) => `<option value="${u.id}" ${u.id === info.uid ? 'selected' : ''}>${esc(u.name)} (${u.id})</option>`)
+    .join('');
+  const groupOpts = accts.groups
+    .map((g) => `<option value="${g.id}" ${g.id === info.gid ? 'selected' : ''}>${esc(g.name)} (${g.id})</option>`)
+    .join('');
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>${t('fm.editOwner')} — ${esc(info.name)}</h3>
+      <div class="field">
+        <label>${t('fm.user')}</label>
+        <select id="fm-chown-user"><option value="">— ${t('common.unknown')} —</option>${userOpts}</select>
+      </div>
+      <div class="field">
+        <label>${t('fm.group')}</label>
+        <select id="fm-chown-group"><option value="">— ${t('common.unknown')} —</option>${groupOpts}</select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
+        <button data-act="ok">${t('common.ok')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const finish = () => overlay.remove();
+  return new Promise((resolve) => {
+    overlay.addEventListener('click', async (e) => {
+      if (e.target === overlay || e.target.dataset.act === 'cancel') {
+        finish();
+        resolve();
+      } else if (e.target.dataset.act === 'ok') {
+        const uidVal = overlay.querySelector('#fm-chown-user').value;
+        const gidVal = overlay.querySelector('#fm-chown-group').value;
+        const body = {};
+        if (uidVal !== '') body.uid = parseInt(uidVal, 10);
+        if (gidVal !== '') body.gid = parseInt(gidVal, 10);
+        try {
+          await api.put(`/api/files/chown?path=${encodeURIComponent(info.path)}`, body);
+          toast(t('fm.ownerSaved'));
+          finish();
+          await loadListing(currentDir);
+        } catch (err) {
+          toast(t('fm.saveFailed', { msg: err.message || '' }), 'error');
+        }
+        resolve();
+      }
+    });
   });
 }
 

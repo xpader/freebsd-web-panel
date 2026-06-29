@@ -18,7 +18,7 @@ export async function renderUsers(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>ID</th><th>${t('auth.username')}</th><th>${t('users.colRole')}</th><th>${t('common.colCreatedAt')}</th><th>${t('users.colLastLogin')}</th><th>${t('common.actions')}</th></tr></thead>
+        <thead><tr><th>ID</th><th>${t('auth.username')}</th><th>${t('users.role')}</th><th>${t('common.createdAt')}</th><th>${t('users.lastLogin')}</th><th>${t('common.actions')}</th></tr></thead>
         <tbody id="users-tbody">
           <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>
@@ -55,7 +55,7 @@ async function loadUsers() {
 }
 
 window.__fwpAddUser = () => {
-  showModal(t('users.addUser'), '', '', async (username, password) => {
+  showModal(t('users.add'), '', '', async (username, password) => {
     await api.post('/api/users', { username, password });
     toast(t('users.created'));
     loadUsers();
@@ -70,13 +70,13 @@ window.__fwpEditPwd = (id, name) => {
 };
 
 window.__fwpDelUser = async (id, name) => {
-  if (!await confirmDialog(t('users.deleteUser'), t('users.deleteConfirm', { name }))) return;
+  if (!await confirmDialog(t('common.delete'), t('users.deleteConfirm', { name }))) return;
   try {
     await api.del(`/api/users/${id}`);
     toast(t('users.deleted'));
     loadUsers();
   } catch (err) {
-    toast(err.message || t('users.deleteFailed'), 'error');
+    toast(err.message || t('common.deleteFailed'), 'error');
   }
 };
 
