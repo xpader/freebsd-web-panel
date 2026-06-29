@@ -38,6 +38,9 @@ sha2 = "0.10"
 hex = "0.4"
 regex = "1"
 parking_lot = "0.12"
+# System calls (sysctl, getloadavg) — replaces subprocess spawning for metrics
+sysctl = "0.7"
+libc = "0.2"
 # CLI
 clap = { version = "4", features = ["derive"] }
 # Logging

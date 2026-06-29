@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::{self, MetricSample};
 use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::sysinfo;
 
 // ---- Collector ----
 
@@ -89,7 +90,7 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
     }
 
     // CPU frequency.
-    if let Some(freq) = read_sysctl_f64("dev.cpu.0.freq") {
+    if let Some(freq) = sysinfo::read_f64("dev.cpu.0.freq") {
         out.push(MetricSample {
             ts: now,
             category: "cpu".into(),
@@ -99,8 +100,8 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
     }
 
     // Memory.
-    let ps = read_sysctl_f64("vm.stats.vm.v_page_size").unwrap_or(4096.0);
-    let vpc = |n: &str| read_sysctl_f64(n).unwrap_or(0.0);
+    let ps = sysinfo::read_f64("vm.stats.vm.v_page_size").unwrap_or(4096.0);
+    let vpc = |n: &str| sysinfo::read_f64(n).unwrap_or(0.0);
     let total_pages = vpc("vm.stats.vm.v_page_count");
     let active = vpc("vm.stats.vm.v_active_count");
     let wire = vpc("vm.stats.vm.v_wire_count");
@@ -117,14 +118,15 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
     out.push(MetricSample { ts: now, category: "memory".into(), name: "total".into(), value: mem_total });
 
     // Load average.
-    let la = read_loadavg();
+    let la = sysinfo::read_loadavg();
     out.push(MetricSample { ts: now, category: "load".into(), name: "1".into(), value: la[0] });
     out.push(MetricSample { ts: now, category: "load".into(), name: "5".into(), value: la[1] });
     out.push(MetricSample { ts: now, category: "load".into(), name: "15".into(), value: la[2] });
 
     // Temperatures.
-    for (name, value) in read_temps() {
-        out.push(MetricSample { ts: now, category: "temp".into(), name, value: value as f64 });
+    let ncpu = sysinfo::read_u64("hw.ncpu").unwrap_or(1) as u32;
+    for (i, value) in sysinfo::read_core_temps(ncpu) {
+        out.push(MetricSample { ts: now, category: "temp".into(), name: format!("cpu{i}"), value: value as f64 });
     }
 
     Ok(out)
@@ -142,11 +144,7 @@ struct CpuState {
 static MONITOR_CPU: LazyLock<Mutex<Option<CpuState>>> = LazyLock::new(|| Mutex::new(None));
 
 fn cpu_usage_delta() -> (f32, Vec<f32>) {
-    let raw = read_sysctl("kern.cp_times").unwrap_or_default();
-    let times: Vec<u64> = raw
-        .split_whitespace()
-        .filter_map(|t| t.trim().parse().ok())
-        .collect();
+    let times: Vec<u64> = sysinfo::read_cp_times();
     let ncpu = (times.len() / 5).max(1);
     let mut guard = MONITOR_CPU.lock();
     let mut per: Vec<f32> = Vec::with_capacity(ncpu);
@@ -217,81 +215,4 @@ pub async fn latest(State(state): State<AppState>) -> ApiResult<Json<LatestRespo
         load: db::latest_in_category(&conn, "load")?,
         temp: db::latest_in_category(&conn, "temp")?,
     }))
-}
-
-// ---- Sysctl helpers ----
-
-fn read_sysctl(name: &str) -> std::io::Result<String> {
-    let out = std::process::Command::new("/sbin/sysctl")
-        .arg("-n")
-        .arg(name)
-        .output()?;
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn read_sysctl_f64(name: &str) -> Option<f64> {
-    read_sysctl(name).ok().and_then(|s| s.trim().parse().ok())
-}
-
-fn read_loadavg() -> [f64; 3] {
-    let mut la = [0.0_f64; 3];
-    if let Ok(out) = std::process::Command::new("/usr/bin/uptime").output() {
-        let s = String::from_utf8_lossy(&out.stdout);
-        let nums: Vec<f64> = s
-            .split_whitespace()
-            .filter_map(|t| t.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').parse().ok())
-            .collect();
-        if nums.len() >= 3 {
-            let n = nums.len();
-            la[0] = nums[n - 3];
-            la[1] = nums[n - 2];
-            la[2] = nums[n - 1];
-        }
-    }
-    la
-}
-
-fn read_temps() -> Vec<(String, f32)> {
-    let names = sysctl_names_matching(|n| n.starts_with("dev.cpu.") && n.ends_with(".temperature"));
-    let mut out = Vec::with_capacity(names.len());
-    for name in names {
-        if let Ok(raw) = read_sysctl(&name) {
-            let num: String = raw.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            if let Ok(v) = num.parse::<f32>() {
-                let core = name
-                    .strip_prefix("dev.cpu.")
-                    .and_then(|s| s.split('.').next())
-                    .unwrap_or("?");
-                out.push((format!("cpu{core}"), v));
-            }
-        }
-    }
-    out
-}
-
-fn sysctl_names_matching<F: Fn(&str) -> bool>(pred: F) -> Vec<String> {
-    static ALL_NAMES: LazyLock<Mutex<Option<Vec<String>>>> =
-        LazyLock::new(|| Mutex::new(None));
-    let names = {
-        let mut g = ALL_NAMES.lock();
-        if g.is_none() {
-            *g = Some(read_all_sysctl_names());
-        }
-        g.as_ref().unwrap().clone()
-    };
-    names.into_iter().filter(|n| pred(n)).collect()
-}
-
-fn read_all_sysctl_names() -> Vec<String> {
-    let out = std::process::Command::new("/sbin/sysctl").arg("-aN").output();
-    match out {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        }
-        _ => Vec::new(),
-    }
 }

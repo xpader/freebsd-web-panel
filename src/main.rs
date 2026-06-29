@@ -9,6 +9,7 @@ mod error;
 mod handlers;
 mod monitor;
 mod state;
+mod sysinfo;
 mod web_assets;
 
 use std::net::SocketAddr;

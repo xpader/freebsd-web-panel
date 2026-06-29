@@ -6,6 +6,21 @@
 
 ## 实现细节
 
+### 数据获取方式：sysctl(3) 系统调用
+
+所有内核态指标通过 `src/sysinfo.rs` 模块读取，统一走 **sysctl(3) 系统调用**（`sysctl` crate / `libc::sysctlbyname`）——不再 spawn `/sbin/sysctl` 子进程。仅在监控热路径和实时端点共享这些读取器，避免重复实现。
+
+| 读取器 | 实现方式 | 用途 |
+|---|---|---|
+| `sysinfo::read_string(name)` | `sysctl::Ctl::value_string()` | 字符串型 sysctl（hostname 等） |
+| `sysinfo::read_u64(name)` / `read_f64` | `Ctl::value()` 匹配整数变体 | 数值型 sysctl（ncpu、physmem、内存页计数） |
+| `sysinfo::read_cp_times()` | `libc::sysctlbyname` 原始缓冲区 | `kern.cp_times`（long 数组，crate 误报为单个 Long） |
+| `sysinfo::boot_time()` | `Ctl::value()` → Struct 字节解析 | `kern.boottime`（struct timeval） |
+| `sysinfo::read_loadavg()` | `libc::getloadavg()` | 负载均衡（替代解析 `uptime` 输出） |
+| `sysinfo::read_core_temps(ncpu)` | `Ctl::value()` → `CtlValue::Temperature` | `dev.cpu.N.temperature`（crate 自动转摄氏） |
+
+> 历史原因：`kern.cp_times` 是 `S,LONG` 格式的 long 数组，sysctl crate 会把它当成单个 `Long` 返回，所以该处直接用 `libc::sysctlbyname` 两次调用（先取长度，再取数据）读原始字节再按 8 字节切分 reinterpret。
+
 ### 静态信息 `GET /api/system/info`
 
 `handlers/system.rs::system_info` — 一次性读取，不涉及采样：
@@ -47,17 +62,9 @@ usage = used / total × 100
 
 **Swap**：`/usr/sbin/swapinfo -k` 解析（跳过表头，1K-blocks → bytes）。
 
-**温度**：`sysctl -aN` 缓存后过滤 `dev.cpu.N.temperature`，值格式 `"44.0C"`，取数字部分。
+**温度**：`sysinfo::read_core_temps(ncpu)` 遍历 `dev.cpu.0..N.temperature`，sysctl crate 自动将 FreeBSD 的 `IK` 格式转为 `CtlValue::Temperature`，直接取 `.celsius()`。
 
-**CPU 频率**：`dev.cpu.0.freq`。
-
-### sysctl 名称缓存
-
-`sysctl_names_matching(pred)` — `sysctl -aN` 结果用 `LazyLock<Mutex<Option<Vec<String>>>>` 缓存，仅首次执行。后续按谓词过滤。用于温度发现。
-
-### sysctl 读取
-
-所有 sysctl 读取统一走 `read_sysctl(name)` —— spawn `/sbin/sysctl -n <name>` 子进程，取 stdout trim。**不用** FFI（保持简单，子进程开销在低频采样下可忽略）。
+**CPU 频率**：`dev.cpu.0.freq`（sysinfo::read_u64）。
 
 ## API
 
@@ -68,8 +75,9 @@ usage = used / total × 100
 
 ## 外部依赖
 
-- 系统命令：`/sbin/sysctl`、`/usr/sbin/swapinfo`、`/usr/bin/uptime`
-- crate：`parking_lot`、`std::sync::LazyLock`
+- crate：`sysctl`（sysctl(3) 封装）、`libc`（getloadavg、sysctlbyname）、`parking_lot`、`std::sync::LazyLock`
+- 系统命令：`/usr/sbin/swapinfo`（swap 统计仍走子进程）
+- 详见 [13-sysinfo.md](13-sysinfo.md)
 
 ## 已知限制
 

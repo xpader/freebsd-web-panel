@@ -17,7 +17,7 @@
 
 ### 采样逻辑 `collect_samples(now)`
 
-每次采集生成一批 `MetricSample`（同一时间戳）：
+每次采集调用 `src/sysinfo.rs` 中的读取器（sysctl(3) 系统调用，不走子进程）生成一批 `MetricSample`（同一时间戳）：
 
 | 分类 | 名称 | 值 | 来源 |
 |---|---|---|---|
@@ -29,8 +29,8 @@
 | **memory** | `free` | 空闲字节 | `ps × (free + inactive + cache)` |
 | **memory** | `wired` | Wired 字节 | `ps × wire` |
 | **memory** | `total` | 总内存字节 | `ps × page_count` |
-| **load** | `1` / `5` / `15` | load average | `uptime` |
-| **temp** | `cpu0..cpuN` | 温度 °C | `dev.cpu.N.temperature` |
+| **load** | `1` / `5` / `15` | load average | `getloadavg(3)` |
+| **temp** | `cpu0..cpuN` | 温度 °C | `dev.cpu.N.temperature`（`CtlValue::Temperature`） |
 
 CPU delta 使用 `MONITOR_CPU`（独立的 `LazyLock<Mutex<Option<CpuState>>>`），与仪表盘的 `LAST_CP_TIMES` 隔离。
 
@@ -79,8 +79,7 @@ retention_days = 30     # 数据保留天数
 
 ## 外部依赖
 
-- 系统命令：`/sbin/sysctl`、`/usr/bin/uptime`
-- crate：`tokio`（interval/spawn）、`parking_lot`、`std::sync::LazyLock`
+- crate：`sysctl`、`libc`（通过 `src/sysinfo.rs`，详见 [13-sysinfo.md](13-sysinfo.md)）、`tokio`（interval/spawn）、`parking_lot`、`std::sync::LazyLock`
 - 前端：Chart.js 4.4.7（UMD 本地托管）、chartjs-adapter-date-fns 3.0.0
 
 ## 已知限制
@@ -88,4 +87,3 @@ retention_days = 30     # 数据保留天数
 - 未采集磁盘 I/O 和网络流量（后续扩展）
 - 无降采样（长期数据 30s 粒度，7 天约 2 万点，前端通过 `pointRadius: 0` 处理密集数据）
 - 无告警规则和通知（设计已完成，待实现）
-- `sysctl -aN` 缓存后不刷新（热插拔 CPU 场景需重启服务）

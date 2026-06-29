@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::error::ApiResult;
+use crate::sysinfo;
 
 // ---- Static system info ----
 
@@ -26,22 +27,16 @@ pub struct SystemInfo {
 }
 
 pub async fn system_info() -> ApiResult<Json<SystemInfo>> {
-    let hostname = read_sysctl("kern.hostname").unwrap_or_else(|_| "unknown".into());
-    let os_release = read_sysctl("kern.osrelease").unwrap_or_default();
-    let os_version = read_sysctl("kern.osreldate").unwrap_or_default();
-    let kernel = read_sysctl("kern.ident").unwrap_or_default();
-    let cpu_model = read_sysctl("hw.model").unwrap_or_else(|_| "unknown".into());
-    let cpu_cores: u32 = read_sysctl("hw.ncpu")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(1);
-    let memory_total: u64 = read_sysctl("hw.physmem")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    let hostname = sysinfo::read_string("kern.hostname").unwrap_or_else(|| "unknown".into());
+    let os_release = sysinfo::read_string("kern.osrelease").unwrap_or_default();
+    let os_version = sysinfo::read_string("kern.osreldate").unwrap_or_default();
+    let kernel = sysinfo::read_string("kern.ident").unwrap_or_default();
+    let cpu_model = sysinfo::read_string("hw.model").unwrap_or_else(|| "unknown".into());
+    let cpu_cores: u32 = sysinfo::read_u64("hw.ncpu").unwrap_or(1) as u32;
+    let memory_total: u64 = sysinfo::read_u64("hw.physmem").unwrap_or(0);
     let swap_total = read_swap_total();
 
-    let boot_time = parse_boottime(&read_sysctl("kern.boottime").unwrap_or_default());
+    let boot_time = sysinfo::boot_time();
     let now = now_ts();
     let uptime = if boot_time > 0 {
         (now - boot_time).max(0) as u64
@@ -56,23 +51,12 @@ pub async fn system_info() -> ApiResult<Json<SystemInfo>> {
         kernel,
         uptime_seconds: uptime,
         boot_time,
-        loadavg: read_loadavg(),
+        loadavg: sysinfo::read_loadavg(),
         cpu_model,
         cpu_cores,
         memory_total,
         swap_total,
     }))
-}
-
-fn parse_boottime(raw: &str) -> i64 {
-    // { sec = 1234, usec = 0 } Wed Jun ...
-    let sec_eq = match raw.find("sec = ") {
-        Some(i) => i,
-        None => return 0,
-    };
-    let rest = &raw[sec_eq + 6..];
-    let end = rest.find(',').unwrap_or(rest.len());
-    rest[..end].trim().parse().unwrap_or(0)
 }
 
 // ---- Live metrics ----
@@ -125,18 +109,10 @@ struct CpuSample {
 
 pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
     let now = now_ts();
-    let page_size: u64 = read_sysctl("vm.stats.vm.v_page_size")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(4096);
+    let page_size: u64 = sysinfo::read_u64("vm.stats.vm.v_page_size").unwrap_or(4096);
 
     // Memory from vm.stats.vm.*
-    let vpc = |name: &str| -> u64 {
-        read_sysctl(name)
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0)
-    };
+    let vpc = |name: &str| -> u64 { sysinfo::read_u64(name).unwrap_or(0) };
     let page_count = vpc("vm.stats.vm.v_page_count");
     let free_count = vpc("vm.stats.vm.v_free_count");
     let active = vpc("vm.stats.vm.v_active_count");
@@ -161,11 +137,7 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
     };
 
     // CPU usage from kern.cp_times (sample delta).
-    let cp_times_raw = read_sysctl("kern.cp_times").unwrap_or_default();
-    let times: Vec<u64> = cp_times_raw
-        .split_whitespace()
-        .filter_map(|t| t.trim().parse().ok())
-        .collect();
+    let times: Vec<u64> = sysinfo::read_cp_times();
     let ncpu = (times.len() / 5).max(1);
     let (cpu_usage, per_core) = {
         let mut guard = LAST_CP_TIMES.lock();
@@ -207,20 +179,20 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
         (overall, per)
     };
 
-    let cpu_freq_mhz: u32 = read_sysctl("dev.cpu.0.freq")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    let cpu_freq_mhz: u32 = sysinfo::read_u64("dev.cpu.0.freq").unwrap_or(0) as u32;
 
     // Temperatures: dev.cpu.N.temperature
-    let temperatures = read_all_temps();
+    let temperatures = sysinfo::read_core_temps(ncpu as u32)
+        .into_iter()
+        .map(|(i, v)| TempReading {
+            source: format!("CPU {i}"),
+            value: v,
+        })
+        .collect();
 
-    let processes: u64 = read_sysctl("kern.lastpid")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    let processes: u64 = sysinfo::read_u64("kern.lastpid").unwrap_or(0);
 
-    let boot_time = parse_boottime(&read_sysctl("kern.boottime").unwrap_or_default());
+    let boot_time = sysinfo::boot_time();
     let uptime = if boot_time > 0 {
         (now - boot_time).max(0) as u64
     } else {
@@ -230,7 +202,7 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
     Ok(Json(SystemMetrics {
         timestamp: now,
         uptime_seconds: uptime,
-        loadavg: read_loadavg(),
+        loadavg: sysinfo::read_loadavg(),
         cpu_usage,
         cpu_usage_per_core: per_core,
         cpu_freq_mhz,
@@ -250,61 +222,6 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
         temperatures,
         processes,
     }))
-}
-
-/// Enumerate `sysctl -aN` to find dev.cpu.*.temperature entries, then read each.
-fn read_all_temps() -> Vec<TempReading> {
-    let names = sysctl_names_matching(|n| {
-        n.starts_with("dev.cpu.") && n.ends_with(".temperature")
-    });
-    let mut out = Vec::with_capacity(names.len());
-    for name in names {
-        if let Ok(raw) = read_sysctl(&name) {
-            // "44.0C"
-            let num: String = raw.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            if let Ok(v) = num.parse::<f32>() {
-                let core = name
-                    .strip_prefix("dev.cpu.")
-                    .and_then(|s| s.split('.').next())
-                    .unwrap_or("?");
-                out.push(TempReading {
-                    source: format!("CPU {core}"),
-                    value: v,
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Run `sysctl -aN` once (cached) and filter names via predicate.
-fn sysctl_names_matching<F: Fn(&str) -> bool>(pred: F) -> Vec<String> {
-    static ALL_NAMES: LazyLock<Mutex<Option<Vec<String>>>> =
-        LazyLock::new(|| Mutex::new(None));
-    let names: Vec<String> = {
-        let mut g = ALL_NAMES.lock();
-        if g.is_none() {
-            *g = Some(read_all_sysctl_names());
-        }
-        g.as_ref().unwrap().clone()
-    };
-    names.into_iter().filter(|n| pred(n)).collect()
-}
-
-fn read_all_sysctl_names() -> Vec<String> {
-    let out = std::process::Command::new("/sbin/sysctl")
-        .arg("-aN")
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        }
-        _ => Vec::new(),
-    }
 }
 
 fn read_swap() -> (u64, u64) {
@@ -327,42 +244,6 @@ fn read_swap() -> (u64, u64) {
 
 fn read_swap_total() -> u64 {
     read_swap().0
-}
-
-fn read_loadavg() -> [f64; 3] {
-    let mut la = [0.0_f64; 3];
-    if let Ok(out) = std::process::Command::new("/usr/bin/uptime").output() {
-        let s = String::from_utf8_lossy(&out.stdout);
-        let nums: Vec<f64> = s
-            .split_whitespace()
-            .filter_map(|t| {
-                t.trim_matches(|c: char| !c.is_ascii_digit() && c != '.')
-                    .parse()
-                    .ok()
-            })
-            .collect();
-        if nums.len() >= 3 {
-            let n = nums.len();
-            la[0] = nums[n - 3];
-            la[1] = nums[n - 2];
-            la[2] = nums[n - 1];
-        }
-    }
-    la
-}
-
-fn read_sysctl(name: &str) -> std::io::Result<String> {
-    let out = std::process::Command::new("/sbin/sysctl")
-        .arg("-n")
-        .arg(name)
-        .output()?;
-    if !out.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("sysctl {name} failed"),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn now_ts() -> i64 {
