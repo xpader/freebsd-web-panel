@@ -15,10 +15,14 @@ use crate::state::AppState;
 /// Build the complete application router.
 pub fn build(state: AppState) -> Router {
     // Public routes: bootstrap check, login, first-run setup.
+    // The WebSocket terminal is public at the router level because browsers
+    // cannot set Authorization headers on a WS handshake; it validates the
+    // session token itself via a ?token= query parameter.
     let public = Router::new()
         .route("/api/users/bootstrap", get(handlers::users::bootstrap_status))
         .route("/api/users/bootstrap", post(handlers::users::bootstrap))
-        .route("/api/auth/login", post(handlers::auth::login));
+        .route("/api/auth/login", post(handlers::auth::login))
+        .route("/api/term/ws", get(crate::terminal::ws_handler));
 
     // Authenticated routes.
     let api = Router::new()

@@ -493,3 +493,15 @@ tr:hover td { background: var(--bg-elev2); }
 .fm-perm-check { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
 .fm-perm-check input { width: auto; margin: 0; }
 .fm-perm-preview { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 10px 12px; background: var(--bg-elev2); border-radius: var(--radius); margin-bottom: 12px; flex-wrap: wrap; }
+
+/* Terminal page — fills the right-side main area, no page scroll behind it */
+body.term-active { overflow: hidden; }
+body.term-active #app { height: 100vh; }
+body.term-active .body-wrap { height: 100%; }
+body.term-active .main { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+body.term-active .main .page-header { flex-shrink: 0; }
+.term-page { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+.term-toolbar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.term-host { flex: 1; min-height: 0; background: #0b0e14; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.term-host .terminal { height: 100%; }
+.term-host .xterm-viewport { overflow-y: auto !important; }

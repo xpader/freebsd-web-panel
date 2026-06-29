@@ -15,6 +15,7 @@ const MENU = [
     default: '/dashboard',
     items: [
       { path: '/dashboard', labelKey: 'nav.dashboard', icon: 'fa-solid fa-gauge-high' },
+      { path: '/shell', labelKey: 'nav.shell', icon: 'fa-solid fa-terminal' },
     ],
   },
   {

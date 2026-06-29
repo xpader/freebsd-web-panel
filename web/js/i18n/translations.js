@@ -91,6 +91,7 @@ export const en = {
     monitorCpu: 'CPU & Load',
     monitorMemory: 'Memory',
     monitorTemp: 'Temperature',
+    shell: 'Shell',
   },
   topbar: {
     settings: 'Settings',
@@ -211,6 +212,16 @@ export const en = {
     status: 'Status',
     detail: 'Detail',
     noLogs: 'No logs',
+  },
+  term: {
+    title: 'Shell',
+    subtitle: 'Interactive terminal session (runs as root)',
+    reconnect: 'Reconnect',
+    connected: 'Connected',
+    disconnected: 'Disconnected',
+    ended: 'session ended',
+    error: 'Connection error',
+    loadFailed: 'Failed to load terminal library: {{msg}}',
   },
   monitor: {
     cpuTitle: 'CPU & Load Monitoring',
@@ -510,6 +521,7 @@ export const zh = {
     monitorCpu: 'CPU & 负载',
     monitorMemory: '内存',
     monitorTemp: '温度',
+    shell: '终端',
   },
   topbar: {
     settings: '设置',
@@ -630,6 +642,16 @@ export const zh = {
     status: '状态',
     detail: '详情',
     noLogs: '暂无日志',
+  },
+  term: {
+    title: '终端',
+    subtitle: '交互式终端会话（以 root 身份运行）',
+    reconnect: '重新连接',
+    connected: '已连接',
+    disconnected: '已断开',
+    ended: '会话已结束',
+    error: '连接错误',
+    loadFailed: '终端库加载失败：{{msg}}',
   },
   monitor: {
     cpuTitle: 'CPU 与负载监控',

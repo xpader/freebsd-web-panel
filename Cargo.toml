@@ -22,6 +22,8 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros", "ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+# WebSocket stream split for the terminal feature
+futures-util = "0.3"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

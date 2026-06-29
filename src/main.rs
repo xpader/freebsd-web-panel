@@ -10,6 +10,7 @@ mod handlers;
 mod monitor;
 mod state;
 mod sysinfo;
+mod terminal;
 mod web_assets;
 
 use std::net::SocketAddr;

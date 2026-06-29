@@ -14,6 +14,7 @@ import { renderDisks } from './pages/disks.js';
 import { renderFiles } from './pages/files.js';
 import { renderZfsPools, renderZfsPoolDetail, renderZfsDatasets, renderZfsSnapshots } from './pages/zfs.js';
 import { renderSysUsers, renderSysGroups } from './pages/accounts.js';
+import { renderTerminal } from './pages/terminal.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -21,6 +22,7 @@ defineRoute('/setup', renderSetup);
 
 // Core routes.
 defineRoute('/dashboard', renderDashboard);
+defineRoute('/shell', renderTerminal);
 defineRoute('/users', renderUsers);
 defineRoute('/audit', renderAudit);
 
