@@ -1,5 +1,6 @@
 //! System information & live metrics endpoints.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use axum::Json;
@@ -73,6 +74,7 @@ pub struct SystemMetrics {
     pub swap: SwapMetrics,
     pub temperatures: Vec<TempReading>,
     pub processes: u64,
+    pub network: Vec<NetIface>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,6 +100,23 @@ pub struct TempReading {
     pub value: f32, // Celsius
 }
 
+#[derive(Debug, Serialize)]
+pub struct NetIface {
+    pub name: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_rate: f64, // bytes/sec
+    pub tx_rate: f64, // bytes/sec
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub up: bool,
+    pub status: String,
+    pub media: String,
+    pub ipv4: Vec<String>,
+    pub mac: Option<String>,
+    pub mtu: u32,
+}
+
 /// Previous CPU-times sample, used to compute usage delta.
 /// Stored as flat vec (5 values per core: user,nice,sys,intr,idle).
 static LAST_CP_TIMES: LazyLock<Mutex<Option<CpuSample>>> =
@@ -105,6 +124,15 @@ static LAST_CP_TIMES: LazyLock<Mutex<Option<CpuSample>>> =
 
 struct CpuSample {
     times: Vec<u64>, // flat: 5 * ncpu
+}
+
+/// Previous network counters + timestamp, used to compute live rate.
+static LAST_NET: LazyLock<Mutex<Option<NetSample>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+struct NetSample {
+    ts: i64,
+    counters: HashMap<String, sysinfo::NetCounters>,
 }
 
 pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
@@ -199,6 +227,9 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
         0
     };
 
+    // Network interfaces — counters + metadata, with rate computed from delta.
+    let network = collect_network(now);
+
     Ok(Json(SystemMetrics {
         timestamp: now,
         uptime_seconds: uptime,
@@ -221,7 +252,86 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
         },
         temperatures,
         processes,
+        network,
     }))
+}
+
+/// Gather network interfaces: counters from `netstat`, metadata from `ifconfig`,
+/// and rate (bytes/sec) computed against the previous poll's counters.
+fn collect_network(now: i64) -> Vec<NetIface> {
+    let counters = sysinfo::read_net_counters();
+    let infos = sysinfo::read_net_info();
+
+    let (rx_rate, tx_rate) = {
+        let mut guard = LAST_NET.lock();
+        let mut rx_map = HashMap::new();
+        let mut tx_map = HashMap::new();
+        if let Some(ref prev) = *guard {
+            let dt = (now - prev.ts).max(1) as f64;
+            for (name, cur) in &counters {
+                if let Some(p) = prev.counters.get(name) {
+                    rx_map.insert(
+                        name.clone(),
+                        cur.rx_bytes.saturating_sub(p.rx_bytes) as f64 / dt,
+                    );
+                    tx_map.insert(
+                        name.clone(),
+                        cur.tx_bytes.saturating_sub(p.tx_bytes) as f64 / dt,
+                    );
+                }
+            }
+        }
+        *guard = Some(NetSample {
+            ts: now,
+            counters: counters.clone(),
+        });
+        (rx_map, tx_map)
+    };
+
+    // Merge counters with interface metadata. Interfaces present in counters
+    // but missing from ifconfig (unlikely) still appear with empty metadata.
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(infos.len());
+    for info in &infos {
+        seen.insert(info.name.clone());
+        let c = counters.get(&info.name);
+        out.push(NetIface {
+            rx_bytes: c.map(|c| c.rx_bytes).unwrap_or(0),
+            tx_bytes: c.map(|c| c.tx_bytes).unwrap_or(0),
+            rx_rate: rx_rate.get(&info.name).copied().unwrap_or(0.0),
+            tx_rate: tx_rate.get(&info.name).copied().unwrap_or(0.0),
+            rx_packets: c.map(|c| c.rx_packets).unwrap_or(0),
+            tx_packets: c.map(|c| c.tx_packets).unwrap_or(0),
+            up: info.up,
+            status: info.status.clone(),
+            media: info.media.clone(),
+            ipv4: info.ipv4.clone(),
+            mac: info.mac.clone(),
+            mtu: info.mtu,
+            name: info.name.clone(),
+        });
+    }
+    // Any interface in counters but not in ifconfig info.
+    for (name, c) in &counters {
+        if !seen.contains(name) {
+            out.push(NetIface {
+                name: name.clone(),
+                rx_bytes: c.rx_bytes,
+                tx_bytes: c.tx_bytes,
+                rx_rate: rx_rate.get(name).copied().unwrap_or(0.0),
+                tx_rate: tx_rate.get(name).copied().unwrap_or(0.0),
+                rx_packets: c.rx_packets,
+                tx_packets: c.tx_packets,
+                up: false,
+                status: String::new(),
+                media: String::new(),
+                ipv4: Vec::new(),
+                mac: None,
+                mtu: 0,
+            });
+        }
+    }
+    out
 }
 
 fn read_swap() -> (u64, u64) {

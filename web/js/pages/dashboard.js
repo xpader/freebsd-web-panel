@@ -62,6 +62,11 @@ export async function renderDashboard(app) {
     </div>
 
     <div class="card">
+      <div class="card-title">${t('dash.network')}</div>
+      <div id="m-network"><div class="text-dim">${t('common.loading')}</div></div>
+    </div>
+
+    <div class="card">
       <div class="card-title">${t('common.moduleStatus')}</div>
       <table>
         <thead><tr><th>${t('dash.module')}</th><th>${t('dash.status')}</th><th>${t('dash.note')}</th></tr></thead>
@@ -118,6 +123,33 @@ async function refreshMetrics() {
       tempsEl.innerHTML = `<div class="text-dim">${t('dash.noSensorData')}</div>`;
     }
   }
+
+  // Network interfaces
+  const netEl = document.getElementById('m-network');
+  if (netEl) {
+    if (m.network && m.network.length) {
+      netEl.innerHTML = m.network.map(iface => {
+        const statusText = iface.status || (iface.up ? t('dash.netActive') : t('dash.netDown'));
+        const statusCls = iface.up ? 'badge-success' : 'badge-dim';
+        const ip = (iface.ipv4 || []).join(', ');
+        return `<div class="net-iface">
+          <div class="net-iface-head">
+            <span class="net-name mono">${esc(iface.name)}</span>
+            <span class="badge ${statusCls}">${esc(statusText)}</span>
+            ${ip ? `<span class="net-ip text-dim mono">${esc(ip)}</span>` : ''}
+            ${iface.media ? `<span class="text-dim" style="font-size:11px;">${esc(iface.media)}</span>` : ''}
+          </div>
+          <div class="net-rates">
+            <span class="net-rate net-rx">↓ ${fmtRate(iface.rx_rate)}</span>
+            <span class="net-rate net-tx">↑ ${fmtRate(iface.tx_rate)}</span>
+            <span class="net-total text-dim">${t('dash.netTotal', { rx: fmtBytes(iface.rx_bytes), tx: fmtBytes(iface.tx_bytes) })}</span>
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      netEl.innerHTML = `<div class="text-dim">${t('dash.noNet')}</div>`;
+    }
+  }
 }
 
 function setText(id, val) {
@@ -135,6 +167,13 @@ function fmtBytes(b) {
   let i = 0;
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
   return `${b.toFixed(i < 2 ? 0 : 1)} ${u[i]}`;
+}
+function fmtRate(bps) {
+  if (!bps || bps < 1) return '0 B/s';
+  const u = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let i = 0;
+  while (bps >= 1024 && i < u.length - 1) { bps /= 1024; i++; }
+  return `${bps.toFixed(i < 2 ? 0 : 1)} ${u[i]}`;
 }
 function fmtUptime(s) {
   const d = Math.floor(s / 86400);

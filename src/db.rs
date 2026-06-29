@@ -79,6 +79,29 @@ fn migrate(conn: &Connection) -> ApiResult<()> {
             ON metric_samples(category, name, ts);
         "#,
     )?;
+
+    // One-time purge: legacy net samples whose interface name contains '*'
+    // (e.g. "bge0*.rx"). The '*' suffix in `netstat -i` output marks
+    // interfaces without the UP flag; `read_net_counters()` now strips it
+    // before writing, so these rows are stale leftovers from before that fix.
+    let purged: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'migration_net_star_purged'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if purged.is_none() {
+        conn.execute(
+            "DELETE FROM metric_samples WHERE category = 'net' AND name LIKE '%*%'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('migration_net_star_purged', '1')",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 

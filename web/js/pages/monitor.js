@@ -108,6 +108,31 @@ export async function renderMonitorTemp(app) {
   await initRangeButtons(['temp'], 'temp');
 }
 
+// ---- Network page (/monitor/network) ----
+
+export async function renderMonitorNetwork(app) {
+  renderLayout(app, '/monitor/network', `
+    <div class="page-header">
+      <h1>${t('monitor.netTitle')}</h1>
+      <p>${t('monitor.netSubtitle')}</p>
+    </div>
+    <div class="toolbar">
+      ${rangeButtons()}
+    </div>
+    <div class="card">
+      <div class="card-title">${t('monitor.netRxRate')}</div>
+      <canvas id="chart-net-rx" height="120"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-title">${t('monitor.netTxRate')}</div>
+      <canvas id="chart-net-tx" height="120"></canvas>
+    </div>
+    <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
+  `);
+
+  await initRangeButtons(['net'], 'network');
+}
+
 // ---- Chart rendering logic ----
 
 const CHARTS = {}; // store active Chart instances by key
@@ -189,6 +214,38 @@ async function drawAll(Chart, categories, page, rangeSec) {
       yUnit: '°C',
     });
   }
+  if (categories.includes('net')) {
+    let names = [];
+    try {
+      const latest = await api.get('/api/monitor/latest');
+      names = (latest.net || [])
+        .map((s) => s.name)
+        .filter((n) => n.endsWith('.rx'))
+        .map((n) => n.slice(0, -3))
+        .filter(isPhysicalIface)
+        .sort();
+    } catch { /* ignore */ }
+    if (names.length === 0) {
+      showMsg(t('monitor.noNetData'));
+      destroyChart('chart-net-rx');
+      destroyChart('chart-net-tx');
+      return;
+    }
+    const rxNames = names.map((n) => `${n}.rx`);
+    const txNames = names.map((n) => `${n}.tx`);
+    await drawSeries(Chart, 'chart-net-rx', 'net', rxNames, from, now, {
+      multi: true,
+      labels: names,
+      colors: palette(names.length),
+      byteRateFormat: true,
+    });
+    await drawSeries(Chart, 'chart-net-tx', 'net', txNames, from, now, {
+      multi: true,
+      labels: names,
+      colors: palette(names.length),
+      byteRateFormat: true,
+    });
+  }
 }
 
 async function drawSeries(Chart, canvasId, category, nameOrNames, from, to, opts) {
@@ -234,6 +291,17 @@ async function drawSeries(Chart, canvasId, category, nameOrNames, from, to, opts
 }
 
 function chartOptions(opts) {
+  const tickCb = opts.byteFormat
+    ? formatBytesTick
+    : opts.byteRateFormat
+      ? formatRateTick
+      : (v) => v + (opts.yUnit || '');
+  const fmtVal = opts.byteFormat
+    ? fmtBytes
+    : opts.byteRateFormat
+      ? fmtRate
+      : (v) => v.toFixed(1) + (opts.yUnit || '');
+  const tooltipLabel = (c) => `${c.dataset.label}: ${fmtVal(c.parsed.y)}`;
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -247,22 +315,15 @@ function chartOptions(opts) {
       y: {
         min: 0,
         max: opts.yMax || undefined,
-        ticks: {
-          color: '#8b94a5',
-          callback: opts.byteFormat ? formatBytesTick : (v) => v + (opts.yUnit || ''),
-        },
+        ticks: { color: '#8b94a5', callback: tickCb },
         grid: { color: '#2a2f3a' },
       },
     },
     plugins: {
       legend: { labels: { color: '#e4e7eb', font: { size: 12 } } },
-      tooltip: {
-        callbacks: opts.byteFormat
-          ? { label: (c) => `${c.dataset.label}: ${fmtBytes(c.parsed.y)}` }
-          : { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}${opts.yUnit || ''}` },
-      },
+      tooltip: { callbacks: { label: tooltipLabel } },
     },
-    interaction: { mode: 'index', intersect: false },
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
   };
 }
 
@@ -280,6 +341,18 @@ function destroyChart(id) {
 function palette(n) {
   const base = ['#3b82f6', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#a78bfa'];
   return Array.from({ length: n }, (_, i) => base[i % base.length]);
+}
+
+// Same denylist as the backend `is_physical_iface` (src/sysinfo.rs) — kept in
+// sync so historical data for virtual interfaces (epair, bridge, tap, VPN…)
+// leftover in the DB is not rendered even though the collector no longer
+// samples them.
+const VIRTUAL_IFACE_PREFIXES = [
+  'lo', 'epair', 'bridge', 'tap', 'vale', 'tun', 'gif', 'gre', 'ipfw',
+  'pflog', 'pfsync', 'enc', 'stf', 'faith', 'ng', 'vm-', 'tailscale', 'wg', 'disc', 'edsc',
+];
+function isPhysicalIface(name) {
+  return !VIRTUAL_IFACE_PREFIXES.some((p) => name.startsWith(p));
 }
 
 function showMsg(msg) {
@@ -303,4 +376,17 @@ function formatBytesTick(v) {
   if (v >= 1e6) return (v / 1e6).toFixed(0) + 'MB';
   if (v >= 1e3) return (v / 1e3).toFixed(0) + 'KB';
   return v + 'B';
+}
+function fmtRate(bps) {
+  if (!bps || bps < 1) return '0 B/s';
+  const u = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let i = 0;
+  while (bps >= 1024 && i < u.length - 1) { bps /= 1024; i++; }
+  return `${bps.toFixed(i < 2 ? 0 : 1)} ${u[i]}`;
+}
+function formatRateTick(v) {
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'GB/s';
+  if (v >= 1e6) return (v / 1e6).toFixed(0) + 'MB/s';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'KB/s';
+  return v + 'B/s';
 }

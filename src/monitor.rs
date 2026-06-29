@@ -129,6 +129,12 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
         out.push(MetricSample { ts: now, category: "temp".into(), name: format!("cpu{i}"), value: value as f64 });
     }
 
+    // Network traffic rate (bytes/sec) per interface — requires delta like CPU.
+    for (name, (rx_rate, tx_rate)) in net_rate_delta(now) {
+        out.push(MetricSample { ts: now, category: "net".into(), name: format!("{name}.rx"), value: rx_rate });
+        out.push(MetricSample { ts: now, category: "net".into(), name: format!("{name}.tx"), value: tx_rate });
+    }
+
     Ok(out)
 }
 
@@ -168,6 +174,39 @@ fn cpu_usage_delta() -> (f32, Vec<f32>) {
     (overall, per)
 }
 
+// ---- Network rate delta (monitoring-local) ----
+
+use crate::sysinfo::NetCounters;
+use std::collections::HashMap;
+
+struct NetState {
+    ts: i64,
+    counters: HashMap<String, NetCounters>,
+}
+
+static MONITOR_NET: LazyLock<Mutex<Option<NetState>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Compute per-interface RX/TX rates (bytes/sec) from the delta of cumulative
+/// counters.  Uses a monitoring-local static so it doesn't interfere with the
+/// live-metrics endpoint's own delta tracking.
+fn net_rate_delta(now: i64) -> Vec<(String, (f64, f64))> {
+    let counters = sysinfo::read_net_counters();
+    let mut guard = MONITOR_NET.lock();
+    let mut out = Vec::with_capacity(counters.len());
+    if let Some(ref prev) = *guard {
+        let dt = (now - prev.ts).max(1) as f64;
+        for (name, cur) in &counters {
+            if let Some(p) = prev.counters.get(name) {
+                let rx = cur.rx_bytes.saturating_sub(p.rx_bytes) as f64 / dt;
+                let tx = cur.tx_bytes.saturating_sub(p.tx_bytes) as f64 / dt;
+                out.push((name.clone(), (rx, tx)));
+            }
+        }
+    }
+    *guard = Some(NetState { ts: now, counters });
+    out
+}
+
 // ---- API handlers ----
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +244,7 @@ pub struct LatestResponse {
     pub memory: Vec<MetricSample>,
     pub load: Vec<MetricSample>,
     pub temp: Vec<MetricSample>,
+    pub net: Vec<MetricSample>,
 }
 
 pub async fn latest(State(state): State<AppState>) -> ApiResult<Json<LatestResponse>> {
@@ -214,5 +254,6 @@ pub async fn latest(State(state): State<AppState>) -> ApiResult<Json<LatestRespo
         memory: db::latest_in_category(&conn, "memory")?,
         load: db::latest_in_category(&conn, "load")?,
         temp: db::latest_in_category(&conn, "temp")?,
+        net: db::latest_in_category(&conn, "net")?,
     }))
 }

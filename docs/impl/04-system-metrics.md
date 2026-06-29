@@ -18,6 +18,8 @@
 | `sysinfo::boot_time()` | `Ctl::value()` → Struct 字节解析 | `kern.boottime`（struct timeval） |
 | `sysinfo::read_loadavg()` | `libc::getloadavg()` | 负载均衡（替代解析 `uptime` 输出） |
 | `sysinfo::read_core_temps(ncpu)` | `Ctl::value()` → `CtlValue::Temperature` | `dev.cpu.N.temperature`（crate 自动转摄氏） |
+| `sysinfo::read_net_counters()` | `netstat -ibn` 解析 | 各接口累计收发字节/包 |
+| `sysinfo::read_net_info()` | `ifconfig -a` 解析 | 各接口状态/MAC/MTU/IPv4/介质 |
 
 > 历史原因：`kern.cp_times` 是 `S,LONG` 格式的 long 数组，sysctl crate 会把它当成单个 `Long` 返回，所以该处直接用 `libc::sysctlbyname` 两次调用（先取长度，再取数据）读原始字节再按 8 字节切分 reinterpret。
 
@@ -66,6 +68,14 @@ usage = used / total × 100
 
 **CPU 频率**：`dev.cpu.0.freq`（sysinfo::read_u64）。
 
+**网络接口（实时速率 delta）**：`handlers/system.rs::collect_network(now)` 合并两份数据：
+1. `sysinfo::read_net_counters()` → 各接口累计字节/包计数器（HashMap）
+2. `sysinfo::read_net_info()` → 各接口元数据（up/status/media/IPv4/MAC/MTU）
+3. 与 `LAST_NET`（`LazyLock<Mutex<Option<NetSample>>>`）中上次计数器+时间戳做差：`rate = (cur - prev) / (now - prev_ts)`
+4. 计数器与元数据按接口名合并，生成 `Vec<NetIface>`（name/rx_bytes/tx_bytes/rx_rate/tx_rate/rx_packets/tx_packets/up/status/media/ipv4/mac/mtu）
+
+关键：`LAST_NET` 是本端点专用静态，与监控模块（`monitor.rs::MONITOR_NET`）独立，避免互相干扰 delta。
+
 ## API
 
 | 方法 | 路径 | 说明 |
@@ -76,11 +86,17 @@ usage = used / total × 100
 ## 外部依赖
 
 - crate：`sysctl`（sysctl(3) 封装）、`libc`（getloadavg、sysctlbyname）、`parking_lot`、`std::sync::LazyLock`
-- 系统命令：`/usr/sbin/swapinfo`（swap 统计仍走子进程）
+- 系统命令：`/usr/sbin/swapinfo`（swap 统计仍走子进程）、`/usr/bin/netstat`、`/sbin/ifconfig`（网络）
 - 详见 [13-sysinfo.md](13-sysinfo.md)
+
+## 前端
+
+`web/js/pages/dashboard.js::renderDashboard` — 仪表盘每 3 秒轮询 `/api/system/metrics` 刷新：静态信息卡片、CPU/内存/Swap/温度指标条，以及网络接口区块。
+
+**网络接口区块**：渲染每个接口一行——名称、链路状态（badge）、IPv4、介质；下方展示实时速率（↓ 下载 / ↑ 上传，`fmtRate` 格式化为 KB/s·MB/s·GB/s）与累计收发字节（`fmtBytes`）。速率由后端 delta 计算，前端直接展示。
 
 ## 已知限制
 
 - CPU 首次采样返回 0%（无历史数据可做 delta）
 - 温度依赖 `coretemp` 模块加载；无传感器的 CPU 返回空数组
-- 未采集磁盘 I/O 和网络流量（计划在后续阶段补充）
+- 网络首次采样速率为 0（无历史计数器可做 delta）

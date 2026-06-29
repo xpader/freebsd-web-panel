@@ -13,9 +13,16 @@
 // │   → 三个 key，翻译完全相同（"所有者"），只是出现在列表/属性/权限编辑器      │
 // │   正确做法：owner（一个 key，所有位置共用）                               │
 // │                                                                          │
+// │ 反面教材②（已删除）：                                                      │
+// │   nav.network + nav.monitorNetwork                                        │
+// │   → 两个 key，翻译都是"网络"，仅因顶级菜单/监控侧边栏不同位置而拆分         │
+// │   正确做法：common.network（一个 key，导航/监控等所有位置共用）            │
+// │                                                                          │
 // │ 操作要点：                                                                │
 // │ - 新增 key 前，先检查是否已有等价词（同义、同翻译），有就直接复用           │
 // │ - 跨页面通用的词（name/size/time/user/delete 等）放 common 命名空间        │
+// │ - 含义宽泛的通用词（如"网络"network）只放 common，不在 nav 等场景空间重复  │
+// │   nav 等场景空间只放该场景特有短语，与 common 同义的词一律复用             │
 // │ - 只有语义确实不同时才创建新 key                                          │
 // │                                                                          │
 // │ English is the fallback, so every key MUST exist in `en`.                │
@@ -53,13 +60,13 @@ export const en = {
     dedup: 'Dedup',
     device: 'Device',
     noData: 'No data',
+    network: 'Network',
     deleteFailed: 'Delete failed',
     saveFailed: 'Save failed: {{msg}}',
   },
   nav: {
     overview: 'Overview',
     config: 'Configuration',
-    network: 'Network',
     filesystem: 'Filesystem',
     virtualization: 'Virtualization',
     monitor: 'Monitoring',
@@ -131,6 +138,11 @@ export const en = {
     uptimeFmtDHM: '{{d}}d {{h}}h {{m}}m',
     uptimeFmtHM: '{{h}}h {{m}}m',
     memoryDetail: '{{used}} / {{total}} · wired {{wired}}',
+    network: 'Network',
+    netActive: 'active',
+    netDown: 'down',
+    netTotal: 'RX {{rx}} · TX {{tx}}',
+    noNet: 'No network interfaces',
   },
   status: {
     planned: 'Planned',
@@ -228,6 +240,11 @@ export const en = {
     memUsage: 'Memory Usage',
     memUsed: 'Used',
     memWired: 'Wired',
+    netTitle: 'Network Traffic Monitoring',
+    netSubtitle: 'Per-interface traffic rate historical trends',
+    netRxRate: 'Download Rate (RX)',
+    netTxRate: 'Upload Rate (TX)',
+    noNetData: 'No network data yet, waiting for collector…',
   },
   accounts: {
     usersTitle: 'Users',
@@ -462,13 +479,13 @@ export const zh = {
     dedup: '去重',
     device: '设备',
     noData: '无数据',
+    network: '网络',
     deleteFailed: '删除失败',
     saveFailed: '保存失败：{{msg}}',
   },
   nav: {
     overview: '概览',
     config: '配置',
-    network: '网络',
     filesystem: '文件系统',
     virtualization: '虚拟化',
     monitor: '监控',
@@ -540,6 +557,11 @@ export const zh = {
     uptimeFmtDHM: '{{d}}天 {{h}}小时 {{m}}分',
     uptimeFmtHM: '{{h}}小时 {{m}}分',
     memoryDetail: '{{used}} / {{total}} · wired {{wired}}',
+    network: '网络',
+    netActive: '已连接',
+    netDown: '未连接',
+    netTotal: '接收 {{rx}} · 发送 {{tx}}',
+    noNet: '无网络接口',
   },
   status: {
     planned: '计划中',
@@ -637,6 +659,11 @@ export const zh = {
     memUsage: '内存使用率',
     memUsed: '已用',
     memWired: 'Wired',
+    netTitle: '网络流量监控',
+    netSubtitle: '各网络接口流量速率历史趋势',
+    netRxRate: '下载速率 (RX)',
+    netTxRate: '上传速率 (TX)',
+    noNetData: '暂无网络数据，等待采集器运行…',
   },
   accounts: {
     usersTitle: '用户',

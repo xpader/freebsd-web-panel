@@ -331,6 +331,17 @@ tr:hover td { background: var(--bg-elev2); }
 .core-label { font-size: 11px; color: var(--text-dim); width: 16px; text-align: right; font-family: monospace; }
 .core-bar .bar-wrap.sm { flex: 1; margin: 0; }
 .temp-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 13px; }
+/* ---- Network interfaces (dashboard) ---- */
+.net-iface { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.net-iface:last-child { border-bottom: none; }
+.net-iface-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.net-name { font-weight: 600; font-size: 14px; min-width: 70px; }
+.net-ip { font-size: 12px; }
+.net-rates { display: flex; align-items: center; gap: 20px; margin-top: 6px; font-size: 13px; }
+.net-rate { font-weight: 600; }
+.net-rx { color: #3b82f6; }
+.net-tx { color: #f59e0b; }
+.net-total { font-size: 12px; margin-left: auto; }
 /* ---- Badges ---- */
 .badge {
   display: inline-block;
