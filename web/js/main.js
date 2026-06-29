@@ -1,7 +1,8 @@
 // Application entry — wires routes and starts the router.
 
-import { startRouter, defineRoute } from './router.js';
+import { startRouter, defineRoute, reload } from './router.js';
 import { clearToken } from './api.js';
+import { initI18n } from './i18n/index.js';
 import { renderLogin, renderSetup } from './pages/auth.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderUsers } from './pages/users.js';
@@ -30,15 +31,15 @@ defineRoute('/monitor/temp', renderMonitorTemp);
 defineRoute('/filesystem', renderFsOverview);
 defineRoute('/filesystem/disks', renderDisks);
 defineRoute('/filesystem/files', renderFiles);
-defineRoute('/sysctl', makePlannedPage('/sysctl', 'Sysctl 系统参数', '动态内核参数 (sysctl) 管理', '通过 sysctl 命令读写运行时参数，并持久化到 /etc/sysctl.conf。'));
-defineRoute('/rcconf', makePlannedPage('/rcconf', 'RC 配置', 'rc.conf 系统与服务启动配置', '通过 sysrc 管理 rc.conf 键值，按功能分类展示。'));
-defineRoute('/network', makePlannedPage('/network', '网络', '网络接口、IP、路由管理', '解析 ifconfig 输出，管理接口 IP/别名/路由并持久化。'));
-defineRoute('/services', makePlannedPage('/services', '服务', 'rc.d 服务管理', '列出可用/已启用服务，执行 start/stop/restart。'));
+defineRoute('/sysctl', makePlannedPage({ key: 'sysctl', labelKey: 'nav.sysctl' }));
+defineRoute('/rcconf', makePlannedPage({ key: 'rcconf', labelKey: 'nav.rcconf' }));
+defineRoute('/network', makePlannedPage({ key: 'network', labelKey: 'nav.network' }));
+defineRoute('/services', makePlannedPage({ key: 'services', labelKey: 'nav.services' }));
 // System accounts routes.
 defineRoute('/accounts/users', renderSysUsers);
 defineRoute('/accounts/groups', renderSysGroups);
-defineRoute('/pf', makePlannedPage('/pf', '防火墙 (PF)', 'Packet Filter 规则与状态', '查询 pfctl 状态/规则/表，编辑 /etc/pf.conf。'));
-defineRoute('/jails', makePlannedPage('/jails', 'Jail 容器', 'FreeBSD Jail 原生管理（libjail，不依赖第三方工具）', '通过 libjail FFI (jailparam_*) 管理生命周期，解析 /etc/jail.conf。'));
+defineRoute('/pf', makePlannedPage({ key: 'pf', labelKey: 'nav.pf' }));
+defineRoute('/jails', makePlannedPage({ key: 'jails', labelKey: 'nav.jails' }));
 // ZFS routes.
 defineRoute('/zfs/pools', renderZfsPools);
 defineRoute('/zfs/pools/', renderZfsPoolDetail);
@@ -52,4 +53,9 @@ window.__fwpLogout = async () => {
   location.hash = '#/login';
 };
 
-startRouter();
+// Boot: init i18n first so the first render has translations ready,
+// then re-render on every language switch.
+initI18n().then(() => {
+  window.addEventListener('fwp:langchange', reload);
+  startRouter();
+});

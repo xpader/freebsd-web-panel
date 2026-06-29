@@ -3,23 +3,24 @@
 import { api, setToken } from '../api.js';
 import { invalidateSetup } from '../router.js';
 import { toast } from '../ui/toast.js';
+import { t } from '../i18n/index.js';
 
 export async function renderLogin(app) {
   app.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
         <h1>FreeBSD Web Panel</h1>
-        <p class="subtitle">请登录以管理系统</p>
+        <p class="subtitle">${t('auth.loginSubtitle')}</p>
         <form id="login-form">
           <div class="field">
-            <label>用户名</label>
+            <label>${t('auth.username')}</label>
             <input type="text" name="username" autocomplete="username" required />
           </div>
           <div class="field">
-            <label>密码</label>
+            <label>${t('auth.password')}</label>
             <input type="password" name="password" autocomplete="current-password" required />
           </div>
-          <button type="submit" style="width:100%;justify-content:center;">登录</button>
+          <button type="submit" style="width:100%;justify-content:center;">${t('auth.login')}</button>
         </form>
       </div>
     </div>`;
@@ -29,19 +30,19 @@ export async function renderLogin(app) {
     const form = e.target;
     const btn = form.querySelector('button');
     btn.disabled = true;
-    btn.textContent = '登录中…';
+    btn.textContent = t('auth.loggingIn');
     try {
       const res = await api.post('/api/auth/login', {
         username: form.username.value,
         password: form.password.value,
       });
       setToken(res.token);
-      toast(`欢迎，${res.user.username}`);
+      toast(t('auth.welcome', { name: res.user.username }));
       location.hash = '#/dashboard';
     } catch (err) {
-      toast(err.message || '登录失败', 'error');
+      toast(err.message || t('auth.loginFailed'), 'error');
       btn.disabled = false;
-      btn.textContent = '登录';
+      btn.textContent = t('auth.login');
     }
   });
 }
@@ -50,22 +51,22 @@ export async function renderSetup(app) {
   app.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <h1>初始化管理员</h1>
-        <p class="subtitle">创建首个管理员账户以开始使用</p>
+        <h1>${t('auth.setupTitle')}</h1>
+        <p class="subtitle">${t('auth.setupSubtitle')}</p>
         <form id="setup-form">
           <div class="field">
-            <label>用户名</label>
-            <input type="text" name="username" required placeholder="2-32 位字母数字 _ . -" />
+            <label>${t('auth.username')}</label>
+            <input type="text" name="username" required placeholder="${t('auth.usernamePlaceholder')}" />
           </div>
           <div class="field">
-            <label>密码（至少 6 位）</label>
+            <label>${t('auth.passwordMin')}</label>
             <input type="password" name="password" required minlength="6" />
           </div>
           <div class="field">
-            <label>确认密码</label>
+            <label>${t('auth.confirmPassword')}</label>
             <input type="password" name="password2" required minlength="6" />
           </div>
-          <button type="submit" style="width:100%;justify-content:center;">创建账户</button>
+          <button type="submit" style="width:100%;justify-content:center;">${t('auth.createAccount')}</button>
         </form>
       </div>
     </div>`;
@@ -74,24 +75,24 @@ export async function renderSetup(app) {
     e.preventDefault();
     const form = e.target;
     if (form.password.value !== form.password2.value) {
-      toast('两次密码不一致', 'error');
+      toast(t('auth.passwordMismatch'), 'error');
       return;
     }
     const btn = form.querySelector('button');
     btn.disabled = true;
-    btn.textContent = '创建中…';
+    btn.textContent = t('auth.creating');
     try {
       const res = await api.post('/api/users/bootstrap', {
         username: form.username.value,
         password: form.password.value,
       });
       invalidateSetup();
-      toast(`管理员 ${res.username} 创建成功，请登录`);
+      toast(t('auth.setupDone', { name: res.username }));
       location.hash = '#/login';
     } catch (err) {
-      toast(err.message || '创建失败', 'error');
+      toast(err.message || t('auth.setupFailed'), 'error');
       btn.disabled = false;
-      btn.textContent = '创建账户';
+      btn.textContent = t('auth.createAccount');
     }
   });
 }

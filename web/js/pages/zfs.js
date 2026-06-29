@@ -5,23 +5,24 @@ import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
 import { formModal } from '../ui/formModal.js';
+import { t, getLocale } from '../i18n/index.js';
 // ===== Zpool list page =====
 
 export async function renderZfsPools(app) {
   renderLayout(app, '/zfs/pools', `
     <div class="page-header">
       <h1>Zpool</h1>
-      <p>ZFS 存储池状态，点击池名查看详情</p>
+      <p>${t('zfs.poolsSubtitle')}</p>
     </div>
-    <div id="zfs-pools"><div class="empty"><span class="spinner"></span> 加载中…</div></div>
+    <div id="zfs-pools"><div class="empty"><span class="spinner"></span> ${t('common.loading')}</div></div>
   `);
   const el = document.getElementById('zfs-pools');
   try {
     const pools = await api.get('/api/zfs/pools');
-    if (!pools.length) { el.innerHTML = '<div class="empty">无 ZFS 存储池</div>'; return; }
+    if (!pools.length) { el.innerHTML = `<div class="empty">${t('zfs.noPools')}</div>`; return; }
     el.innerHTML = pools.map(p => poolCard(p)).join('');
   } catch (e) {
-    el.innerHTML = `<div class="empty">加载失败：${esc(e.message || '')}</div>`;
+    el.innerHTML = `<div class="empty">${t('common.loadFailed', { msg: esc(e.message || '') })}</div>`;
   }
 }
 
@@ -35,14 +36,14 @@ function poolCard(p) {
           <span class="badge ${healthCls}">${esc(p.health)}</span>
           <strong style="font-size:18px;margin-left:8px;">${esc(p.name)}</strong>
         </div>
-        <span class="text-dim" style="font-size:13px;">${pct.toFixed(0)}% 已用 →</span>
+        <span class="text-dim" style="font-size:13px;">${t('zfs.usedPct', { pct: pct.toFixed(0) })}</span>
       </div>
       <div class="stat-row" style="margin-top:12px;">
-        <span>容量: <strong>${fmtBytes(p.size)}</strong></span>
-        <span>已用: ${fmtBytes(p.allocated)}</span>
-        <span>空闲: ${fmtBytes(p.free)}</span>
-        <span>碎片率: ${p.fragmentation_pct.toFixed(0)}%</span>
-        <span>去重: ${p.dedup.toFixed(2)}x</span>
+        <span>${t('common.capacity')}: <strong>${fmtBytes(p.size)}</strong></span>
+        <span>${t('common.used')}: ${fmtBytes(p.allocated)}</span>
+        <span>${t('common.free')}: ${fmtBytes(p.free)}</span>
+        <span>${t('common.frag')}: ${p.fragmentation_pct.toFixed(0)}%</span>
+        <span>${t('common.dedup')}: ${p.dedup.toFixed(2)}x</span>
       </div>
       <div class="bar-wrap" style="margin-top:10px;">
         <div class="bar ${pct > 80 ? 'bar-swap' : 'bar-mem'}" style="width:${pct}%"></div>
@@ -59,12 +60,12 @@ export async function renderZfsPoolDetail(app, hashPath) {
   renderLayout(app, '/zfs/pools', `
     <div class="page-header">
       <div class="flex">
-        <a href="#/zfs/pools" class="btn-secondary btn-sm">← 返回</a>
-        <h1 id="pool-title">存储池: ${esc(name)}</h1>
+        <a href="#/zfs/pools" class="btn-secondary btn-sm">${t('common.navBack')}</a>
+        <h1 id="pool-title">${t('zfs.poolTitle', { name: esc(name) })}</h1>
       </div>
-      <p>阵列结构、磁盘状态与维护操作</p>
+      <p>${t('zfs.poolDetailSubtitle')}</p>
     </div>
-    <div id="pool-detail"><div class="empty"><span class="spinner"></span> 加载中…</div></div>
+    <div id="pool-detail"><div class="empty"><span class="spinner"></span> ${t('common.loading')}</div></div>
   `);
 
   const el = document.getElementById('pool-detail');
@@ -72,7 +73,7 @@ export async function renderZfsPoolDetail(app, hashPath) {
   try {
     info = await api.get(`/api/zfs/pools/${name}`);
   } catch (e) {
-    el.innerHTML = `<div class="empty">加载失败：${esc(e.message || '')}</div>`;
+    el.innerHTML = `<div class="empty">${t('common.loadFailed', { msg: esc(e.message || '') })}</div>`;
     return;
   }
 
@@ -83,17 +84,17 @@ export async function renderZfsPoolDetail(app, hashPath) {
   el.innerHTML = `
     <!-- Summary cards -->
     <div class="stat-grid">
-      <div class="card"><div class="card-title">状态</div><div class="card-value sm"><span class="badge ${healthCls}">${esc(info.health)}</span></div></div>
-      <div class="card"><div class="card-title">总容量</div><div class="card-value sm">${fmtBytes(info.size)}</div></div>
-      <div class="card"><div class="card-title">已分配</div><div class="card-value sm">${fmtBytes(info.allocated)} (${pct.toFixed(0)}%)</div></div>
-      <div class="card"><div class="card-title">空闲</div><div class="card-value sm">${fmtBytes(info.free)}</div></div>
-      <div class="card"><div class="card-title">碎片率</div><div class="card-value sm"><span class="badge ${fragCls}">${info.fragmentation_pct.toFixed(0)}%</span></div></div>
-      <div class="card"><div class="card-title">去重比</div><div class="card-value sm">${info.dedup.toFixed(2)}x</div></div>
+      <div class="card"><div class="card-title">${t('zfs.state')}</div><div class="card-value sm"><span class="badge ${healthCls}">${esc(info.health)}</span></div></div>
+      <div class="card"><div class="card-title">${t('zfs.totalSize')}</div><div class="card-value sm">${fmtBytes(info.size)}</div></div>
+      <div class="card"><div class="card-title">${t('zfs.allocated')}</div><div class="card-value sm">${fmtBytes(info.allocated)} (${pct.toFixed(0)}%)</div></div>
+      <div class="card"><div class="card-title">${t('common.free')}</div><div class="card-value sm">${fmtBytes(info.free)}</div></div>
+      <div class="card"><div class="card-title">${t('common.frag')}</div><div class="card-value sm"><span class="badge ${fragCls}">${info.fragmentation_pct.toFixed(0)}%</span></div></div>
+      <div class="card"><div class="card-title">${t('common.dedup')}</div><div class="card-value sm">${info.dedup.toFixed(2)}x</div></div>
     </div>
 
     <!-- Capacity bar -->
     <div class="card">
-      <div class="card-title">容量使用</div>
+      <div class="card-title">${t('zfs.capacityUsage')}</div>
       <div class="bar-wrap" style="height:16px;">
         <div class="bar ${pct > 80 ? 'bar-swap' : 'bar-mem'}" style="width:${pct}%"></div>
       </div>
@@ -103,32 +104,32 @@ export async function renderZfsPoolDetail(app, hashPath) {
     <!-- Scrub info -->
     ${info.scan ? `
     <div class="card">
-      <div class="card-title">Scrub 状态</div>
+      <div class="card-title">${t('zfs.scrubStatus')}</div>
       <p style="font-size:13px;">${esc(info.scan)}</p>
     </div>` : ''}
 
     <!-- VDEV / Disk topology -->
     <div class="card">
-      <div class="card-title">阵列结构 (VDEV)</div>
+      <div class="card-title">${t('zfs.vdevTree')}</div>
       ${renderVdevTree(info.vdevs, 0)}
     </div>
 
     <!-- Errors -->
     ${info.error_text && !info.error_text.includes('No known') ? `
     <div class="card" style="border-color:var(--danger);">
-      <div class="card-title" style="color:var(--danger);">错误信息</div>
+      <div class="card-title" style="color:var(--danger);">${t('zfs.errors')}</div>
       <p style="font-size:13px;color:var(--danger);">${esc(info.error_text)}</p>
     </div>` : ''}
 
     <!-- Actions -->
     <div class="card">
-      <div class="card-title">维护操作</div>
+      <div class="card-title">${t('zfs.maintenance')}</div>
       <div class="flex" style="gap:12px;">
-        <button class="btn-secondary" id="btn-scrub">启动 Scrub</button>
-        <button class="btn-secondary" id="btn-scrub-stop">停止 Scrub</button>
+        <button class="btn-secondary" id="btn-scrub">${t('zfs.scrubStart')}</button>
+        <button class="btn-secondary" id="btn-scrub-stop">${t('zfs.scrubStop')}</button>
       </div>
       <p class="text-dim" style="font-size:12px;margin-top:10px;">
-        Scrub 会校验池中所有数据完整性。建议每 1-3 个月执行一次。运行期间会有少量 I/O 开销。
+        ${t('zfs.scrubHint')}
       </p>
     </div>`;
 
@@ -136,16 +137,16 @@ export async function renderZfsPoolDetail(app, hashPath) {
   document.getElementById('btn-scrub').onclick = async () => {
     try {
       await api.post(`/api/zfs/pools/${name}/scrub`);
-      toast(`Scrub 已启动: ${name}`);
+      toast(t('zfs.scrubStarted', { name }));
       renderZfsPoolDetail(document.getElementById('app'), hashPath);
-    } catch (e) { toast(e.message || '操作失败', 'error'); }
+    } catch (e) { toast(e.message || t('common.operationFailed'), 'error'); }
   };
   document.getElementById('btn-scrub-stop').onclick = async () => {
     try {
       await api.post(`/api/zfs/pools/${name}/scrub/stop`);
-      toast(`Scrub 已停止: ${name}`);
+      toast(t('zfs.scrubStopped', { name }));
       renderZfsPoolDetail(document.getElementById('app'), hashPath);
-    } catch (e) { toast(e.message || '操作失败', 'error'); }
+    } catch (e) { toast(e.message || t('common.operationFailed'), 'error'); }
   };
 }
 
@@ -156,12 +157,12 @@ function healthBadge(health) {
 }
 
 function renderVdevTree(vdevs, depth) {
-  if (!vdevs || !vdevs.length) return '<div class="empty">无 VDEV 数据</div>';
+  if (!vdevs || !vdevs.length) return `<div class="empty">${t('zfs.noVdev')}</div>`;
   return vdevs.map(v => {
     const isLeaf = !v.children.length;
     const isMirror = v.name.startsWith('mirror');
     const isRaidz = v.name.startsWith('raidz');
-    const vdevType = isMirror ? '镜像' : isRaidz ? 'RAID-Z' : isLeaf ? '磁盘' : 'VDEV';
+    const vdevType = isMirror ? t('zfs.vdevMirror') : isRaidz ? t('zfs.vdevRaidz') : isLeaf ? t('zfs.vdevDisk') : t('zfs.vdevGeneric');
     const stateCls = v.state === 'ONLINE' ? 'badge-success' : v.state === 'DEGRADED' ? 'badge-warn' : 'badge-danger';
     const hasErrors = v.read_errors > 0 || v.write_errors > 0 || v.checksum_errors > 0;
     return `
@@ -182,17 +183,17 @@ function renderVdevTree(vdevs, depth) {
 export async function renderZfsDatasets(app) {
   renderLayout(app, '/zfs/datasets', `
     <div class="page-header">
-      <h1>数据集管理</h1>
-      <p>ZFS Dataset 树形视图</p>
+      <h1>${t('zfs.dsTitle')}</h1>
+      <p>${t('zfs.dsSubtitle')}</p>
     </div>
     <div class="toolbar">
       <div></div>
-      <button onclick="window.__fwpCreateDataset()">+ 创建数据集</button>
+      <button onclick="window.__fwpCreateDataset()">${t('zfs.dsCreate')}</button>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>名称</th><th>类型</th><th>已用</th><th>可用</th><th>挂载点</th><th>压缩</th><th>操作</th></tr></thead>
-        <tbody id="ds-tbody"><tr><td colspan="7" class="empty"><span class="spinner"></span> 加载中…</td></tr></tbody>
+        <thead><tr><th>${t('common.name')}</th><th>${t('common.type')}</th><th>${t('common.used')}</th><th>${t('zfs.colAvail')}</th><th>${t('zfs.colMountpoint')}</th><th>${t('zfs.colCompression')}</th><th>${t('common.actions')}</th></tr></thead>
+        <tbody id="ds-tbody"><tr><td colspan="7" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr></tbody>
       </table>
     </div>
   `);
@@ -206,7 +207,7 @@ async function loadDatasets() {
     const rows = [];
     function walk(ds, depth) {
       const originHtml = ds.origin
-        ? `<div class="text-dim" style="font-size:11px;margin-top:2px;">⤷ 克隆自 <span class="mono" style="color:var(--accent);">${esc(ds.origin)}</span></div>`
+        ? `<div class="text-dim" style="font-size:11px;margin-top:2px;">${t('zfs.clonedFrom')} <span class="mono" style="color:var(--accent);">${esc(ds.origin)}</span></div>`
         : '';
       rows.push(`
         <tr>
@@ -220,69 +221,69 @@ async function loadDatasets() {
           <td class="mono">${esc(ds.mountpoint)}</td>
           <td class="mono">${esc(ds.compression)}</td>
           <td>
-            <button class="btn-secondary btn-sm" onclick="window.__fwpDsSnap('${esc(ds.name)}')">快照</button>
-            <button class="btn-secondary btn-sm" onclick="window.__fwpDsProps('${esc(ds.name)}')">属性</button>
-            ${ds.name.includes('/') ? `<button class="btn-danger btn-sm" onclick="window.__fwpDelDs('${esc(ds.name)}')">删除</button>` : ''}
+            <button class="btn-secondary btn-sm" onclick="window.__fwpDsSnap('${esc(ds.name)}')">${t('zfs.dsSnapshot')}</button>
+            <button class="btn-secondary btn-sm" onclick="window.__fwpDsProps('${esc(ds.name)}')">${t('zfs.dsProps')}</button>
+            ${ds.name.includes('/') ? `<button class="btn-danger btn-sm" onclick="window.__fwpDelDs('${esc(ds.name)}')">${t('common.delete')}</button>` : ''}
           </td>
         </tr>`);
       ds.children.forEach(c => walk(c, depth + 1));
     }
     tree.forEach(ds => walk(ds, 0));
-    tbody.innerHTML = rows.join('') || '<tr><td colspan="7" class="empty">无数据集</td></tr>';
+    tbody.innerHTML = rows.join('') || `<tr><td colspan="7" class="empty">${t('zfs.noDatasets')}</td></tr>`;
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty">加载失败：${esc(e.message || '')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">${t('common.loadFailed', { msg: esc(e.message || '') })}</td></tr>`;
   }
 }
 
 window.__fwpCreateDataset = async () => {
-  const result = await formModal('创建数据集', [
-    { key: 'name', label: '数据集名称', placeholder: '如 zroot/newds', required: true },
+  const result = await formModal(t('zfs.dsCreateTitle'), [
+    { key: 'name', label: t('zfs.dsNameLabel'), placeholder: t('zfs.dsNamePlaceholder'), required: true },
   ]);
   if (!result) return;
   api.post('/api/zfs/datasets', { name: result.name }).then(() => {
-    toast('数据集已创建');
+    toast(t('zfs.dsCreated'));
     loadDatasets();
-  }).catch(e => toast(e.message || '创建失败', 'error'));
+  }).catch(e => toast(e.message || t('zfs.dsCreateFailedShort'), 'error'));
 };
 
 window.__fwpDsSnap = async (name) => {
-  const result = await formModal(`创建快照: ${name}`, [
-    { key: 'name', label: '快照名称', placeholder: '如 backup-20260626', required: true },
+  const result = await formModal(t('zfs.dsCreateSnapTitle', { name }), [
+    { key: 'name', label: t('zfs.snapNameLabel'), placeholder: t('zfs.snapNamePlaceholder'), required: true },
   ]);
   if (!result) return;
   api.post('/api/zfs/snapshots', { dataset: name, name: result.name }).then(() => {
-    toast(`快照已创建: ${name}@${result.name}`);
-  }).catch(e => toast(e.message || '创建快照失败', 'error'));
+    toast(t('zfs.snapCreated', { name, snap: result.name }));
+  }).catch(e => toast(e.message || t('zfs.snapCreateFailed'), 'error'));
 };
 
 window.__fwpDelDs = async (name) => {
-  if (!await confirmDialog('删除数据集', `确定删除 "${name}" 及其所有子项？此操作不可撤销。`)) return;
+  if (!await confirmDialog(t('zfs.dsDeleteTitle'), t('zfs.dsDeleteConfirm', { name }))) return;
   api.del(`/api/zfs/dataset/destroy?name=${encodeURIComponent(name)}`).then(() => {
-    toast('数据集已删除');
+    toast(t('zfs.dsDeleted'));
     loadDatasets();
-  }).catch(e => toast(e.message || '删除失败', 'error'));
+  }).catch(e => toast(e.message || t('zfs.dsDeleteFailed'), 'error'));
 };
 
 window.__fwpDsProps = async (name) => {
   let props;
   try { props = await api.get(`/api/zfs/dataset/properties?name=${encodeURIComponent(name)}`); }
-  catch (e) { toast(e.message || '加载属性失败', 'error'); return; }
+  catch (e) { toast(e.message || t('zfs.dsPropsFailed'), 'error'); return; }
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" style="max-width:600px;">
-      <h3>属性: ${esc(name)}</h3>
+      <h3>${t('zfs.propsTitle', { name: esc(name) })}</h3>
       <div style="max-height:400px;overflow-y:auto;">
         <table style="font-size:12px;">
-          <thead><tr><th>属性</th><th>值</th><th>来源</th></tr></thead>
+          <thead><tr><th>${t('common.name')}</th><th>${t('zfs.colValue')}</th><th>${t('zfs.colSource')}</th></tr></thead>
           <tbody>
             ${props.map(p => `<tr><td class="mono">${esc(p.name)}</td><td class="mono">${esc(p.value)}</td><td class="text-dim mono">${esc(p.source)}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
       <div class="modal-actions">
-        <button class="btn-secondary" data-act="close">关闭</button>
+        <button class="btn-secondary" data-act="close">${t('common.close')}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -296,17 +297,17 @@ window.__fwpDsProps = async (name) => {
 export async function renderZfsSnapshots(app) {
   renderLayout(app, '/zfs/snapshots', `
     <div class="page-header">
-      <h1>快照管理</h1>
-      <p>ZFS 快照列表与操作</p>
+      <h1>${t('zfs.snapTitle')}</h1>
+      <p>${t('zfs.snapSubtitle')}</p>
     </div>
     <div class="toolbar">
-      <input type="text" id="snap-filter" class="search" placeholder="过滤数据集名称…" oninput="window.__fwpSnapFilter()" />
-      <button onclick="window.__fwpCreateSnap()">+ 创建快照</button>
+      <input type="text" id="snap-filter" class="search" placeholder="${t('zfs.snapFilter')}" oninput="window.__fwpSnapFilter()" />
+      <button onclick="window.__fwpCreateSnap()">${t('zfs.snapCreate')}</button>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>数据集</th><th>快照</th><th>已用</th><th>引用大小</th><th>创建时间</th><th>操作</th></tr></thead>
-        <tbody id="snap-tbody"><tr><td colspan="6" class="empty"><span class="spinner"></span> 加载中…</td></tr></tbody>
+        <thead><tr><th>${t('zfs.dsLabel')}</th><th>${t('zfs.colSnapshot')}</th><th>${t('common.used')}</th><th>${t('zfs.colRefer')}</th><th>${t('common.colCreatedAt')}</th><th>${t('common.actions')}</th></tr></thead>
+        <tbody id="snap-tbody"><tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr></tbody>
       </table>
     </div>
   `);
@@ -321,13 +322,13 @@ async function loadSnapshots() {
     _allSnaps = await api.get('/api/zfs/snapshots');
     renderSnapRows(_allSnaps);
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">加载失败：${esc(e.message || '')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('common.loadFailed', { msg: esc(e.message || '') })}</td></tr>`;
   }
 }
 
 function renderSnapRows(snaps) {
   const tbody = document.getElementById('snap-tbody');
-  if (!snaps.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">无快照</td></tr>'; return; }
+  if (!snaps.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('zfs.noSnaps')}</td></tr>`; return; }
   tbody.innerHTML = snaps.map(s => `
     <tr>
       <td class="mono">${esc(s.dataset)}</td>
@@ -336,9 +337,9 @@ function renderSnapRows(snaps) {
       <td class="mono">${fmtBytes(s.referenced)}</td>
       <td class="text-dim mono">${fmtTime(s.creation)}</td>
       <td>
-        <button class="btn-secondary btn-sm" onclick="window.__fwpCloneSnap('${esc(s.name)}')">克隆</button>
-        <button class="btn-secondary btn-sm" onclick="window.__fwpRollback('${esc(s.name)}')">回滚</button>
-        <button class="btn-danger btn-sm" onclick="window.__fwpDelSnap('${esc(s.name)}')">删除</button>
+        <button class="btn-secondary btn-sm" onclick="window.__fwpCloneSnap('${esc(s.name)}')">${t('zfs.clone')}</button>
+        <button class="btn-secondary btn-sm" onclick="window.__fwpRollback('${esc(s.name)}')">${t('zfs.rollback')}</button>
+        <button class="btn-danger btn-sm" onclick="window.__fwpDelSnap('${esc(s.name)}')">${t('common.delete')}</button>
       </td>
     </tr>`).join('');
 }
@@ -350,43 +351,43 @@ window.__fwpSnapFilter = () => {
 
 
 window.__fwpCreateSnap = async () => {
-  const result = await formModal('创建快照', [
-    { key: 'dataset', label: '数据集', placeholder: '如 zroot/data', required: true },
-    { key: 'name', label: '快照名称', placeholder: '如 backup-20260626', required: true },
+  const result = await formModal(t('zfs.snapCreateTitle'), [
+    { key: 'dataset', label: t('zfs.dsLabel'), placeholder: 'zroot/data', required: true },
+    { key: 'name', label: t('zfs.snapNameLabel'), placeholder: t('zfs.snapNamePlaceholder'), required: true },
   ]);
   if (!result) return;
   api.post('/api/zfs/snapshots', { dataset: result.dataset, name: result.name }).then(() => {
-    toast('快照已创建'); loadSnapshots();
-  }).catch(e => toast(e.message || '创建失败', 'error'));
+    toast(t('zfs.snapCreatedShort')); loadSnapshots();
+  }).catch(e => toast(e.message || t('zfs.snapCreateFailedShort'), 'error'));
 };
 
 window.__fwpCloneSnap = async (source) => {
-  const result = await formModal(`克隆快照: ${source}`, [
-    { key: 'target', label: '目标数据集名称', placeholder: '如 zroot/new-clone', required: true },
-    { key: 'mountpoint', label: '挂载点', placeholder: '留空则继承源数据集挂载点' },
+  const result = await formModal(t('zfs.cloneTitle', { name: source }), [
+    { key: 'target', label: t('zfs.cloneTargetLabel'), placeholder: t('zfs.cloneTargetPlaceholder'), required: true },
+    { key: 'mountpoint', label: t('zfs.cloneMountpointLabel'), placeholder: t('zfs.cloneMountpointPlaceholder') },
   ]);
   if (!result) return;
   api.post('/api/zfs/snapshot/clone', { source, target: result.target, mountpoint: result.mountpoint || undefined }).then(() => {
-    toast(`克隆成功: ${result.target}`); loadSnapshots();
-  }).catch(e => toast(e.message || '克隆失败', 'error'));
+    toast(t('zfs.cloneDone', { name: result.target })); loadSnapshots();
+  }).catch(e => toast(e.message || t('zfs.cloneFailed'), 'error'));
 };
 
 window.__fwpDelSnap = async (full) => {
-  const result = await confirmDialog('删除快照', `确定删除 "${full}" 吗？`, [
-    { key: 'recursive', label: '递归删除（连同依赖此快照的克隆数据集，-R）', checked: false },
+  const result = await confirmDialog(t('zfs.snapDeleteTitle'), t('zfs.snapDeleteConfirm', { name: full }), [
+    { key: 'recursive', label: t('zfs.snapRecursive'), checked: false },
   ]);
   if (!result || !result.confirmed) return;
   const qs = `name=${encodeURIComponent(full)}${result.recursive ? '&recursive=true' : ''}`;
   api.del(`/api/zfs/snapshot/destroy?${qs}`).then(() => {
-    toast('快照已删除'); loadSnapshots();
-  }).catch(e => toast(e.message || '删除失败', 'error'));
+    toast(t('zfs.snapDeleted')); loadSnapshots();
+  }).catch(e => toast(e.message || t('zfs.snapDeleteFailed'), 'error'));
 };
 
 window.__fwpRollback = async (full) => {
-  if (!await confirmDialog('回滚快照', `确定回滚到 "${full}" 吗？\n\n警告：此操作将销毁该快照之后的所有数据和新快照！`)) return;
+  if (!await confirmDialog(t('zfs.snapRollbackTitle'), t('zfs.snapRollbackConfirm', { name: full }))) return;
   api.post(`/api/zfs/snapshot/rollback?name=${encodeURIComponent(full)}`, { confirm: true }).then(() => {
-    toast('回滚成功'); loadSnapshots();
-  }).catch(e => toast(e.message || '回滚失败', 'error'));
+    toast(t('zfs.snapRollbackDone')); loadSnapshots();
+  }).catch(e => toast(e.message || t('zfs.snapRollbackFailed'), 'error'));
 };
 
 function fmtBytes(b) {
@@ -398,7 +399,7 @@ function fmtBytes(b) {
 }
 function fmtTime(ts) {
   if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleString('zh-CN');
+  return new Date(ts * 1000).toLocaleString(getLocale());
 }
 function esc(s) {
   const d = document.createElement('div');

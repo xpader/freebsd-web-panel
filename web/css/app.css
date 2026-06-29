@@ -82,6 +82,27 @@ a:hover { color: var(--accent-hover); }
 .user-chip .icon { font-size: 14px; opacity: 0.85; }
 #user-menu.open .user-chip { background: var(--bg-elev2); color: var(--text); }
 
+/* Language switcher (flag dropdown) */
+.lang-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 18px;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1;
+}
+.lang-btn:hover { background: var(--bg-elev2); }
+#lang-menu.open .lang-btn { background: var(--bg-elev2); }
+.lang-flag { font-size: 18px; line-height: 1; }
+#lang-menu .settings-dropdown { min-width: 150px; }
+.lang-item.active { color: var(--accent); }
+
 /* Settings dropdown (panel self-management) */
 .settings-menu { position: relative; }
 .settings-btn {

@@ -1,5 +1,7 @@
 // Confirm dialog — returns a Promise<boolean> or Promise<{confirmed, options}>.
 
+import { t } from '../i18n/index.js';
+
 /**
  * @param {string} title
  * @param {string} message
@@ -23,8 +25,8 @@ export function confirmDialog(title, message, options) {
         <p class="text-dim">${message}</p>
         ${optHtml}
         <div class="modal-actions">
-          <button class="btn-secondary" data-act="cancel">取消</button>
-          <button class="btn-danger" data-act="ok">确认</button>
+          <button class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
+          <button class="btn-danger" data-act="ok">${t('common.confirm')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);

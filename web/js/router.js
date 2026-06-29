@@ -1,6 +1,7 @@
 // Hash-based router.
 
 import { api } from './api.js';
+import { t } from './i18n/index.js';
 
 const routes = [];
 let currentRender = null;
@@ -83,11 +84,16 @@ async function match() {
 function notFound() {
   document.getElementById('app').innerHTML = `
     <div class="main"><div class="empty">
-      <h1>404</h1><p>页面不存在</p>
+      <h1>404</h1><p>${t('common.notFound')}</p>
     </div></div>`;
 }
 
 export function startRouter() {
   window.addEventListener('hashchange', match);
+  match();
+}
+
+// Re-run the current route (used after a language switch to re-render).
+export function reload() {
   match();
 }

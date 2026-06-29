@@ -2,6 +2,7 @@
 
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
+import { t } from '../i18n/index.js';
 
 // Load Chart.js + date adapter once (UMD globals). Cached after first import.
 let chartJsPromise = null;
@@ -27,27 +28,32 @@ function loadScript(src) {
 
 // ---- CPU & Load page (/monitor) ----
 
+function rangeButtons() {
+  return `
+      <div class="time-range" id="time-range">
+        <button class="btn-secondary btn-sm" data-range="3600">${t('monitor.range1h')}</button>
+        <button class="btn-secondary btn-sm" data-range="21600">${t('monitor.range6h')}</button>
+        <button class="btn-secondary btn-sm active-range" data-range="86400">${t('monitor.range24h')}</button>
+        <button class="btn-secondary btn-sm" data-range="604800">${t('monitor.range7d')}</button>
+        <button class="btn-secondary btn-sm" data-range="2592000">${t('monitor.range30d')}</button>
+      </div>`;
+}
+
 export async function renderMonitorCpu(app) {
   renderLayout(app, '/monitor', `
     <div class="page-header">
-      <h1>CPU 与负载监控</h1>
-      <p>CPU 使用率与系统负载历史趋势</p>
+      <h1>${t('monitor.cpuTitle')}</h1>
+      <p>${t('monitor.cpuSubtitle')}</p>
     </div>
     <div class="toolbar">
-      <div class="time-range" id="time-range">
-        <button class="btn-secondary btn-sm" data-range="3600">1小时</button>
-        <button class="btn-secondary btn-sm" data-range="21600">6小时</button>
-        <button class="btn-secondary btn-sm active-range" data-range="86400">24小时</button>
-        <button class="btn-secondary btn-sm" data-range="604800">7天</button>
-        <button class="btn-secondary btn-sm" data-range="2592000">30天</button>
-      </div>
+      ${rangeButtons()}
     </div>
     <div class="card">
-      <div class="card-title">CPU 使用率 (%)</div>
+      <div class="card-title">${t('monitor.cpuUsagePct')}</div>
       <canvas id="chart-cpu" height="120"></canvas>
     </div>
     <div class="card">
-      <div class="card-title">系统负载 (load average)</div>
+      <div class="card-title">${t('monitor.loadAvg')}</div>
       <canvas id="chart-load" height="120"></canvas>
     </div>
     <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
@@ -61,24 +67,18 @@ export async function renderMonitorCpu(app) {
 export async function renderMonitorMemory(app) {
   renderLayout(app, '/monitor/memory', `
     <div class="page-header">
-      <h1>内存监控</h1>
-      <p>内存使用率历史趋势</p>
+      <h1>${t('monitor.memTitle')}</h1>
+      <p>${t('monitor.memSubtitle')}</p>
     </div>
     <div class="toolbar">
-      <div class="time-range" id="time-range">
-        <button class="btn-secondary btn-sm" data-range="3600">1小时</button>
-        <button class="btn-secondary btn-sm" data-range="21600">6小时</button>
-        <button class="btn-secondary btn-sm active-range" data-range="86400">24小时</button>
-        <button class="btn-secondary btn-sm" data-range="604800">7天</button>
-        <button class="btn-secondary btn-sm" data-range="2592000">30天</button>
-      </div>
+      ${rangeButtons()}
     </div>
     <div class="card">
-      <div class="card-title">内存使用率 (%)</div>
+      <div class="card-title">${t('monitor.memUsagePct')}</div>
       <canvas id="chart-mem-usage" height="120"></canvas>
     </div>
     <div class="card">
-      <div class="card-title">内存用量 (字节)</div>
+      <div class="card-title">${t('monitor.memBytes')}</div>
       <canvas id="chart-mem-bytes" height="120"></canvas>
     </div>
     <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
@@ -92,20 +92,14 @@ export async function renderMonitorMemory(app) {
 export async function renderMonitorTemp(app) {
   renderLayout(app, '/monitor/temp', `
     <div class="page-header">
-      <h1>温度监控</h1>
-      <p>CPU 各核心温度历史趋势</p>
+      <h1>${t('monitor.tempTitle')}</h1>
+      <p>${t('monitor.tempSubtitle')}</p>
     </div>
     <div class="toolbar">
-      <div class="time-range" id="time-range">
-        <button class="btn-secondary btn-sm" data-range="3600">1小时</button>
-        <button class="btn-secondary btn-sm" data-range="21600">6小时</button>
-        <button class="btn-secondary btn-sm active-range" data-range="86400">24小时</button>
-        <button class="btn-secondary btn-sm" data-range="604800">7天</button>
-        <button class="btn-secondary btn-sm" data-range="2592000">30天</button>
-      </div>
+      ${rangeButtons()}
     </div>
     <div class="card">
-      <div class="card-title">CPU 核心温度 (°C)</div>
+      <div class="card-title">${t('monitor.tempCore')}</div>
       <canvas id="chart-temp" height="120"></canvas>
     </div>
     <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
@@ -125,7 +119,7 @@ async function initRangeButtons(categories, page) {
   try {
     Chart = await loadChartJs();
   } catch {
-    showMsg('无法加载图表库 (Chart.js)');
+    showMsg(t('monitor.chartLoadFailed'));
     return;
   }
 
@@ -151,27 +145,27 @@ async function drawAll(Chart, categories, page, rangeSec) {
 
   if (categories.includes('cpu')) {
     await drawSeries(Chart, 'chart-cpu', 'cpu', 'total', from, now, {
-      label: 'CPU 总体使用率',
+      label: t('monitor.cpuTotal'),
       color: '#3b82f6',
       yMax: 100,
       yUnit: '%',
     });
     await drawSeries(Chart, 'chart-load', 'load', ['1', '5', '15'], from, now, {
       multi: true,
-      labels: ['1 分钟', '5 分钟', '15 分钟'],
+      labels: [t('monitor.load1'), t('monitor.load5'), t('monitor.load15')],
       colors: ['#3b82f6', '#8b5cf6', '#f59e0b'],
     });
   }
   if (categories.includes('memory')) {
     await drawSeries(Chart, 'chart-mem-usage', 'memory', 'usage', from, now, {
-      label: '内存使用率',
+      label: t('monitor.memUsage'),
       color: '#8b5cf6',
       yMax: 100,
       yUnit: '%',
     });
     await drawSeries(Chart, 'chart-mem-bytes', 'memory', ['used', 'wired'], from, now, {
       multi: true,
-      labels: ['已用', 'Wired'],
+      labels: [t('monitor.memUsed'), t('monitor.memWired')],
       colors: ['#8b5cf6', '#f59e0b'],
       byteFormat: true,
     });
@@ -184,7 +178,7 @@ async function drawAll(Chart, categories, page, rangeSec) {
       names = latest.temp.map((t) => t.name).sort();
     } catch { /* ignore */ }
     if (names.length === 0) {
-      showMsg('暂无温度数据，等待采集器运行…');
+      showMsg(t('monitor.noTempData'));
       destroyChart('chart-temp');
       return;
     }
@@ -208,7 +202,7 @@ async function drawSeries(Chart, canvasId, category, nameOrNames, from, to, opts
     try {
       res = await api.get(`/api/monitor/series?category=${category}&name=${names[i]}&from=${from}&to=${to}`);
     } catch (e) {
-      showMsg(`查询失败: ${e.message || ''}`);
+      showMsg(t('monitor.queryFailed', { msg: e.message || '' }));
       return;
     }
     const data = res.points.map(([ts, v]) => ({ x: ts * 1000, y: v }));
@@ -225,7 +219,7 @@ async function drawSeries(Chart, canvasId, category, nameOrNames, from, to, opts
   }
 
   if (dataIsEmpty(datasets)) {
-    showMsg('暂无数据，等待采集器运行…');
+    showMsg(t('monitor.noData'));
     destroyChart(canvasId);
     return;
   }

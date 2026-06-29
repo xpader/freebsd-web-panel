@@ -2,15 +2,16 @@
 
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
+import { t } from '../i18n/index.js';
 
 export async function renderFsOverview(app) {
   renderLayout(app, '/filesystem', `
     <div class="page-header">
-      <h1>文件系统概览</h1>
-      <p>磁盘设备、挂载点与 ZFS 存储池状态</p>
+      <h1>${t('fs.title')}</h1>
+      <p>${t('fs.subtitle')}</p>
     </div>
     <div id="fs-content">
-      <div class="empty"><span class="spinner"></span> 加载中…</div>
+      <div class="empty"><span class="spinner"></span> ${t('common.loading')}</div>
     </div>
   `);
 
@@ -19,7 +20,7 @@ export async function renderFsOverview(app) {
   try {
     data = await api.get('/api/filesystem/overview');
   } catch (err) {
-    el.innerHTML = `<div class="empty">加载失败：${esc(err.message || '')}</div>`;
+    el.innerHTML = `<div class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</div>`;
     return;
   }
 
@@ -29,14 +30,14 @@ export async function renderFsOverview(app) {
     const healthClass = p.health === 'ONLINE' ? 'badge-success' : 'badge-danger';
     return `
       <div class="card">
-        <div class="card-title">存储池: ${esc(p.name)}</div>
+        <div class="card-title">${t('fs.poolName', { name: esc(p.name) })}</div>
         <div class="stat-row">
-          <span>状态: <span class="badge ${healthClass}">${esc(p.health)}</span></span>
-          <span>容量: <strong>${fmtBytes(p.size)}</strong></span>
-          <span>已用: ${fmtBytes(p.allocated)} (${pct.toFixed(0)}%)</span>
-          <span>空闲: ${fmtBytes(p.free)}</span>
-          <span>碎片率: ${p.fragmentation_pct.toFixed(0)}%</span>
-          <span>去重: ${p.dedup.toFixed(2)}x</span>
+          <span>${t('fs.state')}: <span class="badge ${healthClass}">${esc(p.health)}</span></span>
+          <span>${t('common.capacity')}: <strong>${fmtBytes(p.size)}</strong></span>
+          <span>${t('common.used')}: ${fmtBytes(p.allocated)} (${pct.toFixed(0)}%)</span>
+          <span>${t('common.free')}: ${fmtBytes(p.free)}</span>
+          <span>${t('common.frag')}: ${p.fragmentation_pct.toFixed(0)}%</span>
+          <span>${t('common.dedup')}: ${p.dedup.toFixed(2)}x</span>
         </div>
         <div class="bar-wrap" style="margin-top:10px;">
           <div class="bar bar-${pct > 80 ? 'swap' : 'mem'}" style="width:${pct}%"></div>
@@ -51,9 +52,9 @@ export async function renderFsOverview(app) {
           <td class="mono"><strong>${esc(d.name)}</strong></td>
           <td>${esc(d.descr)}</td>
           <td class="mono">${fmtBytes(d.size_bytes)}</td>
-          <td>${d.rotation_rate === 'unknown' ? 'SSD?' : esc(d.rotation_rate) + ' rpm'}</td>
+          <td>${d.rotation_rate === 'unknown' ? t('fs.ssdUnknown') : esc(d.rotation_rate) + ' rpm'}</td>
         </tr>`).join('')
-    : `<tr><td colspan="4" class="empty">无磁盘数据</td></tr>`;
+    : `<tr><td colspan="4" class="empty">${t('fs.noDisks')}</td></tr>`;
 
   // Mount table.
   const mountRows = data.mounts.map(m => `
@@ -69,26 +70,26 @@ export async function renderFsOverview(app) {
 
   el.innerHTML = `
     <div class="page-header" style="margin-bottom:16px;">
-      <h1 style="font-size:18px;">ZFS 存储池</h1>
+      <h1 style="font-size:18px;">${t('fs.zfsPools')}</h1>
     </div>
-    ${poolCards || '<div class="card empty">无 ZFS 存储池</div>'}
+    ${poolCards || `<div class="card empty">${t('fs.noPools')}</div>`}
 
     <div class="page-header" style="margin-bottom:16px;">
-      <h1 style="font-size:18px;">物理磁盘 (${data.disks.length})</h1>
+      <h1 style="font-size:18px;">${t('fs.physicalDisks', { n: data.disks.length })}</h1>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>设备</th><th>型号</th><th>容量</th><th>转速</th></tr></thead>
+        <thead><tr><th>${t('common.device')}</th><th>${t('fs.colModel')}</th><th>${t('fs.colSize')}</th><th>${t('fs.colRpm')}</th></tr></thead>
         <tbody>${diskRows}</tbody>
       </table>
     </div>
 
     <div class="page-header" style="margin-bottom:16px;margin-top:32px;">
-      <h1 style="font-size:18px;">挂载点 (${data.mounts.length})</h1>
+      <h1 style="font-size:18px;">${t('fs.mountpoints', { n: data.mounts.length })}</h1>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>设备</th><th>挂载点</th><th>类型</th><th>总容量</th><th>已用</th><th>可用</th><th>使用率</th></tr></thead>
+        <thead><tr><th>${t('common.device')}</th><th>${t('fs.colMountpoint')}</th><th>${t('fs.colFstype')}</th><th>${t('fs.colTotal')}</th><th>${t('common.used')}</th><th>${t('fs.colAvailable')}</th><th>${t('fs.colUsage')}</th></tr></thead>
         <tbody>${mountRows}</tbody>
       </table>
     </div>`;

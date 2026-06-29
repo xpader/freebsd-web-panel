@@ -1,98 +1,100 @@
 // Application shell: topbar (primary) + sidebar (secondary + tertiary).
 //
 // Menu item shape:
-//   { path, label, icon, children: [{ path, label, icon }] }
-// If `children` exists, the item is a collapsible group (no direct route);
-// otherwise it's a direct link.
+//   { path, labelKey, icon, default, items: [{ path, labelKey, icon, children }] }
+// `labelKey` is an i18n key resolved at render time. If `children` exists,
+// the item is a collapsible group (no direct route); otherwise it's a direct link.
+
+import { t, LANGUAGES, getLang, setLang, currentLangMeta } from '../i18n/index.js';
 
 const MENU = [
   {
     key: 'overview',
-    label: '概览',
+    labelKey: 'nav.overview',
     icon: '◎',
     default: '/dashboard',
     items: [
-      { path: '/dashboard', label: '仪表盘', icon: '◎' },
+      { path: '/dashboard', labelKey: 'nav.dashboard', icon: '◎' },
     ],
   },
   {
     key: 'config',
-    label: '配置',
+    labelKey: 'nav.config',
     icon: '⚙',
     default: '/sysctl',
     items: [
-      { path: '/sysctl', label: 'Sysctl 系统参数', icon: '⚙' },
-      { path: '/rcconf', label: 'RC 配置', icon: '☰' },
-      { path: '/services', label: '服务', icon: '▶' },
+      { path: '/sysctl', labelKey: 'nav.sysctl', icon: '⚙' },
+      { path: '/rcconf', labelKey: 'nav.rcconf', icon: '☰' },
+      { path: '/services', labelKey: 'nav.services', icon: '▶' },
       {
         path: '/accounts/users',
-        label: '用户与组',
+        labelKey: 'nav.accounts',
         icon: '☻',
         children: [
-          { path: '/accounts/users', label: '用户', icon: '☻' },
-          { path: '/accounts/groups', label: '用户组', icon: '☰' },
+          { path: '/accounts/users', labelKey: 'nav.sysUsers', icon: '☻' },
+          { path: '/accounts/groups', labelKey: 'nav.sysGroups', icon: '☰' },
         ],
       },
     ],
   },
   {
     key: 'network',
-    label: '网络',
+    labelKey: 'nav.network',
     icon: '⇄',
     default: '/network',
     items: [
-      { path: '/network', label: '网络接口', icon: '⇄' },
-      { path: '/pf', label: '防火墙 (PF)', icon: '🛡' },
+      { path: '/network', labelKey: 'nav.networkIf', icon: '⇄' },
+      { path: '/pf', labelKey: 'nav.pf', icon: '🛡' },
     ],
   },
   {
     key: 'filesystem',
-    label: '文件系统',
+    labelKey: 'nav.filesystem',
     icon: '◈',
     default: '/filesystem',
     items: [
-      { path: '/filesystem', label: '概览', icon: '◇' },
-      { path: '/filesystem/disks', label: '磁盘', icon: '▤' },
-      { path: '/filesystem/files', label: '文件管理器', icon: '📁' },
+      { path: '/filesystem', labelKey: 'nav.fsOverview', icon: '◇' },
+      { path: '/filesystem/disks', labelKey: 'nav.disks', icon: '▤' },
+      { path: '/filesystem/files', labelKey: 'nav.fileManager', icon: '📁' },
       {
         path: '/zfs',
-        label: 'ZFS',
+        labelKey: 'nav.zfs',
         icon: '◈',
         children: [
-          { path: '/zfs/pools', label: 'Zpool', icon: '◉' },
-          { path: '/zfs/datasets', label: '数据集', icon: '◇' },
-          { path: '/zfs/snapshots', label: '快照', icon: '⎙' },
+          { path: '/zfs/pools', labelKey: 'nav.zpool', icon: '◉' },
+          { path: '/zfs/datasets', labelKey: 'nav.datasets', icon: '◇' },
+          { path: '/zfs/snapshots', labelKey: 'nav.snapshots', icon: '⎙' },
         ],
       },
     ],
   },
   {
     key: 'virtualization',
-    label: '虚拟化',
+    labelKey: 'nav.virtualization',
     icon: '▣',
     default: '/jails',
     items: [
-      { path: '/jails', label: 'Jail 容器', icon: '▣' },
-      { path: '/bhyve', label: 'Bhyve 虚拟机', icon: '▢' },
+      { path: '/jails', labelKey: 'nav.jails', icon: '▣' },
+      { path: '/bhyve', labelKey: 'nav.bhyve', icon: '▢' },
     ],
   },
   {
     key: 'monitor',
-    label: '监控',
+    labelKey: 'nav.monitor',
     icon: '📊',
     default: '/monitor',
     items: [
-      { path: '/monitor', label: 'CPU & 负载', icon: '📊' },
-      { path: '/monitor/memory', label: '内存', icon: '▦' },
-      { path: '/monitor/temp', label: '温度', icon: '🌡' },
+      { path: '/monitor', labelKey: 'nav.monitorCpu', icon: '📊' },
+      { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: '▦' },
+      { path: '/monitor/temp', labelKey: 'nav.monitorTemp', icon: '🌡' },
     ],
   },
 ];
 
 // Settings menu (right-side dropdown) — panel self-management.
 const SETTINGS = [
-  { path: '/users', label: '用户', icon: '☻' },
-  { path: '/audit', label: '审计日志', icon: '☰' },
+  { path: '/users', labelKey: 'topbar.panelUsers', icon: '☻' },
+  { path: '/audit', labelKey: 'topbar.auditLog', icon: '☰' },
 ];
 
 // Determine which top-level group a path belongs to.
@@ -116,7 +118,7 @@ function pathBelongsToGroup(path, items) {
   return false;
 }
 
-// Close the settings dropdown when clicking outside it.
+// Close the settings/language dropdowns when clicking outside them.
 // Bound once on the document; re-binding on each render is a no-op.
 let settingsDocClickBound = false;
 function bindSettingsDocClick() {
@@ -124,6 +126,8 @@ function bindSettingsDocClick() {
   document.addEventListener('click', (e) => {
     const settingsMenu = document.getElementById('settings-menu');
     if (settingsMenu && !settingsMenu.contains(e.target)) settingsMenu.classList.remove('open');
+    const langMenu = document.getElementById('lang-menu');
+    if (langMenu && !langMenu.contains(e.target)) langMenu.classList.remove('open');
     const userMenu = document.getElementById('user-menu');
     if (userMenu && !userMenu.contains(e.target)) {
       userMenu.classList.remove('open');
@@ -143,7 +147,7 @@ export function renderLayout(app, currentPath, pageContent) {
   // Top menu tabs.
   const topHtml = MENU.map((g) => `
     <a href="#${g.default}" class="topnav-tab ${g.key === activeGroup ? 'active' : ''}">
-      <span class="icon">${g.icon}</span>${g.label}
+      <span class="icon">${g.icon}</span>${t(g.labelKey)}
     </a>`).join('');
 
   // Sidebar items — supports expandable children.
@@ -151,19 +155,34 @@ export function renderLayout(app, currentPath, pageContent) {
     .map((item) => renderSidebarItem(item, currentPath))
     .join('');
 
+  // Language switcher: current flag as the trigger, full list in the dropdown.
+  const curLang = currentLangMeta();
+  const langItems = LANGUAGES.map((l) => `
+    <a href="#" class="lang-item ${l.code === curLang.code ? 'active' : ''}" data-lang="${l.code}">
+      <span class="icon lang-flag">${l.flag}</span>${l.label}
+    </a>`).join('');
+
   app.innerHTML = `
     <div class="topbar">
       <div class="topbar-brand">FreeBSD Web Panel</div>
       <nav class="topnav">${topHtml}</nav>
       <div class="topbar-right">
+        <div class="settings-menu" id="lang-menu">
+          <button class="lang-btn" id="lang-toggle" aria-haspopup="true" aria-expanded="false" title="${t('topbar.language')}">
+            <span class="icon lang-flag">${curLang.flag}</span>
+          </button>
+          <div class="settings-dropdown">
+            ${langItems}
+          </div>
+        </div>
         <div class="settings-menu" id="settings-menu">
           <button class="settings-btn ${activeGroup === 'settings' ? 'active' : ''}" id="settings-toggle" aria-haspopup="true" aria-expanded="false">
-            <span class="icon">⚙</span>设置
+            <span class="icon">⚙</span>${t('topbar.settings')}
           </button>
           <div class="settings-dropdown">
             ${SETTINGS.map((s) => `
               <a href="#${s.path}" class="${currentPath === s.path ? 'active' : ''}">
-                <span class="icon">${s.icon}</span>${s.label}
+                <span class="icon">${s.icon}</span>${t(s.labelKey)}
               </a>`).join('')}
           </div>
         </div>
@@ -173,7 +192,7 @@ export function renderLayout(app, currentPath, pageContent) {
           </button>
           <div class="settings-dropdown">
             <a href="#" id="nav-logout">
-              <span class="icon">⏻</span>退出登录
+              <span class="icon">⏻</span>${t('topbar.logout')}
             </a>
           </div>
         </div>
@@ -200,6 +219,26 @@ export function renderLayout(app, currentPath, pageContent) {
     });
   });
 
+  // Language dropdown: toggle on button click, switch on item click.
+  const langToggle = document.getElementById('lang-toggle');
+  if (langToggle) {
+    langToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.getElementById('lang-menu').classList.toggle('open');
+    });
+  }
+  const langMenu = document.getElementById('lang-menu');
+  if (langMenu) {
+    langMenu.querySelectorAll('.lang-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        const code = item.getAttribute('data-lang');
+        langMenu.classList.remove('open');
+        setLang(code);
+      });
+    });
+  }
+
   // Settings dropdown: toggle on button click, close on item selection.
   const settingsToggle = document.getElementById('settings-toggle');
   if (settingsToggle) {
@@ -210,7 +249,7 @@ export function renderLayout(app, currentPath, pageContent) {
       settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
   }
-  const settingsDropdown = document.querySelector('.settings-dropdown');
+  const settingsDropdown = document.querySelector('#settings-menu .settings-dropdown');
   if (settingsDropdown) {
     settingsDropdown.addEventListener('click', () => {
       const menu = document.getElementById('settings-menu');
@@ -257,14 +296,14 @@ function renderSidebarItem(item, currentPath) {
       .map(
         (c) => `
         <a href="#${c.path}" class="sub-item ${currentPath === c.path ? 'active' : ''}">
-          <span class="icon">${c.icon}</span>${c.label}
+          <span class="icon">${c.icon}</span>${t(c.labelKey)}
         </a>`,
       )
       .join('');
     return `
       <div class="sub-group ${hasActiveChild ? 'expanded' : ''}">
         <div class="sub-group-header">
-          <span class="icon">${item.icon}</span>${item.label}
+          <span class="icon">${item.icon}</span>${t(item.labelKey)}
           <span class="sub-arrow">${hasActiveChild ? '▾' : '▸'}</span>
         </div>
         <div class="sub-items">${childHtml}</div>
@@ -274,6 +313,6 @@ function renderSidebarItem(item, currentPath) {
   // Direct link item.
   return `
     <a href="#${item.path}" class="${currentPath === item.path ? 'active' : ''}">
-      <span class="icon">${item.icon}</span>${item.label}
+      <span class="icon">${item.icon}</span>${t(item.labelKey)}
     </a>`;
 }

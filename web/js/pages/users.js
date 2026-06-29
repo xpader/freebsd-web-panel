@@ -4,22 +4,23 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
+import { t, getLocale } from '../i18n/index.js';
 
 export async function renderUsers(app) {
   renderLayout(app, '/users', `
     <div class="page-header">
-      <h1>用户</h1>
-      <p>管理面板管理员账户</p>
+      <h1>${t('users.title')}</h1>
+      <p>${t('users.subtitle')}</p>
     </div>
     <div class="toolbar">
       <div></div>
-      <button onclick="window.__fwpAddUser()">+ 添加用户</button>
+      <button onclick="window.__fwpAddUser()">${t('users.add')}</button>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th>最后登录</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>${t('auth.username')}</th><th>${t('users.colRole')}</th><th>${t('common.colCreatedAt')}</th><th>${t('users.colLastLogin')}</th><th>${t('common.actions')}</th></tr></thead>
         <tbody id="users-tbody">
-          <tr><td colspan="6" class="empty"><span class="spinner"></span> 加载中…</td></tr>
+          <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>
       </table>
     </div>
@@ -33,7 +34,7 @@ async function loadUsers() {
   try {
     const users = await api.get('/api/users');
     if (!users.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty">暂无用户</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('users.noUsers')}</td></tr>`;
       return;
     }
     tbody.innerHTML = users.map(u => `
@@ -44,38 +45,38 @@ async function loadUsers() {
         <td class="text-dim mono">${fmtTime(u.created_at)}</td>
         <td class="text-dim mono">${u.last_login ? fmtTime(u.last_login) : '—'}</td>
         <td>
-          <button class="btn-secondary btn-sm" onclick="window.__fwpEditPwd(${u.id}, '${esc(u.username)}')">改密</button>
-          <button class="btn-danger btn-sm" onclick="window.__fwpDelUser(${u.id}, '${esc(u.username)}')">删除</button>
+          <button class="btn-secondary btn-sm" onclick="window.__fwpEditPwd(${u.id}, '${esc(u.username)}')">${t('users.changePwd')}</button>
+          <button class="btn-danger btn-sm" onclick="window.__fwpDelUser(${u.id}, '${esc(u.username)}')">${t('common.delete')}</button>
         </td>
       </tr>`).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">加载失败：${esc(err.message || '')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</td></tr>`;
   }
 }
 
 window.__fwpAddUser = () => {
-  showModal('添加用户', '', '', async (username, password) => {
+  showModal(t('users.addUser'), '', '', async (username, password) => {
     await api.post('/api/users', { username, password });
-    toast('用户创建成功');
+    toast(t('users.created'));
     loadUsers();
   });
 };
 
 window.__fwpEditPwd = (id, name) => {
-  showModal(`修改密码：${name}`, '', '', async (_u, password) => {
+  showModal(t('users.editPwdTitle', { name }), '', '', async (_u, password) => {
     await api.put(`/api/users/${id}`, { password });
-    toast('密码已更新');
+    toast(t('users.pwdUpdated'));
   });
 };
 
 window.__fwpDelUser = async (id, name) => {
-  if (!await confirmDialog('删除用户', `确定删除用户 "${name}" 吗？此操作不可撤销。`)) return;
+  if (!await confirmDialog(t('users.deleteUser'), t('users.deleteConfirm', { name }))) return;
   try {
     await api.del(`/api/users/${id}`);
-    toast('用户已删除');
+    toast(t('users.deleted'));
     loadUsers();
   } catch (err) {
-    toast(err.message || '删除失败', 'error');
+    toast(err.message || t('users.deleteFailed'), 'error');
   }
 };
 
@@ -87,16 +88,16 @@ function showModal(title, defaultName, defaultPwd, onSubmit) {
       <h3>${title}</h3>
       <form id="modal-form">
         <div class="field">
-          <label>用户名</label>
+          <label>${t('auth.username')}</label>
           <input type="text" name="username" value="${esc(defaultName)}" required />
         </div>
         <div class="field">
-          <label>密码（至少 6 位）</label>
+          <label>${t('auth.passwordMin')}</label>
           <input type="password" name="password" value="${esc(defaultPwd)}" required minlength="6" />
         </div>
         <div class="modal-actions">
-          <button type="button" class="btn-secondary" data-act="cancel">取消</button>
-          <button type="submit">确定</button>
+          <button type="button" class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
+          <button type="submit">${t('common.ok')}</button>
         </div>
       </form>
     </div>`;
@@ -112,14 +113,14 @@ function showModal(title, defaultName, defaultPwd, onSubmit) {
       await onSubmit(form.username.value, form.password.value);
       overlay.remove();
     } catch (err) {
-      toast(err.message || '操作失败', 'error');
+      toast(err.message || t('common.operationFailed'), 'error');
     }
   });
 }
 
 function fmtTime(ts) {
   if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleString('zh-CN');
+  return new Date(ts * 1000).toLocaleString(getLocale());
 }
 
 function esc(s) {

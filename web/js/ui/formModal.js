@@ -1,5 +1,7 @@
 // Reusable form modal — replaces browser prompt() with styled dialogs.
 
+import { t } from '../i18n/index.js';
+
 /**
  * Show a modal with custom fields. Returns a Promise that resolves with
  * {field: value} on submit, or null on cancel.
@@ -9,7 +11,8 @@
  * @param {string} submitLabel
  * @returns {Promise<Object|null>}
  */
-export function formModal(title, fields, submitLabel = '确定') {
+export function formModal(title, fields, submitLabel) {
+  submitLabel = submitLabel || t('common.ok');
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -20,7 +23,7 @@ export function formModal(title, fields, submitLabel = '确定') {
           <div class="field">
             <label>${esc(f.label)}${f.required ? ' <span style="color:var(--danger)">*</span>' : ''}</label>
             <select name="${f.key}" ${f.required ? 'required' : ''}>
-              <option value="">— 请选择 —</option>
+              <option value="">${t('common.pleaseSelect')}</option>
               ${f.options.map(o => `<option value="${esc(o.value || o)}" ${f.value === (o.value || o) ? 'selected' : ''}>${esc(o.label || o)}</option>`).join('')}
             </select>
           </div>`;
@@ -46,7 +49,7 @@ export function formModal(title, fields, submitLabel = '确定') {
         <form id="modal-form">
           ${fieldHtml}
           <div class="modal-actions">
-            <button type="button" class="btn-secondary" data-act="cancel">取消</button>
+            <button type="button" class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
             <button type="submit">${esc(submitLabel)}</button>
           </div>
         </form>

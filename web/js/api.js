@@ -1,5 +1,7 @@
 // API client — wraps fetch with auth token and error handling.
 
+import { t } from './i18n/index.js';
+
 const BASE = ''; // same origin
 
 function getToken() {
@@ -33,11 +35,11 @@ async function request(method, path, body) {
   if (res.status === 401) {
     clearToken();
     if (location.hash !== '#/login') location.hash = '#/login';
-    throw { status: 401, message: '未登录或会话已过期', data };
+    throw { status: 401, message: t('common.unauthenticated'), data };
   }
 
   if (!res.ok) {
-    const msg = (data && data.message) || `请求失败 (${res.status})`;
+    const msg = (data && data.message) || t('common.requestFailed', { status: res.status });
     throw { status: res.status, message: msg, data };
   }
 

@@ -2,22 +2,23 @@
 
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
+import { t } from '../i18n/index.js';
 
 export async function renderSysUsers(app) {
   renderLayout(app, '/accounts/users', `
     <div class="page-header">
-      <h1>用户</h1>
-      <p>FreeBSD 系统用户（来自 /etc/passwd）</p>
+      <h1>${t('accounts.usersTitle')}</h1>
+      <p>${t('accounts.usersSubtitle')}</p>
     </div>
     <div class="toolbar">
-      <input type="text" id="user-filter" class="filter-input" placeholder="筛选用户名 / UID…" />
+      <input type="text" id="user-filter" class="filter-input" placeholder="${t('accounts.filterUser')}" />
       <span id="user-count" class="text-dim"></span>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>用户名</th><th>UID</th><th>主组</th><th>描述</th><th>家目录</th><th>Shell</th></tr></thead>
+        <thead><tr><th>${t('auth.username')}</th><th>${t('accounts.colUid')}</th><th>${t('accounts.colGroup')}</th><th>${t('accounts.colDesc')}</th><th>${t('accounts.colHome')}</th><th>Shell</th></tr></thead>
         <tbody id="sysusers-tbody">
-          <tr><td colspan="6" class="empty"><span class="spinner"></span> 加载中…</td></tr>
+          <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>
       </table>
     </div>
@@ -31,7 +32,7 @@ export async function renderSysUsers(app) {
   try {
     allUsers = await api.get('/api/accounts/users');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">加载失败：${esc(err.message || '')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</td></tr>`;
     return;
   }
 
@@ -41,9 +42,9 @@ export async function renderSysUsers(app) {
       ? allUsers.filter((u) =>
           u.name.toLowerCase().includes(q) || String(u.uid).includes(q))
       : allUsers;
-    countEl.textContent = `共 ${list.length} 个用户`;
+    countEl.textContent = t('accounts.userCount', { n: list.length });
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty">无匹配用户</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('accounts.noMatchUser')}</td></tr>`;
       return;
     }
     tbody.innerHTML = list.map((u) => `
@@ -64,18 +65,18 @@ export async function renderSysUsers(app) {
 export async function renderSysGroups(app) {
   renderLayout(app, '/accounts/groups', `
     <div class="page-header">
-      <h1>用户组</h1>
-      <p>FreeBSD 系统用户组（来自 /etc/group）</p>
+      <h1>${t('accounts.groupsTitle')}</h1>
+      <p>${t('accounts.groupsSubtitle')}</p>
     </div>
     <div class="toolbar">
-      <input type="text" id="group-filter" class="filter-input" placeholder="筛选组名 / GID…" />
+      <input type="text" id="group-filter" class="filter-input" placeholder="${t('accounts.filterGroup')}" />
       <span id="group-count" class="text-dim"></span>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>组名</th><th>GID</th><th>成员</th></tr></thead>
+        <thead><tr><th>${t('auth.username')}</th><th>${t('accounts.colGid')}</th><th>${t('accounts.colMembers')}</th></tr></thead>
         <tbody id="sysgroups-tbody">
-          <tr><td colspan="3" class="empty"><span class="spinner"></span> 加载中…</td></tr>
+          <tr><td colspan="3" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>
       </table>
     </div>
@@ -89,7 +90,7 @@ export async function renderSysGroups(app) {
   try {
     allGroups = await api.get('/api/accounts/groups');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="3" class="empty">加载失败：${esc(err.message || '')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="3" class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</td></tr>`;
     return;
   }
 
@@ -101,9 +102,9 @@ export async function renderSysGroups(app) {
           String(g.gid).includes(q) ||
           g.members.some((m) => m.toLowerCase().includes(q)))
       : allGroups;
-    countEl.textContent = `共 ${list.length} 个用户组`;
+    countEl.textContent = t('accounts.groupCount', { n: list.length });
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="3" class="empty">无匹配用户组</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="3" class="empty">${t('accounts.noMatchGroup')}</td></tr>`;
       return;
     }
     tbody.innerHTML = list.map((g) => `

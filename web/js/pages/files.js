@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
+import { t } from '../i18n/index.js';
 
 const START_DIR = '/root';
 const ROOT = '/';
@@ -46,15 +47,15 @@ function treeIcon(path) {
 export async function renderFiles(app) {
   renderLayout(app, '/filesystem/files', `
     <div class="page-header">
-      <h1>文件管理器</h1>
-      <p>浏览、上传、下载、重命名、删除文件与目录</p>
+      <h1>${t('fm.title')}</h1>
+      <p>${t('fm.subtitle')}</p>
     </div>
     <div class="fm-wrap">
       <div class="fm-tree">
-        <div class="fm-tree-head">目录</div>
+        <div class="fm-tree-head">${t('fm.treeHead')}</div>
         <div id="fm-tree-body"><span class="spinner"></span></div>
       </div>
-      <div class="fm-main" id="fm-main"><div class="empty"><span class="spinner"></span> 加载中…</div></div>
+      <div class="fm-main" id="fm-main"><div class="empty"><span class="spinner"></span> ${t('common.loading')}</div></div>
     </div>
     <input type="file" id="fm-upload-input" multiple style="display:none" />
   `);
@@ -66,7 +67,7 @@ export async function renderFiles(app) {
     await openDir(currentDir);
   } catch (err) {
     document.getElementById('fm-main').innerHTML =
-      `<div class="empty">加载失败：${esc(err.message || '')}</div>`;
+      `<div class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</div>`;
   }
 }
 
@@ -162,12 +163,12 @@ async function openDir(path) {
 
 async function loadListing(path) {
   const el = document.getElementById('fm-main');
-  el.innerHTML = '<div class="empty"><span class="spinner"></span> 加载中…</div>';
+  el.innerHTML = '<div class="empty"><span class="spinner"></span> ' + t('common.loading') + '</div>';
   try {
     lastEntries = await api.get(`/api/files/list?path=${encodeURIComponent(path)}`);
     renderListing(path, lastEntries);
   } catch (err) {
-    el.innerHTML = `<div class="empty">加载失败：${esc(err.message || '')}</div>`;
+    el.innerHTML = `<div class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</div>`;
   }
 }
 
@@ -177,11 +178,11 @@ function renderListing(path, entries) {
     <div class="fm-toolbar">
       <div class="fm-breadcrumb" id="fm-breadcrumb">${breadcrumbHtml(path)}</div>
       <div class="fm-actions">
-        <button class="btn-secondary btn-sm" id="fm-upload-btn">⤒ 上传</button>
-        <button class="btn-secondary btn-sm" id="fm-mkdir-btn">+ 新建文件夹</button>
+        <button class="btn-secondary btn-sm" id="fm-upload-btn">${t('fm.upload')}</button>
+        <button class="btn-secondary btn-sm" id="fm-mkdir-btn">${t('fm.mkdir')}</button>
         <div class="fm-view-toggle">
-          <button class="btn-secondary btn-sm ${viewMode === 'list' ? 'active-range' : ''}" data-view="list">☰ 列表</button>
-          <button class="btn-secondary btn-sm ${viewMode === 'grid' ? 'active-range' : ''}" data-view="grid">▦ 网格</button>
+          <button class="btn-secondary btn-sm ${viewMode === 'list' ? 'active-range' : ''}" data-view="list">${t('fm.listView')}</button>
+          <button class="btn-secondary btn-sm ${viewMode === 'grid' ? 'active-range' : ''}" data-view="grid">${t('fm.gridView')}</button>
         </div>
       </div>
     </div>
@@ -236,10 +237,10 @@ function breadcrumbHtml(path) {
 }
 
 function listHtml(entries) {
-  if (!entries.length) return '<div class="empty">空目录</div>';
+  if (!entries.length) return '<div class="empty">' + t('fm.emptyDir') + '</div>';
   const rows = entries.map((e) => {
     const icon = fileIcon(e);
-    const dl = e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="下载">⤓</button>`;
+    const dl = e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.tDownload')}">⤓</button>`;
     return `
       <tr>
         <td class="fm-name-cell">
@@ -253,21 +254,21 @@ function listHtml(entries) {
         <td class="text-dim">${fmtDate(e.modified)}</td>
         <td class="fm-acts">
           ${dl}
-          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="重命名">✎</button>
-          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="属性">ℹ</button>
-          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="删除">🗑</button>
+          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.tRename')}">✎</button>
+          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.tStat')}">ℹ</button>
+          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('fm.tDelete')}">🗑</button>
         </td>
       </tr>`;
   }).join('');
   return `
     <table class="fm-table">
-      <thead><tr><th>名称</th><th>大小</th><th>权限</th><th>修改时间</th><th>操作</th></tr></thead>
+      <thead><tr><th>${t('common.name')}</th><th>${t('common.size')}</th><th>${t('fm.colPermissions')}</th><th>${t('fm.colModified')}</th><th>${t('common.actions')}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
 
 function gridHtml(entries) {
-  if (!entries.length) return '<div class="empty">空目录</div>';
+  if (!entries.length) return '<div class="empty">' + t('fm.emptyDir') + '</div>';
   const cards = entries.map((e) => {
     const icon = fileIcon(e);
     const click = e.is_dir ? `data-dir="${esc(e.path)}"` : '';
@@ -275,12 +276,12 @@ function gridHtml(entries) {
       <div class="fm-grid-item ${e.is_dir ? 'fm-openable' : ''}" ${click}>
         <div class="fm-grid-ico">${icon}</div>
         <div class="fm-grid-name" title="${esc(e.name)}">${esc(e.name)}</div>
-        <div class="fm-grid-meta mono">${e.is_dir ? '文件夹' : fmtBytes(e.size)}</div>
+        <div class="fm-grid-meta mono">${e.is_dir ? t('fm.folder') : fmtBytes(e.size)}</div>
         <div class="fm-grid-acts">
-          ${e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="下载">⤓</button>`}
-          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="重命名">✎</button>
-          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="属性">ℹ</button>
-          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="删除">🗑</button>
+          ${e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.tDownload')}">⤓</button>`}
+          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.tRename')}">✎</button>
+          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.tStat')}">ℹ</button>
+          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('fm.tDelete')}">🗑</button>
         </div>
       </div>`;
   }).join('');
@@ -297,9 +298,9 @@ async function onUploadPicked(ev) {
   for (const file of files) {
     try {
       await uploadFile(currentDir, file);
-      toast(`已上传 ${file.name}`);
+      toast(t('fm.uploaded', { name: file.name }));
     } catch (err) {
-      toast(`上传失败 ${file.name}：${err.message || ''}`, 'error');
+      toast(t('fm.uploadFailed', { name: file.name, msg: err.message || '' }), 'error');
     }
   }
   await loadListing(currentDir);
@@ -315,7 +316,7 @@ function uploadFile(dir, file) {
   }).then(async (res) => {
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;
-    if (!res.ok) throw { status: res.status, message: (data && data.message) || `上传失败 (${res.status})` };
+    if (!res.ok) throw { status: res.status, message: (data && data.message) || t('fm.uploadFailedStatus', { status: res.status }) };
     return data;
   });
 }
@@ -332,7 +333,7 @@ async function downloadFile(path) {
     }
     if (!res.ok) {
       const data = await res.json().catch(() => null);
-      throw { message: (data && data.message) || `下载失败 (${res.status})` };
+      throw { message: (data && data.message) || t('fm.downloadFailedStatus', { status: res.status }) };
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -343,59 +344,59 @@ async function downloadFile(path) {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    toast('下载已开始');
+    toast(t('fm.downloadStarted'));
   } catch (err) {
-    toast(`下载失败：${err.message || ''}`, 'error');
+    toast(t('fm.downloadFailed', { msg: err.message || '' }), 'error');
   }
 }
 
 async function onMkdir() {
-  const name = await promptText('新建文件夹', '文件夹名称', '');
+  const name = await promptText(t('fm.mkdirTitle'), t('fm.mkdirLabel'), '');
   if (!name) return;
   const target = joinPath(currentDir, name);
   try {
     await api.post(`/api/files/mkdir?path=${encodeURIComponent(target)}`);
-    toast('文件夹已创建');
+    toast(t('fm.mkdirDone'));
     invalidateTree(currentDir);
     await refreshTree();
     await loadListing(currentDir);
   } catch (err) {
-    toast(`创建失败：${err.message || ''}`, 'error');
+    toast(t('fm.mkdirFailed', { msg: err.message || '' }), 'error');
   }
 }
 
 async function onRename(path) {
   const oldName = path.split('/').filter(Boolean).pop() || '';
-  const newName = await promptText('重命名', '新名称', oldName);
+  const newName = await promptText(t('fm.renameTitle'), t('fm.renameLabel'), oldName);
   if (!newName || newName === oldName) return;
   const parent = path.split('/').filter(Boolean).slice(0, -1).join('/') || '/';
   const target = joinPath(parent, newName);
   try {
     await api.post(`/api/files/rename?from=${encodeURIComponent(path)}&to=${encodeURIComponent(target)}`);
-    toast('已重命名');
+    toast(t('fm.renameDone'));
     invalidateTree(parent);
     await refreshTree();
     await loadListing(currentDir);
   } catch (err) {
-    toast(`重命名失败：${err.message || ''}`, 'error');
+    toast(t('fm.renameFailed', { msg: err.message || '' }), 'error');
   }
 }
 
 async function onDelete(path, isDir) {
   const name = path.split('/').filter(Boolean).pop() || path;
   const ok = await confirmDialog(
-    '删除',
-    `确定删除 ${isDir ? '文件夹' : '文件'}「${name}」？${isDir ? '此操作将递归删除其所有内容。' : ''}`,
+    t('fm.deleteTitle'),
+    isDir ? t('fm.deleteConfirmDir', { name }) : t('fm.deleteConfirmFile', { name }),
   );
   if (!ok) return;
   try {
     await api.del(`/api/files?path=${encodeURIComponent(path)}`);
-    toast('已删除');
+    toast(t('fm.deleteDone'));
     invalidateTree(path);
     await refreshTree();
     await loadListing(currentDir);
   } catch (err) {
-    toast(`删除失败：${err.message || ''}`, 'error');
+    toast(t('fm.deleteFailed', { msg: err.message || '' }), 'error');
   }
 }
 
@@ -404,7 +405,7 @@ async function onStat(path) {
   try {
     info = await api.get(`/api/files/stat?path=${encodeURIComponent(path)}`);
   } catch (err) {
-    toast(`读取属性失败：${err.message || ''}`, 'error');
+    toast(t('fm.statReadFailed', { msg: err.message || '' }), 'error');
     return;
   }
   showStatModal(info);
@@ -413,26 +414,26 @@ async function onStat(path) {
 function showStatModal(info) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  const kind = info.is_dir ? '文件夹' : info.is_symlink ? '符号链接' : '文件';
+  const kind = info.is_dir ? t('fm.kindDir') : info.is_symlink ? t('fm.kindSymlink') : t('fm.kindFile');
   overlay.innerHTML = `
     <div class="modal" style="max-width:560px;">
-      <h3>属性 — ${esc(info.name)}</h3>
+      <h3>${t('fm.statTitle', { name: esc(info.name) })}</h3>
       <div class="fm-stat-grid">
-        ${statRow('路径', info.path, 'mono')}
-        ${statRow('类型', kind)}
-        ${info.symlink_target ? statRow('指向', info.symlink_target, 'mono') : ''}
-        ${statRow('大小', info.is_dir ? '—' : `${fmtBytes(info.size)} (${info.size.toLocaleString()} B)`, 'mono')}
-        ${statRow('权限', info.permissions, 'mono')}
-        ${statRow('所有者', `UID ${info.uid} / GID ${info.gid}`, 'mono')}
-        ${statRow('inode', `${info.inode}`, 'mono')}
-        ${statRow('硬链接', `${info.nlink}`, 'mono')}
-        ${statRow('修改时间', fmtDate(info.modified))}
-        ${statRow('访问时间', fmtDate(info.accessed))}
-        ${statRow('变更时间', fmtDate(info.changed))}
-        ${statRow('占用块', info.blocks ? `${fmtBytes(info.blocks * 512)}` : '—', 'mono')}
+        ${statRow(t('fm.statPath'), info.path, 'mono')}
+        ${statRow(t('fm.statKind'), kind)}
+        ${info.symlink_target ? statRow(t('fm.statTarget'), info.symlink_target, 'mono') : ''}
+        ${statRow(t('fm.statSize'), info.is_dir ? '—' : t('fm.statSizeVal', { fmt: fmtBytes(info.size), bytes: info.size.toLocaleString() }), 'mono')}
+        ${statRow(t('fm.statPermissions'), info.permissions, 'mono')}
+        ${statRow(t('fm.statOwner'), t('fm.statOwnerVal', { uid: info.uid, gid: info.gid }), 'mono')}
+        ${statRow(t('fm.statInode'), `${info.inode}`, 'mono')}
+        ${statRow(t('fm.statNlink'), `${info.nlink}`, 'mono')}
+        ${statRow(t('fm.statModified'), fmtDate(info.modified))}
+        ${statRow(t('fm.statAccessed'), fmtDate(info.accessed))}
+        ${statRow(t('fm.statChanged'), fmtDate(info.changed))}
+        ${statRow(t('fm.statBlocks'), info.blocks ? `${fmtBytes(info.blocks * 512)}` : '—', 'mono')}
       </div>
       <div class="modal-actions">
-        <button class="btn-secondary" data-act="close">关闭</button>
+        <button class="btn-secondary" data-act="close">${t('common.close')}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -463,8 +464,8 @@ function promptText(title, label, defaultVal) {
           <input id="fm-prompt-input" type="text" value="${esc(defaultVal)}" />
         </div>
         <div class="modal-actions">
-          <button class="btn-secondary" data-act="cancel">取消</button>
-          <button data-act="ok">确定</button>
+          <button class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
+          <button data-act="ok">${t('common.ok')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);

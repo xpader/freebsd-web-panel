@@ -2,18 +2,19 @@
 
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
+import { t, getLocale } from '../i18n/index.js';
 
 export async function renderAudit(app) {
   renderLayout(app, '/audit', `
     <div class="page-header">
-      <h1>审计日志</h1>
-      <p>最近 200 条操作记录</p>
+      <h1>${t('audit.title')}</h1>
+      <p>${t('audit.subtitle')}</p>
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>时间</th><th>用户</th><th>方法</th><th>路径</th><th>状态</th><th>详情</th></tr></thead>
+        <thead><tr><th>${t('audit.colTime')}</th><th>${t('audit.colUser')}</th><th>${t('audit.colMethod')}</th><th>${t('audit.colPath')}</th><th>${t('audit.colStatus')}</th><th>${t('audit.colDetail')}</th></tr></thead>
         <tbody id="audit-tbody">
-          <tr><td colspan="6" class="empty"><span class="spinner"></span> 加载中…</td></tr>
+          <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>
       </table>
     </div>
@@ -23,7 +24,7 @@ export async function renderAudit(app) {
   try {
     const res = await api.get('/api/audit?limit=200');
     if (!res.entries || !res.entries.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty">暂无日志</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('audit.noLogs')}</td></tr>`;
       return;
     }
     tbody.innerHTML = res.entries.map(e => `
@@ -36,12 +37,12 @@ export async function renderAudit(app) {
         <td class="text-dim">${esc(e.detail || '')}</td>
       </tr>`).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">加载失败：${esc(err.message || '')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</td></tr>`;
   }
 }
 
 function fmtTime(ts) {
-  return new Date(ts * 1000).toLocaleString('zh-CN');
+  return new Date(ts * 1000).toLocaleString(getLocale());
 }
 function methodBadge(m) {
   if (m === 'GET') return 'badge-dim';

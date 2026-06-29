@@ -18,6 +18,7 @@
 | [09-zfs.md](09-zfs.md) | ZFS 管理：Zpool/数据集/快照 + 三级菜单 | `handlers/zfs.rs`, `web/js/pages/zfs.js` |
 | [10-file-manager.md](10-file-manager.md) | 文件管理器：目录树 + 列表/网格、上传/下载/重命名/删除/属性 | `handlers/files.rs`, `web/js/pages/files.js` |
 | [11-accounts.md](11-accounts.md) | 系统用户与用户组：解析 /etc/passwd、/etc/group 的只读列表 | `handlers/accounts.rs`, `web/js/pages/accounts.js` |
+| [12-i18n.md](12-i18n.md) | 国际化：i18next 多语言（中文/英文）、顶栏国旗切换 | `web/js/i18n/`, `web/js/ui/layout.js`, `web/vendor/i18next.min.js` |
 
 ## 文档规范
 

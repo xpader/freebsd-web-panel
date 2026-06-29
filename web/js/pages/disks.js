@@ -3,15 +3,16 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { t } from '../i18n/index.js';
 
 export async function renderDisks(app) {
   renderLayout(app, '/filesystem/disks', `
     <div class="page-header">
-      <h1>磁盘</h1>
-      <p>各磁盘的详细参数与分区表</p>
+      <h1>${t('disks.title')}</h1>
+      <p>${t('disks.subtitle')}</p>
     </div>
     <div id="disks-content">
-      <div class="empty"><span class="spinner"></span> 加载中…</div>
+      <div class="empty"><span class="spinner"></span> ${t('common.loading')}</div>
     </div>
   `);
 
@@ -20,12 +21,12 @@ export async function renderDisks(app) {
   try {
     disks = await api.get('/api/filesystem/disks');
   } catch (err) {
-    el.innerHTML = `<div class="empty">加载失败：${esc(err.message || '')}</div>`;
+    el.innerHTML = `<div class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</div>`;
     return;
   }
 
   if (!disks.length) {
-    el.innerHTML = '<div class="card empty">无磁盘数据</div>';
+    el.innerHTML = `<div class="card empty">${t('fs.noDisks')}</div>`;
     return;
   }
 
@@ -36,19 +37,19 @@ export async function renderDisks(app) {
       const uuid = node.getAttribute('data-uuid');
       try {
         await navigator.clipboard.writeText(uuid);
-        toast('已复制 UUID');
+        toast(t('disks.uuidCopied'));
       } catch {
-        toast('复制失败', 'error');
+        toast(t('disks.copyFailed'), 'error');
       }
     });
   });
 }
 
 function diskCard(d) {
-  const rot = d.rotation_rate === 'unknown' ? 'SSD?' : `${esc(d.rotation_rate)} rpm`;
+  const rot = d.rotation_rate === 'unknown' ? t('fs.ssdUnknown') : `${esc(d.rotation_rate)} rpm`;
   const schemeBadge = d.scheme
     ? `<span class="badge badge-dim">${esc(d.scheme)}</span>`
-    : '<span class="badge badge-dim">无分区表</span>';
+    : `<span class="badge badge-dim">${t('disks.noPartitionTable')}</span>`;
   const stateBadge = d.state
     ? `<span class="badge ${d.state === 'OK' ? 'badge-success' : 'badge-warn'}">${esc(d.state)}</span>`
     : '';
@@ -67,7 +68,7 @@ function diskCard(d) {
             <td class="mono text-dim">${p.end}</td>
             <td class="mono text-dim" style="font-size:11px;"><span class="uuid-tip" data-uuid="${esc(p.rawuuid)}">${esc(p.rawuuid).slice(0, 8)}…</span></td>
           </tr>`).join('')
-    : `<tr><td colspan="7" class="empty">无分区</td></tr>`;
+    : `<tr><td colspan="7" class="empty">${t('disks.noPartitions')}</td></tr>`;
 
   const usedBytes = d.partitions.reduce((s, p) => s + p.mediasize_bytes, 0);
   const freeBytes = d.size_bytes > usedBytes ? d.size_bytes - usedBytes : 0;
@@ -79,7 +80,7 @@ function diskCard(d) {
         <div class="flex" style="align-items:center;gap:8px;">
           <span class="mono" style="font-size:18px;font-weight:700;">${esc(d.name)}</span>
           <span class="text-dim">·</span>
-          <span>${esc(d.descr) || '<span class="text-dim">未知型号</span>'}</span>
+          <span>${esc(d.descr) || `<span class="text-dim">${t('disks.unknownModel')}</span>`}</span>
         </div>
         <div class="flex" style="align-items:center;gap:8px;">
           ${schemeBadge}
@@ -89,25 +90,25 @@ function diskCard(d) {
       </div>
 
       <div class="stat-grid" style="margin:16px 18px;">
-        ${kv('设备路径', `/dev/${d.name}`, 'mono')}
-        ${kv('型号', d.descr || '—')}
-        ${kv('总容量', fmtBytes(d.size_bytes), 'mono')}
-        ${kv('扇区大小', d.sectorsize ? `${d.sectorsize} B` : '—', 'mono')}
-        ${kv('序列号 (ident)', d.ident || '—', 'mono')}
-        ${kv('LUN ID', d.lunid || '—', 'mono')}
-        ${kv('转速', rot)}
-        ${kv('访问模式', d.mode || '—', 'mono')}
-        ${kv('固件扇区', d.fwsectors ? `${d.fwsectors}` : '—', 'mono')}
-        ${kv('固件磁头', d.fwheads ? `${d.fwheads}` : '—', 'mono')}
-        ${d.scheme ? kv('分区方案', d.scheme) : ''}
-        ${d.entries != null ? kv('GPT 条目上限', `${d.entries}`) : ''}
-        ${d.first != null ? kv('起始扇区', `${d.first}`, 'mono') : ''}
-        ${d.last != null ? kv('结束扇区', `${d.last}`, 'mono') : ''}
+        ${kv(t('disks.devicePath'), `/dev/${d.name}`, 'mono')}
+        ${kv(t('disks.model'), d.descr || '—')}
+        ${kv(t('disks.totalSize'), fmtBytes(d.size_bytes), 'mono')}
+        ${kv(t('disks.sectorSize'), d.sectorsize ? `${d.sectorsize} B` : '—', 'mono')}
+        ${kv(t('disks.serialIdent'), d.ident || '—', 'mono')}
+        ${kv(t('disks.lunId'), d.lunid || '—', 'mono')}
+        ${kv(t('disks.rpm'), rot)}
+        ${kv(t('disks.accessMode'), d.mode || '—', 'mono')}
+        ${kv(t('disks.fwSectors'), d.fwsectors ? `${d.fwsectors}` : '—', 'mono')}
+        ${kv(t('disks.fwHeads'), d.fwheads ? `${d.fwheads}` : '—', 'mono')}
+        ${d.scheme ? kv(t('disks.partScheme'), d.scheme) : ''}
+        ${d.entries != null ? kv(t('disks.gptEntries'), `${d.entries}`) : ''}
+        ${d.first != null ? kv(t('disks.firstSector'), `${d.first}`, 'mono') : ''}
+        ${d.last != null ? kv(t('disks.lastSector'), `${d.last}`, 'mono') : ''}
       </div>
 
       <div style="padding:0 18px 16px;">
         <div class="flex" style="justify-content:space-between;font-size:12px;margin-bottom:6px;">
-          <span class="text-dim">已分配 ${fmtBytes(usedBytes)} · 空闲 ${fmtBytes(freeBytes)}</span>
+          <span class="text-dim">${t('disks.allocated', { used: fmtBytes(usedBytes), free: fmtBytes(freeBytes) })}</span>
           <span class="mono text-dim">${usedPct.toFixed(0)}%</span>
         </div>
         <div class="bar-wrap">
@@ -116,9 +117,9 @@ function diskCard(d) {
       </div>
 
       <div style="padding:0 18px 18px;">
-        <h2 style="font-size:14px;margin:8px 0 8px;">分区表 (${d.partitions.length})</h2>
+        <h2 style="font-size:14px;margin:8px 0 8px;">${t('disks.partTable', { n: d.partitions.length })}</h2>
         <table>
-          <thead><tr><th>设备</th><th>类型</th><th>标签</th><th>大小</th><th>起始扇区</th><th>结束扇区</th><th>UUID</th></tr></thead>
+          <thead><tr><th>${t('common.device')}</th><th>${t('common.type')}</th><th>${t('disks.colLabel')}</th><th>${t('common.size')}</th><th>${t('disks.colStartSector')}</th><th>${t('disks.colEndSector')}</th><th>${t('disks.colUuid')}</th></tr></thead>
           <tbody>${partRows}</tbody>
         </table>
       </div>

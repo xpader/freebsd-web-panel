@@ -2,17 +2,18 @@
 
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
+import { t, getLocale } from '../i18n/index.js';
 
 let pollTimer = null;
 
 export async function renderDashboard(app) {
   renderLayout(app, '/dashboard', `
     <div class="page-header">
-      <h1>仪表盘</h1>
-      <p>系统概览与实时资源状态</p>
+      <h1>${t('dash.title')}</h1>
+      <p>${t('dash.subtitle')}</p>
     </div>
     <div id="dash-content">
-      <div class="empty"><span class="spinner"></span> 加载中…</div>
+      <div class="empty"><span class="spinner"></span> ${t('common.loading')}</div>
     </div>
   `);
 
@@ -21,51 +22,51 @@ export async function renderDashboard(app) {
   try {
     info = await api.get('/api/system/info');
   } catch (err) {
-    el.innerHTML = `<div class="empty">加载失败：${esc(err.message || '')}</div>`;
+    el.innerHTML = `<div class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</div>`;
     return;
   }
 
   el.innerHTML = `
     <div class="stat-grid">
-      <div class="card"><div class="card-title">主机名</div><div class="card-value sm">${esc(info.hostname)}</div></div>
-      <div class="card"><div class="card-title">操作系统</div><div class="card-value sm">${esc(info.os_release)}</div></div>
-      <div class="card"><div class="card-title">CPU</div><div class="card-value sm">${info.cpu_cores} 核 · ${esc(info.cpu_model)}</div></div>
-      <div class="card"><div class="card-title">总内存</div><div class="card-value sm">${fmtBytes(info.memory_total)}</div></div>
-      <div class="card"><div class="card-title">运行时间</div><div class="card-value sm" id="m-uptime">—</div></div>
-      <div class="card"><div class="card-title">系统负载</div><div class="card-value sm" id="m-loadavg">—</div></div>
+      <div class="card"><div class="card-title">${t('dash.hostname')}</div><div class="card-value sm">${esc(info.hostname)}</div></div>
+      <div class="card"><div class="card-title">${t('dash.os')}</div><div class="card-value sm">${esc(info.os_release)}</div></div>
+      <div class="card"><div class="card-title">CPU</div><div class="card-value sm">${t('dash.cpuCores', { n: info.cpu_cores, model: esc(info.cpu_model) })}</div></div>
+      <div class="card"><div class="card-title">${t('dash.totalMemory')}</div><div class="card-value sm">${fmtBytes(info.memory_total)}</div></div>
+      <div class="card"><div class="card-title">${t('dash.uptime')}</div><div class="card-value sm" id="m-uptime">—</div></div>
+      <div class="card"><div class="card-title">${t('dash.loadavg')}</div><div class="card-value sm" id="m-loadavg">—</div></div>
     </div>
 
     <div class="metric-grid">
       <div class="card">
-        <div class="card-title">CPU 使用率 <span id="m-cpu-freq" class="text-dim mono" style="font-size:11px;float:right;"></span></div>
+        <div class="card-title">${t('dash.cpuUsage')} <span id="m-cpu-freq" class="text-dim mono" style="font-size:11px;float:right;"></span></div>
         <div class="big-pct" id="m-cpu">—</div>
         <div class="bar-wrap"><div class="bar bar-cpu" id="m-cpu-bar"></div></div>
         <div id="m-cpu-cores" class="core-bars"></div>
       </div>
       <div class="card">
-        <div class="card-title">内存使用</div>
+        <div class="card-title">${t('dash.memoryUsage')}</div>
         <div class="big-pct" id="m-mem">—</div>
         <div class="bar-wrap"><div class="bar bar-mem" id="m-mem-bar"></div></div>
         <div class="metric-detail" id="m-mem-detail">—</div>
       </div>
       <div class="card">
-        <div class="card-title">Swap 使用</div>
+        <div class="card-title">${t('dash.swapUsage')}</div>
         <div class="big-pct" id="m-swap">—</div>
         <div class="bar-wrap"><div class="bar bar-swap" id="m-swap-bar"></div></div>
         <div class="metric-detail" id="m-swap-detail">—</div>
       </div>
       <div class="card">
-        <div class="card-title">CPU 温度</div>
-        <div id="m-temps"><div class="text-dim">无数据</div></div>
+        <div class="card-title">${t('dash.cpuTemp')}</div>
+        <div id="m-temps"><div class="text-dim">${t('dash.noData')}</div></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">模块状态</div>
+      <div class="card-title">${t('common.moduleStatus')}</div>
       <table>
-        <thead><tr><th>模块</th><th>状态</th><th>说明</th></tr></thead>
+        <thead><tr><th>${t('dash.module')}</th><th>${t('dash.status')}</th><th>${t('dash.note')}</th></tr></thead>
         <tbody>
-          ${MODULES.map(m => `<tr><td><a href="#${m.path}">${m.label}</a></td><td><span class="badge ${m.badge}">${m.status}</span></td><td class="text-dim">${m.note}</td></tr>`).join('')}
+          ${MODULES.map(m => `<tr><td><a href="#${m.path}">${t(m.labelKey)}</a></td><td><span class="badge ${m.badge}">${t('status.planned')}</span></td><td class="text-dim">${t(m.noteKey)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>`;
@@ -100,7 +101,7 @@ async function refreshMetrics() {
 
   setText('m-mem', `${m.memory.usage.toFixed(1)}%`);
   setBar('m-mem-bar', m.memory.usage);
-  setText('m-mem-detail', `${fmtBytes(m.memory.used)} / ${fmtBytes(m.memory.total)} · wired ${fmtBytes(m.memory.wired)}`);
+  setText('m-mem-detail', t('dash.memoryDetail', { used: fmtBytes(m.memory.used), total: fmtBytes(m.memory.total), wired: fmtBytes(m.memory.wired) }));
 
   setText('m-swap', `${m.swap.usage.toFixed(1)}%`);
   setBar('m-swap-bar', m.swap.usage);
@@ -114,7 +115,7 @@ async function refreshMetrics() {
         return `<div class="temp-row"><span>${esc(t.source)}</span><span class="badge ${cls}">${t.value.toFixed(1)}°C</span></div>`;
       }).join('');
     } else {
-      tempsEl.innerHTML = `<div class="text-dim">无传感器数据</div>`;
+      tempsEl.innerHTML = `<div class="text-dim">${t('dash.noSensorData')}</div>`;
     }
   }
 }
@@ -139,7 +140,7 @@ function fmtUptime(s) {
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
-  return d > 0 ? `${d}天 ${h}小时 ${m}分` : `${h}小时 ${m}分`;
+  return d > 0 ? t('dash.uptimeFmtDHM', { d, h, m }) : t('dash.uptimeFmtHM', { h, m });
 }
 function esc(s) {
   const d = document.createElement('div');
@@ -148,12 +149,12 @@ function esc(s) {
 }
 
 const MODULES = [
-  { path: '/sysctl', label: 'Sysctl 系统参数', status: '计划中', badge: 'badge-warn', note: '动态内核参数管理' },
-  { path: '/rcconf', label: 'RC 配置', status: '计划中', badge: 'badge-warn', note: 'rc.conf 服务与系统配置' },
-  { path: '/network', label: '网络', status: '计划中', badge: 'badge-warn', note: '网络接口与路由' },
-  { path: '/services', label: '服务', status: '计划中', badge: 'badge-warn', note: 'rc.d 服务控制' },
-  { path: '/pf', label: '防火墙 (pf)', status: '计划中', badge: 'badge-warn', note: 'PF 规则与状态' },
-  { path: '/jails', label: 'Jail 容器', status: '计划中', badge: 'badge-warn', note: 'libjail 原生管理' },
-  { path: '/bhyve', label: 'Bhyve 虚拟机', status: '计划中', badge: 'badge-warn', note: 'vm-bhyve 封装' },
-  { path: '/zfs', label: 'ZFS 文件系统', status: '计划中', badge: 'badge-warn', note: 'Pool/Dataset/快照' },
+  { path: '/sysctl', labelKey: 'mod.sysctl.label', noteKey: 'mod.sysctl.note', badge: 'badge-warn' },
+  { path: '/rcconf', labelKey: 'mod.rcconf.label', noteKey: 'mod.rcconf.note', badge: 'badge-warn' },
+  { path: '/network', labelKey: 'mod.network.label', noteKey: 'mod.network.note', badge: 'badge-warn' },
+  { path: '/services', labelKey: 'mod.services.label', noteKey: 'mod.services.note', badge: 'badge-warn' },
+  { path: '/pf', labelKey: 'mod.pf.label', noteKey: 'mod.pf.note', badge: 'badge-warn' },
+  { path: '/jails', labelKey: 'mod.jails.label', noteKey: 'mod.jails.note', badge: 'badge-warn' },
+  { path: '/bhyve', labelKey: 'mod.bhyve.label', noteKey: 'mod.bhyve.note', badge: 'badge-warn' },
+  { path: '/zfs', labelKey: 'mod.zfs.label', noteKey: 'mod.zfs.note', badge: 'badge-warn' },
 ];
