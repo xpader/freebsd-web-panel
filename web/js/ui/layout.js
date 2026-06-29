@@ -11,28 +11,28 @@ const MENU = [
   {
     key: 'overview',
     labelKey: 'nav.overview',
-    icon: '◎',
+    icon: 'fa-solid fa-gauge-high',
     default: '/dashboard',
     items: [
-      { path: '/dashboard', labelKey: 'nav.dashboard', icon: '◎' },
+      { path: '/dashboard', labelKey: 'nav.dashboard', icon: 'fa-solid fa-gauge-high' },
     ],
   },
   {
     key: 'config',
     labelKey: 'nav.config',
-    icon: '⚙',
+    icon: 'fa-solid fa-sliders',
     default: '/sysctl',
     items: [
-      { path: '/sysctl', labelKey: 'nav.sysctl', icon: '⚙' },
-      { path: '/rcconf', labelKey: 'nav.rcconf', icon: '☰' },
-      { path: '/services', labelKey: 'nav.services', icon: '▶' },
+      { path: '/sysctl', labelKey: 'nav.sysctl', icon: 'fa-solid fa-microchip' },
+      { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
+      { path: '/services', labelKey: 'nav.services', icon: 'fa-solid fa-play' },
       {
         path: '/accounts/users',
         labelKey: 'nav.accounts',
-        icon: '☻',
+        icon: 'fa-solid fa-users',
         children: [
-          { path: '/accounts/users', labelKey: 'nav.sysUsers', icon: '☻' },
-          { path: '/accounts/groups', labelKey: 'nav.sysGroups', icon: '☰' },
+          { path: '/accounts/users', labelKey: 'nav.sysUsers', icon: 'fa-solid fa-user' },
+          { path: '/accounts/groups', labelKey: 'nav.sysGroups', icon: 'fa-solid fa-users-rectangle' },
         ],
       },
     ],
@@ -40,30 +40,30 @@ const MENU = [
   {
     key: 'network',
     labelKey: 'nav.network',
-    icon: '⇄',
+    icon: 'fa-solid fa-network-wired',
     default: '/network',
     items: [
-      { path: '/network', labelKey: 'nav.networkIf', icon: '⇄' },
-      { path: '/pf', labelKey: 'nav.pf', icon: '🛡' },
+      { path: '/network', labelKey: 'nav.networkIf', icon: 'fa-solid fa-ethernet' },
+      { path: '/pf', labelKey: 'nav.pf', icon: 'fa-solid fa-shield-halved' },
     ],
   },
   {
     key: 'filesystem',
     labelKey: 'nav.filesystem',
-    icon: '◈',
+    icon: 'fa-solid fa-hard-drive',
     default: '/filesystem',
     items: [
-      { path: '/filesystem', labelKey: 'nav.fsOverview', icon: '◇' },
-      { path: '/filesystem/disks', labelKey: 'nav.disks', icon: '▤' },
-      { path: '/filesystem/files', labelKey: 'nav.fileManager', icon: '📁' },
+      { path: '/filesystem', labelKey: 'nav.fsOverview', icon: 'fa-solid fa-chart-pie' },
+      { path: '/filesystem/disks', labelKey: 'nav.disks', icon: 'fa-solid fa-hard-drive' },
+      { path: '/filesystem/files', labelKey: 'nav.fileManager', icon: 'fa-solid fa-folder-open' },
       {
         path: '/zfs',
         labelKey: 'nav.zfs',
-        icon: '◈',
+        icon: 'fa-solid fa-database',
         children: [
-          { path: '/zfs/pools', labelKey: 'nav.zpool', icon: '◉' },
-          { path: '/zfs/datasets', labelKey: 'nav.datasets', icon: '◇' },
-          { path: '/zfs/snapshots', labelKey: 'nav.snapshots', icon: '⎙' },
+          { path: '/zfs/pools', labelKey: 'nav.zpool', icon: 'fa-solid fa-circle-nodes' },
+          { path: '/zfs/datasets', labelKey: 'nav.datasets', icon: 'fa-solid fa-layer-group' },
+          { path: '/zfs/snapshots', labelKey: 'nav.snapshots', icon: 'fa-solid fa-camera' },
         ],
       },
     ],
@@ -71,30 +71,30 @@ const MENU = [
   {
     key: 'virtualization',
     labelKey: 'nav.virtualization',
-    icon: '▣',
+    icon: 'fa-solid fa-cubes',
     default: '/jails',
     items: [
-      { path: '/jails', labelKey: 'nav.jails', icon: '▣' },
-      { path: '/bhyve', labelKey: 'nav.bhyve', icon: '▢' },
+      { path: '/jails', labelKey: 'nav.jails', icon: 'fa-solid fa-cube' },
+      { path: '/bhyve', labelKey: 'nav.bhyve', icon: 'fa-regular fa-square' },
     ],
   },
   {
     key: 'monitor',
     labelKey: 'nav.monitor',
-    icon: '📊',
+    icon: 'fa-solid fa-chart-line',
     default: '/monitor',
     items: [
-      { path: '/monitor', labelKey: 'nav.monitorCpu', icon: '📊' },
-      { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: '▦' },
-      { path: '/monitor/temp', labelKey: 'nav.monitorTemp', icon: '🌡' },
+      { path: '/monitor', labelKey: 'nav.monitorCpu', icon: 'fa-solid fa-chart-line' },
+      { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: 'fa-solid fa-memory' },
+      { path: '/monitor/temp', labelKey: 'nav.monitorTemp', icon: 'fa-solid fa-temperature-half' },
     ],
   },
 ];
 
 // Settings menu (right-side dropdown) — panel self-management.
 const SETTINGS = [
-  { path: '/users', labelKey: 'topbar.panelUsers', icon: '☻' },
-  { path: '/audit', labelKey: 'topbar.auditLog', icon: '☰' },
+  { path: '/users', labelKey: 'topbar.panelUsers', icon: 'fa-solid fa-user-gear' },
+  { path: '/audit', labelKey: 'topbar.auditLog', icon: 'fa-solid fa-list-ul' },
 ];
 
 // Determine which top-level group a path belongs to.
@@ -147,7 +147,7 @@ export function renderLayout(app, currentPath, pageContent) {
   // Top menu tabs.
   const topHtml = MENU.map((g) => `
     <a href="#${g.default}" class="topnav-tab ${g.key === activeGroup ? 'active' : ''}">
-      <span class="icon">${g.icon}</span>${t(g.labelKey)}
+      <span class="icon"><i class="${g.icon}"></i></span>${t(g.labelKey)}
     </a>`).join('');
 
   // Sidebar items — supports expandable children.
@@ -177,22 +177,22 @@ export function renderLayout(app, currentPath, pageContent) {
         </div>
         <div class="settings-menu" id="settings-menu">
           <button class="settings-btn ${activeGroup === 'settings' ? 'active' : ''}" id="settings-toggle" aria-haspopup="true" aria-expanded="false">
-            <span class="icon">⚙</span>${t('topbar.settings')}
+            <span class="icon"><i class="fa-solid fa-gear"></i></span>${t('topbar.settings')}
           </button>
           <div class="settings-dropdown">
             ${SETTINGS.map((s) => `
               <a href="#${s.path}" class="${currentPath === s.path ? 'active' : ''}">
-                <span class="icon">${s.icon}</span>${t(s.labelKey)}
+                <span class="icon"><i class="${s.icon}"></i></span>${t(s.labelKey)}
               </a>`).join('')}
           </div>
         </div>
         <div class="settings-menu" id="user-menu">
           <button class="user-chip" id="nav-user" aria-haspopup="true" aria-expanded="false">
-            <span class="icon">👤</span><span class="user-name">…</span>
+            <span class="icon"><i class="fa-solid fa-circle-user"></i></span><span class="user-name">…</span>
           </button>
           <div class="settings-dropdown">
             <a href="#" id="nav-logout">
-              <span class="icon">⏻</span>${t('topbar.logout')}
+              <span class="icon"><i class="fa-solid fa-power-off"></i></span>${t('topbar.logout')}
             </a>
           </div>
         </div>
@@ -296,15 +296,15 @@ function renderSidebarItem(item, currentPath) {
       .map(
         (c) => `
         <a href="#${c.path}" class="sub-item ${currentPath === c.path ? 'active' : ''}">
-          <span class="icon">${c.icon}</span>${t(c.labelKey)}
+          <span class="icon"><i class="${c.icon}"></i></span>${t(c.labelKey)}
         </a>`,
       )
       .join('');
     return `
       <div class="sub-group ${hasActiveChild ? 'expanded' : ''}">
         <div class="sub-group-header">
-          <span class="icon">${item.icon}</span>${t(item.labelKey)}
-          <span class="sub-arrow">${hasActiveChild ? '▾' : '▸'}</span>
+          <span class="icon"><i class="${item.icon}"></i></span>${t(item.labelKey)}
+          <span class="sub-arrow">${hasActiveChild ? '<i class="fa-solid fa-caret-down"></i>' : '<i class="fa-solid fa-caret-right"></i>'}</span>
         </div>
         <div class="sub-items">${childHtml}</div>
       </div>`;
@@ -313,6 +313,6 @@ function renderSidebarItem(item, currentPath) {
   // Direct link item.
   return `
     <a href="#${item.path}" class="${currentPath === item.path ? 'active' : ''}">
-      <span class="icon">${item.icon}</span>${t(item.labelKey)}
+      <span class="icon"><i class="${item.icon}"></i></span>${t(item.labelKey)}
     </a>`;
 }

@@ -207,7 +207,7 @@ async function loadDatasets() {
     const rows = [];
     function walk(ds, depth) {
       const originHtml = ds.origin
-        ? `<div class="text-dim" style="font-size:11px;margin-top:2px;">${t('zfs.clonedFrom')} <span class="mono" style="color:var(--accent);">${esc(ds.origin)}</span></div>`
+        ? `<div class="text-dim" style="font-size:11px;margin-top:2px;"><i class="fa-solid fa-code-branch"></i> ${t('zfs.clonedFrom')} <span class="mono" style="color:var(--accent);">${esc(ds.origin)}</span></div>`
         : '';
       rows.push(`
         <tr>

@@ -24,24 +24,30 @@ function token() {
 // Icon by type + extension. Folders get a folder glyph, symlinks an arrow,
 // files get an extension-based icon with a sensible default.
 function fileIcon(e) {
-  if (e.is_dir) return '📁';
-  if (e.is_symlink) return '↪️';
+  if (e.is_dir) return '<i class="fa-solid fa-folder"></i>';
+  if (e.is_symlink) return '<i class="fa-solid fa-link"></i>';
   const ext = (e.name.split('.').pop() || '').toLowerCase();
   const map = {
-    txt: '📄', log: '📜', md: '📝', conf: '⚙️', json: '🔧',
-    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️', bmp: '🖼️',
-    mp4: '🎬', mkv: '🎬', avi: '🎬', mov: '🎬', webm: '🎬',
-    mp3: '🎵', wav: '🎵', flac: '🎵', ogg: '🎵',
-    zip: '🗜️', gz: '🗜️', tar: '🗜️', xz: '🗜️', bz2: '🗜️', '7z': '🗜️', zst: '🗜️', iso: '💿',
-    pdf: '📕',
-    sh: '💻', py: '💻', pl: '💻', rb: '💻', js: '💻', rs: '💻', c: '💻', h: '💻',
+    txt: 'fa-regular fa-file-lines', log: 'fa-regular fa-file-lines',
+    md: 'fa-regular fa-file-lines',
+    png: 'fa-regular fa-file-image', jpg: 'fa-regular fa-file-image', jpeg: 'fa-regular fa-file-image',
+    gif: 'fa-regular fa-file-image', webp: 'fa-regular fa-file-image', svg: 'fa-regular fa-file-image', bmp: 'fa-regular fa-file-image',
+    mp4: 'fa-regular fa-file-video', mkv: 'fa-regular fa-file-video', avi: 'fa-regular fa-file-video', mov: 'fa-regular fa-file-video', webm: 'fa-regular fa-file-video',
+    mp3: 'fa-regular fa-file-audio', wav: 'fa-regular fa-file-audio', flac: 'fa-regular fa-file-audio', ogg: 'fa-regular fa-file-audio',
+    zip: 'fa-regular fa-file-zipper', gz: 'fa-regular fa-file-zipper', tar: 'fa-regular fa-file-zipper', xz: 'fa-regular fa-file-zipper', bz2: 'fa-regular fa-file-zipper', '7z': 'fa-regular fa-file-zipper', zst: 'fa-regular fa-file-zipper',
+    iso: 'fa-regular fa-file-zipper',
+    pdf: 'fa-regular fa-file-pdf',
+    sh: 'fa-regular fa-file-code', py: 'fa-regular fa-file-code', pl: 'fa-regular fa-file-code', rb: 'fa-regular fa-file-code', js: 'fa-regular fa-file-code', rs: 'fa-regular fa-file-code', c: 'fa-regular fa-file-code', h: 'fa-regular fa-file-code', json: 'fa-regular fa-file-code', conf: 'fa-regular fa-file-code',
   };
-  return map[ext] || '📄';
+  const cls = map[ext] || 'fa-regular fa-file';
+  return `<i class="${cls}"></i>`;
 }
 
 // Folder icon for the tree: root vs nested.
 function treeIcon(path) {
-  return path === ROOT ? '🗂️' : '📁';
+  return path === ROOT
+    ? '<i class="fa-solid fa-folder-tree"></i>'
+    : '<i class="fa-solid fa-folder"></i>';
 }
 
 export async function renderFiles(app) {
@@ -125,7 +131,7 @@ function treeNodeHtml(path) {
   const isExpanded = expanded.has(path);
   const loaded = treeChildren.get(path);
   const hasLoaded = loaded !== undefined;
-  const arrow = !hasLoaded ? '▸' : loaded.length > 0 ? (isExpanded ? '▾' : '▸') : '';
+  const arrow = !hasLoaded ? '<i class="fa-solid fa-caret-right"></i>' : loaded.length > 0 ? (isExpanded ? '<i class="fa-solid fa-caret-down"></i>' : '<i class="fa-solid fa-caret-right"></i>') : '';
   const children = isExpanded && hasLoaded ? loaded.map((d) => treeNodeHtml(d.path)).join('') : '';
   return `
     <div class="fm-tree-node">
@@ -178,11 +184,11 @@ function renderListing(path, entries) {
     <div class="fm-toolbar">
       <div class="fm-breadcrumb" id="fm-breadcrumb">${breadcrumbHtml(path)}</div>
       <div class="fm-actions">
-        <button class="btn-secondary btn-sm" id="fm-upload-btn">${t('fm.upload')}</button>
-        <button class="btn-secondary btn-sm" id="fm-mkdir-btn">${t('fm.mkdir')}</button>
+        <button class="btn-secondary btn-sm" id="fm-upload-btn"><i class="fa-solid fa-upload"></i> ${t('fm.upload')}</button>
+        <button class="btn-secondary btn-sm" id="fm-mkdir-btn"><i class="fa-solid fa-folder-plus"></i> ${t('fm.mkdir')}</button>
         <div class="fm-view-toggle">
-          <button class="btn-secondary btn-sm ${viewMode === 'list' ? 'active-range' : ''}" data-view="list">${t('fm.listView')}</button>
-          <button class="btn-secondary btn-sm ${viewMode === 'grid' ? 'active-range' : ''}" data-view="grid">${t('fm.gridView')}</button>
+          <button class="btn-secondary btn-sm ${viewMode === 'list' ? 'active-range' : ''}" data-view="list"><i class="fa-solid fa-list"></i> ${t('fm.listView')}</button>
+          <button class="btn-secondary btn-sm ${viewMode === 'grid' ? 'active-range' : ''}" data-view="grid"><i class="fa-solid fa-table-cells"></i> ${t('fm.gridView')}</button>
         </div>
       </div>
     </div>
@@ -240,7 +246,7 @@ function listHtml(entries) {
   if (!entries.length) return '<div class="empty">' + t('fm.emptyDir') + '</div>';
   const rows = entries.map((e) => {
     const icon = fileIcon(e);
-    const dl = e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.download')}">⤓</button>`;
+    const dl = e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.download')}"><i class="fa-solid fa-download"></i></button>`;
     return `
       <tr>
         <td class="fm-name-cell">
@@ -259,9 +265,9 @@ function listHtml(entries) {
         <td>
           <div class="fm-acts">
           ${dl}
-          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.rename')}">✎</button>
-          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.properties')}">ℹ</button>
-          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('common.delete')}">🗑</button>
+          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.rename')}"><i class="fa-solid fa-pen"></i></button>
+          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.properties')}"><i class="fa-solid fa-circle-info"></i></button>
+          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('common.delete')}"><i class="fa-solid fa-trash"></i></button>
           </div>
         </td>
       </tr>`;
@@ -284,10 +290,10 @@ function gridHtml(entries) {
         <div class="fm-grid-name" title="${esc(e.name)}">${esc(e.name)}</div>
         <div class="fm-grid-meta mono">${e.is_dir ? t('fm.folder') : fmtBytes(e.size)}</div>
         <div class="fm-grid-acts">
-          ${e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.download')}">⤓</button>`}
-          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.rename')}">✎</button>
-          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.properties')}">ℹ</button>
-          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('common.delete')}">🗑</button>
+          ${e.is_dir ? '' : `<button class="fm-act" data-act="download" data-path="${esc(e.path)}" title="${t('fm.download')}"><i class="fa-solid fa-download"></i></button>`}
+          <button class="fm-act" data-act="rename" data-path="${esc(e.path)}" title="${t('fm.rename')}"><i class="fa-solid fa-pen"></i></button>
+          <button class="fm-act" data-act="stat" data-path="${esc(e.path)}" title="${t('fm.properties')}"><i class="fa-solid fa-circle-info"></i></button>
+          <button class="fm-act fm-act-danger" data-act="delete" data-path="${esc(e.path)}" data-dir-flag="${e.is_dir ? '1' : '0'}" title="${t('common.delete')}"><i class="fa-solid fa-trash"></i></button>
         </div>
       </div>`;
   }).join('');
@@ -431,11 +437,11 @@ function showStatModal(info) {
         ${statRow(t('common.size'), info.is_dir ? '—' : t('fm.sizeVal', { fmt: fmtBytes(info.size), bytes: info.size.toLocaleString() }), 'mono')}
         <div class="fm-stat-row">
           <div class="fm-stat-label">${t('fm.permissions')}</div>
-          <div class="fm-stat-val"><span class="mono">${esc(info.permissions)}</span><button class="fm-act" data-act="chmod" style="margin-left:6px;" title="${t('fm.editPermissions')}">✎</button></div>
+          <div class="fm-stat-val"><span class="mono">${esc(info.permissions)}</span><button class="fm-act" data-act="chmod" style="margin-left:6px;" title="${t('fm.editPermissions')}"><i class="fa-solid fa-pen"></i></button></div>
         </div>
         <div class="fm-stat-row">
           <div class="fm-stat-label">${t('fm.owner')}</div>
-          <div class="fm-stat-val mono">${esc(info.user)} (${info.uid}) / ${esc(info.group)} (${info.gid})<button class="fm-act" data-act="chown" style="margin-left:6px;" title="${t('fm.editOwner')}">✎</button></div>
+          <div class="fm-stat-val mono">${esc(info.user)} (${info.uid}) / ${esc(info.group)} (${info.gid})<button class="fm-act" data-act="chown" style="margin-left:6px;" title="${t('fm.editOwner')}"><i class="fa-solid fa-pen"></i></button></div>
         </div>
         ${statRow(t('fm.inode'), `${info.inode}`, 'mono')}
         ${statRow(t('fm.hardLinks'), `${info.nlink}`, 'mono')}

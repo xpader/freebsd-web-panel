@@ -111,6 +111,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 - Chart.js 4.4.7 UMD（`web/vendor/chart.umd.min.js`）— 监控图表
 - chartjs-adapter-date-fns 3.0.0（`web/vendor/chartjs-adapter-date-fns.bundle.min.js`）— Chart.js 时间轴
+- Font Awesome 6.7.2 Free（`web/vendor/fontawesome/`）— UI 图标（导航菜单、文件管理器、操作按钮）。仅内嵌 solid + regular 两个 woff2 字子集（~180KB），CSS 中引用 brands/v4compatibility 字体的图标会优雅降级。图标通过 `<i class="fa-solid fa-xxx">` 使用。
 
 ## 已知限制
 
