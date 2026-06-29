@@ -29,7 +29,6 @@ macro_rules! status {
 }
 
 status!(sysctl, "sysctl");
-status!(rcconf, "rc.conf");
 status!(network, "network");
 status!(services, "services");
 status!(pf, "pf");

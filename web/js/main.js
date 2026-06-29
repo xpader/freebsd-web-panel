@@ -14,6 +14,7 @@ import { renderDisks } from './pages/disks.js';
 import { renderFiles } from './pages/files.js';
 import { renderZfsPools, renderZfsPoolDetail, renderZfsDatasets, renderZfsSnapshots } from './pages/zfs.js';
 import { renderSysUsers, renderSysGroups } from './pages/accounts.js';
+import { renderRcconf } from './pages/rcconf.js';
 import { renderTerminal } from './pages/terminal.js';
 
 // Auth routes.
@@ -35,7 +36,7 @@ defineRoute('/filesystem', renderFsOverview);
 defineRoute('/filesystem/disks', renderDisks);
 defineRoute('/filesystem/files', renderFiles);
 defineRoute('/sysctl', makePlannedPage({ key: 'sysctl', labelKey: 'nav.sysctl' }));
-defineRoute('/rcconf', makePlannedPage({ key: 'rcconf', labelKey: 'nav.rcconf' }));
+defineRoute('/rcconf', renderRcconf);
 defineRoute('/network', makePlannedPage({ key: 'network', labelKey: 'common.network' }));
 defineRoute('/services', makePlannedPage({ key: 'services', labelKey: 'nav.services' }));
 // System accounts routes.

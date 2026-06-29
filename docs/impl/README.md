@@ -21,6 +21,7 @@
 | [12-i18n.md](12-i18n.md) | 国际化：i18next 多语言（中文/英文）、顶栏国旗切换 | `web/js/i18n/`, `web/js/ui/layout.js`, `web/vendor/i18next.min.js` |
 | [13-sysinfo.md](13-sysinfo.md) | sysctl(3) 共享读取器：CPU/内存/温度/负载（替代子进程） | `src/sysinfo.rs` |
 | [14-terminal.md](14-terminal.md) | Web 终端：WebSocket ↔ FreeBSD PTY（xterm.js 前端，root 登录 shell） | `src/terminal.rs`, `web/js/pages/terminal.js`, `web/vendor/xterm/` |
+| [15-rcconf.md](15-rcconf.md) | RC 配置：列出/新增/修改/删除 rc.conf 变量（sysrc） | `handlers/rcconf.rs`, `web/js/pages/rcconf.js` |
 
 ## 文档规范
 

@@ -276,7 +276,7 @@ window.__fwpDsProps = async (name) => {
       <h3>${t('zfs.propsTitle', { name: esc(name) })}</h3>
       <div style="max-height:400px;overflow-y:auto;">
         <table style="font-size:12px;">
-          <thead><tr><th>${t('common.name')}</th><th>${t('zfs.value')}</th><th>${t('zfs.source')}</th></tr></thead>
+          <thead><tr><th>${t('common.name')}</th><th>${t('common.value')}</th><th>${t('zfs.source')}</th></tr></thead>
           <tbody>
             ${props.map(p => `<tr><td class="mono">${esc(p.name)}</td><td class="mono">${esc(p.value)}</td><td class="text-dim mono">${esc(p.source)}</td></tr>`).join('')}
           </tbody>

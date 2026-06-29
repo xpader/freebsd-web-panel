@@ -40,7 +40,9 @@ pub fn build(state: AppState) -> Router {
         .route("/api/accounts/groups", get(handlers::accounts::list_groups))
         // --- module stubs (planned) ---
         .route("/api/sysctl", get(handlers::mod_stubs::sysctl))
-        .route("/api/rcconf", get(handlers::mod_stubs::rcconf))
+        // --- rc.conf (sysrc) ---
+        .route("/api/rcconf", get(handlers::rcconf::list).put(handlers::rcconf::set))
+        .route("/api/rcconf", delete(handlers::rcconf::delete))
         .route("/api/network", get(handlers::mod_stubs::network))
         .route("/api/services", get(handlers::mod_stubs::services))
         .route("/api/pf", get(handlers::mod_stubs::pf))

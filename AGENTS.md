@@ -114,6 +114,7 @@ rc.d/fwp                  # FreeBSD rc.d 启动脚本
 - **API 调用**：用 `js/api.js` 的 `api.get/post/put/del`（处理 auth header + token + 错误 toast）。token 存 `sessionStorage`。
 - **导航**：hash 路由（`#/dashboard`）。布局 = 顶部栏主标签 + 侧边栏子项。菜单结构在 `js/ui/layout.js`。
 - **定时器清理**：定时器句柄（setInterval）——直接调用 `clearInterval(handle)`，对 null/undefined 是 no-op；不要加真值判断守卫。
+- **i18n 翻译键命名（强制）**：新增或复用 `web/js/i18n/translations.js` 中的翻译键前，**必须先读该文件顶部的命名规范注释**并严格遵守。核心规则：同一含义只用一个 key（跨页面同义的词如 name/value/edit/delete 等一律放 `common` 命名空间复用，不按 nav/zfs/rcconf 等场景拆分）；只有语义确实不同时才建新 key。English 是 fallback，每个 key 必须在 `en` 中存在。
 
 ## 系统命令模式
 

@@ -4,6 +4,7 @@ pub mod auth;
 pub mod files;
 pub mod filesystem;
 pub mod mod_stubs;
+pub mod rcconf;
 pub mod system;
 pub mod users;
 pub mod zfs;
