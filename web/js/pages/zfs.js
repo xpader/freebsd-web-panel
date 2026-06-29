@@ -105,7 +105,7 @@ export async function renderZfsPoolDetail(app, hashPath) {
     ${info.scan ? `
     <div class="card">
       <div class="card-title">${t('zfs.scrubStatus')}</div>
-      <p style="font-size:13px;">${esc(info.scan)}</p>
+      <pre style="font-size:13px;margin:0;white-space:pre-wrap;font-family:var(--font-mono,monospace);line-height:1.6;">${esc(info.scan)}</pre>
     </div>` : ''}
 
     <!-- VDEV / Disk topology -->

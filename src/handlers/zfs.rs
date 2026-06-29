@@ -168,12 +168,34 @@ fn parse_zpool_status(raw: &str, pool_name: &str) -> ZpoolInfo {
     let mut in_config = false;
     let mut flat_vdevs: Vec<(usize, Vdev)> = vec![];
 
+    // Track multi-line scan block. `scan:` line is space-indented, but its
+    // continuation lines (progress/speed/ETA) are TAB-indented — same as
+    // vdev config lines, but they appear before `config:`.
+    let mut in_scan = false;
+    let mut scan_lines: Vec<String> = vec![];
+
     for line in raw.lines() {
         let t = line.trim();
+
+        // Scan continuation: tab-indented line while in_scan (before config:).
+        if in_scan && line.starts_with('\t') {
+            scan_lines.push(t.to_string());
+            continue;
+        }
+        // Non-tab line ends the scan block — flush.
+        if in_scan {
+            in_scan = false;
+            if !scan_lines.is_empty() {
+                info.scan = Some(scan_lines.join("\n"));
+                scan_lines.clear();
+            }
+        }
+
         if t.starts_with("state:") {
             info.health = t.trim_start_matches("state:").trim().into();
         } else if t.starts_with("scan:") {
-            info.scan = Some(t.trim_start_matches("scan:").trim().into());
+            in_scan = true;
+            scan_lines.push(t.trim_start_matches("scan:").trim().to_string());
         } else if t.starts_with("errors:") {
             info.error_text = t.trim_start_matches("errors:").trim().into();
         } else if t.contains("config:") {
@@ -208,6 +230,11 @@ fn parse_zpool_status(raw: &str, pool_name: &str) -> ZpoolInfo {
             };
             flat_vdevs.push((indent, v));
         }
+    }
+
+    // Flush any remaining scan block (e.g. scan at end of output).
+    if in_scan && !scan_lines.is_empty() {
+        info.scan = Some(scan_lines.join("\n"));
     }
 
     // Build tree from indent levels.

@@ -21,6 +21,8 @@
 
 VDEV 树解析：`zpool status` 输出中 `config:` 后的行以 tab 缩进表示层级。按 `line.starts_with('\t')` 检测，`indent = line.len() - line.trim_start().len()` 计算层级，递归 `build_vdev_tree()` 构建树。
 
+Scan（scrub）多行解析：`scan:` 块可能跨多行（scrub 进行中时续行含已扫描量/速率/百分比/ETA）。解析时记录 `scan:` 行缩进 `scan_indent`，后续缩进更深的非空行视为续行一并累积，缩进回退则结束块，拼接为单个 `\n` 分隔字符串。
+
 `pool_status` 会同时执行 `zpool list -H -p <name>` 补充 size/allocated/free/fragmentation/capacity/dedup 字段（这些字段不在 `zpool status` 输出中）。
 
 **数据集**：
