@@ -82,8 +82,12 @@ pub struct MemMetrics {
     pub total: u64,
     pub used: u64,
     pub free: u64,
-    pub cached: u64,
+    pub active: u64,
+    pub inactive: u64,
+    pub laundry: u64,
     pub wired: u64,
+    pub cache: u64,
+    pub free_count: u64,
     pub usage: f32, // 0..100
 }
 
@@ -145,11 +149,12 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
     let free_count = vpc("vm.stats.vm.v_free_count");
     let active = vpc("vm.stats.vm.v_active_count");
     let inactive = vpc("vm.stats.vm.v_inactive_count");
+    let laundry = vpc("vm.stats.vm.v_laundry_count");
     let wire = vpc("vm.stats.vm.v_wire_count");
     let cache = vpc("vm.stats.vm.v_cache_count");
     let mem_total = page_size * page_count;
     let mem_used = page_size * (active + wire);
-    let mem_free = page_size * (free_count + inactive + cache);
+    let mem_free = page_size * free_count;
     let mem_usage = if mem_total > 0 {
         (mem_used as f32 / mem_total as f32) * 100.0
     } else {
@@ -241,8 +246,12 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
             total: mem_total,
             used: mem_used,
             free: mem_free,
-            cached: page_size * cache,
+            active: page_size * active,
+            inactive: page_size * inactive,
+            laundry: page_size * laundry,
             wired: page_size * wire,
+            cache: page_size * cache,
+            free_count: page_size * free_count,
             usage: mem_usage,
         },
         swap: SwapMetrics {
@@ -343,7 +352,9 @@ fn read_swap() -> (u64, u64) {
     if let Ok(o) = out {
         for line in String::from_utf8_lossy(&o.stdout).lines().skip(1) {
             let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.len() >= 3 {
+            // Skip the "Total" summary row — its values are the sum of all
+            // devices above, so including it would double-count.
+            if cols.len() >= 3 && cols[0] != "Total" {
                 total += cols[1].parse::<u64>().unwrap_or(0) * 1024;
                 used += cols[2].parse::<u64>().unwrap_or(0) * 1024;
             }

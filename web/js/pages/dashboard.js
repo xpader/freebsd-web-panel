@@ -41,23 +41,19 @@ export async function renderDashboard(app) {
         <div class="card-title">${t('dash.cpuUsage')} <span id="m-cpu-freq" class="text-dim mono" style="font-size:11px;float:right;"></span></div>
         <div class="big-pct" id="m-cpu">—</div>
         <div class="bar-wrap"><div class="bar bar-cpu" id="m-cpu-bar"></div></div>
-        <div id="m-cpu-cores" class="core-bars"></div>
+        <div id="m-cpu-cores" class="core-bars" style="margin-top:12px;"></div>
       </div>
       <div class="card">
         <div class="card-title">${t('dash.memoryUsage')}</div>
         <div class="big-pct" id="m-mem">—</div>
         <div class="bar-wrap"><div class="bar bar-mem" id="m-mem-bar"></div></div>
-        <div class="metric-detail" id="m-mem-detail">—</div>
+        <div class="mem-breakdown" id="m-mem-breakdown"></div>
       </div>
       <div class="card">
         <div class="card-title">${t('dash.swapUsage')}</div>
         <div class="big-pct" id="m-swap">—</div>
         <div class="bar-wrap"><div class="bar bar-swap" id="m-swap-bar"></div></div>
         <div class="metric-detail" id="m-swap-detail">—</div>
-      </div>
-      <div class="card">
-        <div class="card-title">${t('dash.cpuTemp')}</div>
-        <div id="m-temps"><div class="text-dim">${t('dash.noData')}</div></div>
       </div>
     </div>
 
@@ -99,30 +95,54 @@ async function refreshMetrics() {
 
   const coresEl = document.getElementById('m-cpu-cores');
   if (coresEl) {
-    coresEl.innerHTML = m.cpu_usage_per_core.map((pct, i) =>
-      `<div class="core-bar"><span class="core-label">${i}</span><div class="bar-wrap sm"><div class="bar bar-cpu" style="width:${pct}%"></div></div></div>`
-    ).join('');
+    const tempMap = {};
+    if (m.temperatures && m.temperatures.length) {
+      for (const tmp of m.temperatures) {
+        const idx = parseInt(tmp.source.replace(/\D/g, ''), 10);
+        if (!Number.isNaN(idx)) tempMap[idx] = tmp.value;
+      }
+    }
+    const hasTemps = m.temperatures && m.temperatures.length > 0;
+    const header = `<div class="core-bar core-header"><span class="core-label">${t('common.core')}</span><span class="core-usage-head">${t('common.usage')}</span>${hasTemps ? `<span class="core-temp">${t('common.temp')}</span>` : ''}</div>`;
+    coresEl.innerHTML = header + m.cpu_usage_per_core.map((pct, i) => {
+      const temp = tempMap[i];
+      let tempHtml = '<span class="text-dim" style="font-size:11px;">—</span>';
+      if (temp != null) {
+        const cls = temp >= 70 ? 'badge-danger' : temp >= 55 ? 'badge-warn' : 'badge-success';
+        tempHtml = `<span class="badge ${cls}" style="min-width:48px;text-align:center;">${temp.toFixed(1)}°C</span>`;
+      }
+      return `<div class="core-bar">
+        <span class="core-label">${i}</span>
+        <div class="bar-wrap sm"><div class="bar bar-cpu" style="width:${pct}%"></div></div>
+        ${hasTemps ? `<span class="core-temp">${tempHtml}</span>` : ''}
+      </div>`;
+    }).join('');
   }
 
   setText('m-mem', `${m.memory.usage.toFixed(1)}%`);
   setBar('m-mem-bar', m.memory.usage);
-  setText('m-mem-detail', t('dash.memoryDetail', { used: fmtBytes(m.memory.used), total: fmtBytes(m.memory.total), wired: fmtBytes(m.memory.wired) }));
+  const memEl = document.getElementById('m-mem-breakdown');
+  if (memEl) {
+    const total = m.memory.total || 1;
+    const parts = [
+      { label: 'Active', val: m.memory.active, color: '#8b5cf6' },
+      { label: 'Wired', val: m.memory.wired, color: '#f59e0b' },
+      { label: 'Inact', val: m.memory.inactive, color: '#6366f1' },
+      { label: 'Laundry', val: m.memory.laundry, color: '#06b6d4' },
+      { label: 'Cache', val: m.memory.cache, color: '#22c55e' },
+      { label: 'Free', val: m.memory.free_count, color: '#374151' },
+    ];
+    memEl.innerHTML = `<div class="mem-stacked">${parts.map(p => {
+      const pct = (p.val / total * 100).toFixed(1);
+      return `<div class="mem-seg" style="width:${pct}%;background:${p.color};" title="${p.label}: ${fmtBytes(p.val)}"></div>`;
+    }).join('')}</div>` + parts.map(p =>
+      `<div class="mem-item"><span class="mem-dot" style="background:${p.color};"></span><span>${p.label}</span><span class="mem-val mono">${fmtBytes(p.val)}</span></div>`
+    ).join('');
+  }
 
   setText('m-swap', `${m.swap.usage.toFixed(1)}%`);
   setBar('m-swap-bar', m.swap.usage);
   setText('m-swap-detail', `${fmtBytes(m.swap.used)} / ${fmtBytes(m.swap.total)}`);
-
-  const tempsEl = document.getElementById('m-temps');
-  if (tempsEl) {
-    if (m.temperatures.length) {
-      tempsEl.innerHTML = m.temperatures.map(t => {
-        const cls = t.value >= 70 ? 'badge-danger' : t.value >= 55 ? 'badge-warn' : 'badge-success';
-        return `<div class="temp-row"><span>${esc(t.source)}</span><span class="badge ${cls}">${t.value.toFixed(1)}°C</span></div>`;
-      }).join('');
-    } else {
-      tempsEl.innerHTML = `<div class="text-dim">${t('dash.noSensorData')}</div>`;
-    }
-  }
 
   // Network interfaces
   const netEl = document.getElementById('m-network');

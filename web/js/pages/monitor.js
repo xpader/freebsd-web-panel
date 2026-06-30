@@ -188,10 +188,10 @@ async function drawAll(Chart, categories, page, rangeSec) {
       yMax: 100,
       yUnit: '%',
     });
-    await drawSeries(Chart, 'chart-mem-bytes', 'memory', ['used', 'wired'], from, now, {
+    await drawSeries(Chart, 'chart-mem-bytes', 'memory', ['active', 'wired', 'inactive', 'laundry', 'cache', 'free'], from, now, {
       multi: true,
-      labels: [t('monitor.memUsed'), t('monitor.memWired')],
-      colors: ['#8b5cf6', '#f59e0b'],
+      labels: ['Active', 'Wired', 'Inact', 'Laundry', 'Cache', 'Free'],
+      colors: ['#8b5cf6', '#f59e0b', '#6366f1', '#06b6d4', '#22c55e', '#374151'],
       byteFormat: true,
     });
   }

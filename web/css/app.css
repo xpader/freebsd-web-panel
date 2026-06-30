@@ -328,9 +328,20 @@ tr:hover td { background: var(--bg-elev2); }
 .stat-row { display: flex; flex-wrap: wrap; gap: 16px 24px; font-size: 13px; align-items: center; }
 .core-bars { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
 .core-bar { display: flex; align-items: center; gap: 8px; }
-.core-label { font-size: 11px; color: var(--text-dim); width: 16px; text-align: right; font-family: monospace; }
+.core-header { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.core-header .core-label { font-family: inherit; }
+.core-header .core-usage-head { flex: 1; }
+.core-label { font-size: 11px; color: var(--text-dim); min-width: 32px; text-align: right; font-family: monospace; }
 .core-bar .bar-wrap.sm { flex: 1; margin: 0; }
 .temp-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 13px; }
+.core-temp { width: 56px; text-align: center; }
+/* ---- Memory breakdown (dashboard) ---- */
+.mem-breakdown { margin-top: 10px; }
+.mem-stacked { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 10px; background: var(--bg-elev2); }
+.mem-seg { height: 100%; transition: width 0.5s ease; }
+.mem-item { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; }
+.mem-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.mem-val { margin-left: auto; color: var(--text-dim); }
 /* ---- Network interfaces (dashboard) ---- */
 .net-iface { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .net-iface:last-child { border-bottom: none; }

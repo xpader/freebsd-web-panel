@@ -107,15 +107,20 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
     let wire = vpc("vm.stats.vm.v_wire_count");
     let free = vpc("vm.stats.vm.v_free_count");
     let inactive = vpc("vm.stats.vm.v_inactive_count");
+    let laundry = vpc("vm.stats.vm.v_laundry_count");
     let cache = vpc("vm.stats.vm.v_cache_count");
     let mem_total = ps * total_pages;
     let mem_used = ps * (active + wire);
     let mem_usage = if mem_total > 0.0 { mem_used / mem_total * 100.0 } else { 0.0 };
     out.push(MetricSample { ts: now, category: "memory".into(), name: "usage".into(), value: mem_usage });
     out.push(MetricSample { ts: now, category: "memory".into(), name: "used".into(), value: mem_used });
-    out.push(MetricSample { ts: now, category: "memory".into(), name: "free".into(), value: ps * (free + inactive + cache) });
-    out.push(MetricSample { ts: now, category: "memory".into(), name: "wired".into(), value: ps * wire });
     out.push(MetricSample { ts: now, category: "memory".into(), name: "total".into(), value: mem_total });
+    out.push(MetricSample { ts: now, category: "memory".into(), name: "active".into(), value: ps * active });
+    out.push(MetricSample { ts: now, category: "memory".into(), name: "wired".into(), value: ps * wire });
+    out.push(MetricSample { ts: now, category: "memory".into(), name: "inactive".into(), value: ps * inactive });
+    out.push(MetricSample { ts: now, category: "memory".into(), name: "laundry".into(), value: ps * laundry });
+    out.push(MetricSample { ts: now, category: "memory".into(), name: "cache".into(), value: ps * cache });
+    out.push(MetricSample { ts: now, category: "memory".into(), name: "free".into(), value: ps * free });
 
     // Load average.
     let la = sysinfo::read_loadavg();
