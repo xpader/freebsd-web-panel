@@ -26,6 +26,7 @@ const MENU = [
     items: [
       { path: '/sysctl', labelKey: 'nav.sysctl', icon: 'fa-solid fa-microchip' },
       { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
+      { path: '/cron', labelKey: 'nav.cron', icon: 'fa-solid fa-clock-rotate-left' },
       { path: '/services', labelKey: 'nav.services', icon: 'fa-solid fa-play' },
       {
         path: '/accounts/users',

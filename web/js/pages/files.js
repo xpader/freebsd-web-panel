@@ -590,7 +590,7 @@ async function editOwner(info) {
     <div class="modal">
       <h3>${t('fm.editOwner')} — ${esc(info.name)}</h3>
       <div class="field">
-        <label>${t('fm.user')}</label>
+        <label>${t('common.user')}</label>
         <select id="fm-chown-user"><option value="">— ${t('common.unknown')} —</option>${userOpts}</select>
       </div>
       <div class="field">

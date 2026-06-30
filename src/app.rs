@@ -43,6 +43,10 @@ pub fn build(state: AppState) -> Router {
         // --- rc.conf (sysrc) ---
         .route("/api/rcconf", get(handlers::rcconf::list).put(handlers::rcconf::set))
         .route("/api/rcconf", delete(handlers::rcconf::delete))
+        // --- crontab ---
+        .route("/api/crontab", get(handlers::crontab::list).post(handlers::crontab::create).put(handlers::crontab::update))
+        .route("/api/crontab", delete(handlers::crontab::delete))
+        .route("/api/crontab/targets", get(handlers::crontab::targets))
         .route("/api/network", get(handlers::mod_stubs::network))
         .route("/api/services", get(handlers::mod_stubs::services))
         .route("/api/pf", get(handlers::mod_stubs::pf))

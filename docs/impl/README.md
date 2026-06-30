@@ -22,6 +22,7 @@
 | [13-sysinfo.md](13-sysinfo.md) | sysctl(3) 共享读取器：CPU/内存/温度/负载（替代子进程） | `src/sysinfo.rs` |
 | [14-terminal.md](14-terminal.md) | Web 终端：WebSocket ↔ FreeBSD PTY（xterm.js 前端，root 登录 shell） | `src/terminal.rs`, `web/js/pages/terminal.js`, `web/vendor/xterm/` |
 | [15-rcconf.md](15-rcconf.md) | RC 配置：列出/新增/修改/删除 rc.conf 变量（sysrc） | `handlers/rcconf.rs`, `web/js/pages/rcconf.js` |
+| [16-crontab.md](16-crontab.md) | 定时任务：列出/新增/修改/删除/启停 crontab 条目（crontab） | `handlers/crontab.rs`, `web/js/pages/cron.js` |
 
 ## 文档规范
 

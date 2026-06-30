@@ -65,7 +65,7 @@ export async function renderDashboard(app) {
     <div class="card">
       <div class="card-title">${t('common.moduleStatus')}</div>
       <table>
-        <thead><tr><th>${t('dash.module')}</th><th>${t('dash.status')}</th><th>${t('dash.note')}</th></tr></thead>
+        <thead><tr><th>${t('dash.module')}</th><th>${t('common.status')}</th><th>${t('dash.note')}</th></tr></thead>
         <tbody>
           ${MODULES.map(m => `<tr><td><a href="#${m.path}">${t(m.labelKey)}</a></td><td><span class="badge ${m.badge}">${t('status.planned')}</span></td><td class="text-dim">${t(m.noteKey)}</td></tr>`).join('')}
         </tbody>
