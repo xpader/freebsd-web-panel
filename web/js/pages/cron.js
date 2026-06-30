@@ -20,6 +20,7 @@ export async function renderCron(app) {
     <div class="page-header">
       <h1>${t('cron.title')}</h1>
       <p>${t('cron.subtitle')}</p>
+      <p class="text-dim cron-note">${t('cron.backupNote')}</p>
     </div>
     <div class="toolbar">
       <input type="text" id="cron-filter" class="filter-input" placeholder="${t('cron.filter')}" oninput="window.__fwpCronFilter()" />

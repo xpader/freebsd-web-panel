@@ -297,6 +297,7 @@ export const en = {
   cron: {
     title: 'Scheduled Tasks',
     subtitle: 'Manage cron jobs in the crontab (runs as root)',
+    backupNote: 'Each modification is automatically backed up (up to 5 copies per file).',
     filter: 'Filter schedule / command…',
     add: '+ Add Task',
     count: '{{n}} tasks',
@@ -791,6 +792,7 @@ export const zh = {
   cron: {
     title: '定时任务',
     subtitle: '管理 crontab 中的计划任务（以 root 身份运行）',
+    backupNote: '每次修改都会自动备份（每个文件最多保留 5 份）。',
     filter: '筛选 计划 / 命令…',
     add: '+ 添加任务',
     count: '共 {{n}} 个任务',
