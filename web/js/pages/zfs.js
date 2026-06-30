@@ -288,7 +288,7 @@ window.__fwpDsProps = async (name) => {
     </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.dataset.act === 'close') overlay.remove();
+    if (e.target.dataset.act === 'close') overlay.remove();
   });
 };
 

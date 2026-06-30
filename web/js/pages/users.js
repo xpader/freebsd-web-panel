@@ -104,7 +104,7 @@ function showModal(title, defaultName, defaultPwd, onSubmit) {
   document.body.appendChild(overlay);
 
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.dataset.act === 'cancel') overlay.remove();
+    if (e.target.dataset.act === 'cancel') overlay.remove();
   });
   overlay.querySelector('#modal-form').addEventListener('submit', async (e) => {
     e.preventDefault();

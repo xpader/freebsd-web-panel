@@ -241,7 +241,7 @@ function entryModal(title, preselect, entry, submitLabel) {
 
     const close = (r) => { overlay.remove(); resolve(r); };
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay || e.target.dataset.act === 'cancel') close(null);
+      if (e.target.dataset.act === 'cancel') close(null);
     });
     overlay.querySelector('#cron-target').addEventListener('change', syncUserField);
     overlay.querySelector('#cron-special').addEventListener('change', (e) => {

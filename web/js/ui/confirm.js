@@ -31,7 +31,7 @@ export function confirmDialog(title, message, options) {
       </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay || e.target.dataset.act === 'cancel') {
+      if (e.target.dataset.act === 'cancel') {
         overlay.remove();
         resolve(false);
       } else if (e.target.dataset.act === 'ok') {

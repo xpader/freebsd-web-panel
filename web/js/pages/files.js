@@ -458,7 +458,7 @@ function showStatModal(info) {
   overlay.addEventListener('click', async (e) => {
     const actEl = e.target.closest('[data-act]');
     const act = actEl?.dataset.act;
-    if (e.target === overlay || act === 'close') {
+    if (act === 'close') {
       overlay.remove();
     } else if (act === 'chmod') {
       overlay.remove();
@@ -525,7 +525,7 @@ async function editPermissions(info) {
 
   return new Promise((resolve) => {
     overlay.addEventListener('click', async (e) => {
-      if (e.target === overlay || e.target.dataset.act === 'cancel') {
+      if (e.target.dataset.act === 'cancel') {
         overlay.remove();
         resolve();
       } else if (e.target.dataset.act === 'ok') {
@@ -606,7 +606,7 @@ async function editOwner(info) {
   const finish = () => overlay.remove();
   return new Promise((resolve) => {
     overlay.addEventListener('click', async (e) => {
-      if (e.target === overlay || e.target.dataset.act === 'cancel') {
+      if (e.target.dataset.act === 'cancel') {
         finish();
         resolve();
       } else if (e.target.dataset.act === 'ok') {

@@ -63,7 +63,7 @@ export function formModal(title, fields, submitLabel) {
     };
 
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay || e.target.dataset.act === 'cancel') close(null);
+      if (e.target.dataset.act === 'cancel') close(null);
     });
 
     overlay.querySelector('#modal-form').addEventListener('submit', (e) => {
