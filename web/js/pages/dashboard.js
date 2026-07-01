@@ -152,17 +152,17 @@ async function refreshMetrics() {
         const statusText = iface.status || (iface.up ? t('dash.netActive') : t('dash.netDown'));
         const statusCls = iface.up ? 'badge-success' : 'badge-dim';
         const ip = (iface.ipv4 || []).join(', ');
-        return `<div class="net-iface">
-          <div class="net-iface-head">
-            <span class="net-name mono">${esc(iface.name)}</span>
+        return `<div class="dash-net-item">
+          <div class="dash-net-head">
+            <span class="dash-net-name mono">${esc(iface.name)}</span>
             <span class="badge ${statusCls}">${esc(statusText)}</span>
-            ${ip ? `<span class="net-ip text-dim mono">${esc(ip)}</span>` : ''}
+            ${ip ? `<span class="dash-net-ip text-dim mono">${esc(ip)}</span>` : ''}
             ${iface.media ? `<span class="text-dim" style="font-size:11px;">${esc(iface.media)}</span>` : ''}
           </div>
-          <div class="net-rates">
-            <span class="net-rate net-rx">↓ ${fmtRate(iface.rx_rate)}</span>
-            <span class="net-rate net-tx">↑ ${fmtRate(iface.tx_rate)}</span>
-            <span class="net-total text-dim">${t('dash.netTotal', { rx: fmtBytes(iface.rx_bytes), tx: fmtBytes(iface.tx_bytes) })}</span>
+          <div class="dash-net-rates">
+            <span class="dash-net-rate dash-net-rx">↓ ${fmtRate(iface.rx_rate)}</span>
+            <span class="dash-net-rate dash-net-tx">↑ ${fmtRate(iface.tx_rate)}</span>
+            <span class="dash-net-total text-dim">${t('dash.netTotal', { rx: fmtBytes(iface.rx_bytes), tx: fmtBytes(iface.tx_bytes) })}</span>
           </div>
         </div>`;
       }).join('');

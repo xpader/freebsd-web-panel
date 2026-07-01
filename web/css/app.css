@@ -343,15 +343,15 @@ tr:hover td { background: var(--bg-elev2); }
 .mem-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 .mem-val { margin-left: auto; color: var(--text-dim); }
 /* ---- Network interfaces (dashboard) ---- */
-.net-iface { padding: 10px 0; border-bottom: 1px solid var(--border); }
-.net-iface:last-child { border-bottom: none; }
-.net-iface-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.net-name { font-weight: 600; font-size: 14px; min-width: 70px; }
-.net-ip { font-size: 12px; }
-.net-rates { display: flex; align-items: center; gap: 20px; margin-top: 6px; font-size: 13px; }
-.net-rate { font-weight: 600; }
-.net-rx { color: #3b82f6; }
-.net-tx { color: #f59e0b; }
+.dash-net-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.dash-net-item:last-child { border-bottom: none; }
+.dash-net-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dash-net-name { font-weight: 600; font-size: 14px; min-width: 70px; }
+.dash-net-ip { font-size: 12px; }
+.dash-net-rates { display: flex; align-items: center; gap: 20px; margin-top: 6px; font-size: 13px; }
+.dash-net-rate { font-weight: 600; }
+.dash-net-rx { color: #3b82f6; }
+.dash-net-tx { color: #f59e0b; }
 .net-total { font-size: 12px; margin-left: auto; }
 /* ---- Badges ---- */
 .badge {
@@ -543,7 +543,7 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .term-host .xterm-viewport { overflow-y: auto !important; }
 
 /* Network interface cards */
-.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; overflow: visible; }
 .card-grid .card { margin-bottom: 0; }
 .net-iface { display: flex; flex-direction: column; padding: 24px; }
 .net-iface-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
