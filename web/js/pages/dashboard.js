@@ -47,19 +47,19 @@ export async function renderDashboard(app) {
 
     <div class="metric-grid">
       <div class="card">
-        <div class="card-title">${t('dash.cpuUsage')} <span id="m-cpu-freq" class="text-dim mono" style="font-size:11px;float:right;"></span></div>
+        <div class="card-title"><i class="fa-solid fa-gauge-simple-high"></i> ${t('dash.cpuUsage')} <span id="m-cpu-freq" class="text-dim mono" style="font-size:11px;float:right;"></span></div>
         <div class="big-pct" id="m-cpu">—</div>
         <div class="bar-wrap"><div class="bar bar-cpu" id="m-cpu-bar"></div></div>
         <div id="m-cpu-cores" class="core-bars" style="margin-top:12px;"></div>
       </div>
       <div class="card">
-        <div class="card-title">${t('dash.memoryUsage')}</div>
+        <div class="card-title"><i class="fa-solid fa-memory"></i> ${t('dash.memoryUsage')}</div>
         <div class="big-pct" id="m-mem">—</div>
         <div class="bar-wrap"><div class="bar bar-mem" id="m-mem-bar"></div></div>
         <div class="mem-breakdown" id="m-mem-breakdown"></div>
       </div>
       <div class="card">
-        <div class="card-title">${t('dash.swapUsage')}</div>
+        <div class="card-title"><i class="fa-solid fa-hard-drive"></i> ${t('dash.swapUsage')}</div>
         <div class="big-pct" id="m-swap">—</div>
         <div class="bar-wrap"><div class="bar bar-swap" id="m-swap-bar"></div></div>
         <div class="metric-detail" id="m-swap-detail">—</div>
@@ -73,7 +73,7 @@ export async function renderDashboard(app) {
 
     <footer class="dash-footer">
       <span>FreeBSD Web Panel (fwp)</span>
-      <span class="text-dim">© 2025</span>
+      <span class="text-dim">© 2026</span>
       <a href="https://github.com/xpader/freebsd-web-panel" target="_blank" rel="noopener"><img src="/img/github.svg" width="16" height="16" class="github-icon" alt="GitHub"> GitHub</a>
     </footer>`;
 
@@ -159,7 +159,7 @@ async function refreshMetrics() {
         const ip = (iface.ipv4 || []).join(', ');
         return `<div class="dash-net-item">
           <div class="dash-net-head">
-            <span class="dash-net-name mono">${esc(iface.name)}</span>
+            <span class="dash-net-name mono"><i class="fa-solid fa-ethernet"></i> ${esc(iface.name)}</span>
             <span class="badge ${statusCls}">${esc(statusText)}</span>
             <span class="dash-net-rates">
               <span class="dash-net-rate dash-net-rx">↓ ${fmtRate(iface.rx_rate)}</span>

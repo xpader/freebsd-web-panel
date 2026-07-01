@@ -360,6 +360,7 @@ tr:hover td { background: var(--bg-elev2); }
 .dash-net-item:last-child { border-bottom: none; }
 .dash-net-head { display: flex; align-items: center; gap: 10px; }
 .dash-net-name { font-weight: 600; font-size: 14px; }
+.dash-net-name .fa-ethernet { color: var(--text-dim); opacity: 0.6; }
 .dash-net-rates { display: flex; gap: 16px; margin-left: auto; }
 .dash-net-rate { font-weight: 600; font-size: 13px; }
 .dash-net-rx { color: #3b82f6; }
