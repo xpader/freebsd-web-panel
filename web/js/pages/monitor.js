@@ -28,9 +28,9 @@ function loadScript(src) {
 
 // ---- CPU & Load page (/monitor) ----
 
-function rangeButtons() {
+function rangeButtons(id) {
   return `
-      <div class="time-range" id="time-range">
+      <div class="time-range" id="${id || 'time-range'}">
         <button class="btn-secondary btn-sm" data-range="3600">${t('monitor.range1h')}</button>
         <button class="btn-secondary btn-sm" data-range="21600">${t('monitor.range6h')}</button>
         <button class="btn-secondary btn-sm active-range" data-range="86400">${t('monitor.range24h')}</button>
@@ -53,13 +53,17 @@ export async function renderMonitorCpu(app) {
       <canvas id="chart-cpu" height="120"></canvas>
     </div>
     <div class="card">
+      <div class="card-title">${t('monitor.tempCore')}</div>
+      <canvas id="chart-temp" height="120"></canvas>
+    </div>
+    <div class="card">
       <div class="card-title">${t('monitor.loadAvg')}</div>
       <canvas id="chart-load" height="120"></canvas>
     </div>
     <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
   `);
 
-  await initRangeButtons(['cpu', 'load'], 'monitor');
+  await initRangeButtons(['cpu', 'temp', 'load'], 'monitor');
 }
 
 // ---- Memory page (/monitor/memory) ----
@@ -87,50 +91,19 @@ export async function renderMonitorMemory(app) {
   await initRangeButtons(['memory'], 'memory');
 }
 
-// ---- Temperature page (/monitor/temp) ----
-
-export async function renderMonitorTemp(app) {
-  renderLayout(app, '/monitor/temp', `
-    <div class="page-header">
-      <h1>${t('monitor.tempTitle')}</h1>
-      <p>${t('monitor.tempSubtitle')}</p>
-    </div>
-    <div class="toolbar">
-      ${rangeButtons()}
-    </div>
-    <div class="card">
-      <div class="card-title">${t('monitor.tempCore')}</div>
-      <canvas id="chart-temp" height="120"></canvas>
-    </div>
-    <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
-  `);
-
-  await initRangeButtons(['temp'], 'temp');
-}
-
 // ---- Network page (/monitor/network) ----
 
 export async function renderMonitorNetwork(app) {
   renderLayout(app, '/monitor/network', `
     <div class="page-header">
-      <h1>${t('monitor.netTitle')}</h1>
-      <p>${t('monitor.netSubtitle')}</p>
+      <h1>${t('monitor.netRateTitle')}</h1>
+      <p>${t('monitor.netRateSubtitle')}</p>
     </div>
-    <div class="toolbar">
-      ${rangeButtons()}
-    </div>
-    <div class="card">
-      <div class="card-title">${t('monitor.netRxRate')}</div>
-      <canvas id="chart-net-rx" height="120"></canvas>
-    </div>
-    <div class="card">
-      <div class="card-title">${t('monitor.netTxRate')}</div>
-      <canvas id="chart-net-tx" height="120"></canvas>
-    </div>
+    <div id="net-charts"></div>
     <div id="monitor-msg" class="text-dim" style="text-align:center;padding:20px;"></div>
   `);
 
-  await initRangeButtons(['net'], 'network');
+  await initNetworkPage();
 }
 
 // ---- Chart rendering logic ----
@@ -248,6 +221,211 @@ async function drawAll(Chart, categories, page, rangeSec) {
   }
 }
 
+// ---- Network: shared helpers ----
+
+async function discoverIfaces() {
+  let ifaces = [];
+  try {
+    const latest = await api.get('/api/monitor/latest');
+    ifaces = (latest.net || [])
+      .map((s) => s.name)
+      .filter((n) => n.endsWith('.rx'))
+      .map((n) => n.slice(0, -3))
+      .filter(isPhysicalIface)
+      .sort();
+  } catch { /* ignore */ }
+  return ifaces;
+}
+
+function renderIfaceContainers(containerId, ifaces) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  for (const iface of ifaces) {
+    destroyChart(`chart-rate-${iface}`);
+    destroyChart(`chart-traffic-${iface}`);
+  }
+
+  const rateCards = ifaces.map(iface => {
+    const id = `chart-rate-${iface}`;
+    return `<div class="card">
+      <div class="card-title">${iface} — ${t('monitor.viewRate')}</div>
+      <div class="toolbar">${rangeButtons(`range-${id}`)}</div>
+      <canvas id="${id}" height="120"></canvas>
+    </div>`;
+  }).join('');
+
+  const trafficCards = ifaces.map(iface => {
+    const id = `chart-traffic-${iface}`;
+    return `<div class="card">
+      <div class="card-title">${iface} — ${t('monitor.viewTraffic')}</div>
+      <div class="toolbar">
+        ${rangeButtons(`range-${id}`)}
+        <div class="time-range" id="bucket-${id}" style="margin-left:auto;">
+          <button class="btn-secondary btn-sm" data-bucket="300">5m</button>
+          <button class="btn-secondary btn-sm" data-bucket="600">10m</button>
+          <button class="btn-secondary btn-sm active-bucket" data-bucket="1800">30m</button>
+          <button class="btn-secondary btn-sm" data-bucket="3600">1h</button>
+          <button class="btn-secondary btn-sm" data-bucket="86400">1d</button>
+        </div>
+      </div>
+      <canvas id="${id}" height="120"></canvas>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<h3 class="net-section-title">${t('monitor.viewRate')}</h3>${rateCards}<h3 class="net-section-title">${t('monitor.viewTraffic')}</h3>${trafficCards}`;
+}
+
+const RX_COLOR = '#3b82f6';
+const TX_COLOR = '#f59e0b';
+
+// each card keeps its own range/bucket state
+const netCardState = {};
+
+async function initNetworkPage() {
+  let Chart;
+  try { Chart = await loadChartJs(); } catch {
+    showMsg(t('monitor.chartLoadFailed'));
+    return;
+  }
+
+  const ifaces = await discoverIfaces();
+  if (ifaces.length === 0) { showMsg(t('monitor.noNetData')); return; }
+
+  renderIfaceContainers('net-charts', ifaces);
+  hideMsg();
+
+  for (const iface of ifaces) {
+    const rateId = `chart-rate-${iface}`;
+    const trafficId = `chart-traffic-${iface}`;
+    netCardState[rateId] = { range: 86400 };
+    netCardState[trafficId] = { range: 86400, bucket: 1800 };
+
+    // Wire range buttons for rate card
+    bindRangeButtons(`range-${rateId}`, () => {
+      netCardState[rateId].range = getActiveRange(`range-${rateId}`);
+      drawNetCard(Chart, iface, rateId, false);
+    });
+    // Wire range + bucket buttons for traffic card
+    bindRangeButtons(`range-${trafficId}`, () => {
+      netCardState[trafficId].range = getActiveRange(`range-${trafficId}`);
+      drawNetCard(Chart, iface, trafficId, true);
+    });
+    bindBucketButtons(trafficId, (bucket) => {
+      netCardState[trafficId].bucket = bucket;
+      drawNetCard(Chart, iface, trafficId, true);
+    });
+
+    drawNetCard(Chart, iface, rateId, false);
+    drawNetCard(Chart, iface, trafficId, true);
+  }
+}
+
+function bindRangeButtons(containerId, cb) {
+  const c = document.getElementById(containerId);
+  if (!c) return;
+  c.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-range]');
+    if (!btn) return;
+    c.querySelectorAll('button').forEach((b) => b.classList.remove('active-range'));
+    btn.classList.add('active-range');
+    cb();
+  });
+}
+
+function bindBucketButtons(chartId, cb) {
+  const container = document.getElementById(`bucket-${chartId}`);
+  if (!container) return;
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-bucket]');
+    if (!btn) return;
+    container.querySelectorAll('button').forEach((b) => b.classList.remove('active-bucket'));
+    btn.classList.add('active-bucket');
+    cb(parseInt(btn.dataset.bucket, 10));
+  });
+}
+
+function getActiveRange(containerId) {
+  const c = document.getElementById(containerId);
+  if (!c) return 86400;
+  const active = c.querySelector('.active-range') || c.querySelector('button');
+  return parseInt(active?.dataset.range || '86400', 10);
+}
+
+async function drawNetCard(Chart, iface, chartId, isTraffic) {
+  const state = netCardState[chartId];
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - state.range;
+
+  const datasets = [];
+  try {
+    const rxUrl = isTraffic
+      ? `/api/monitor/aggregate?category=net&name=${iface}.rx&from=${from}&to=${now}&bucket=${state.bucket}`
+      : `/api/monitor/series?category=net&name=${iface}.rx&from=${from}&to=${now}`;
+    const txUrl = isTraffic
+      ? `/api/monitor/aggregate?category=net&name=${iface}.tx&from=${from}&to=${now}&bucket=${state.bucket}`
+      : `/api/monitor/series?category=net&name=${iface}.tx&from=${from}&to=${now}`;
+    const rxRes = await api.get(rxUrl);
+    datasets.push(makeDirDataset('RX', rxRes.points, RX_COLOR));
+    const txRes = await api.get(txUrl);
+    datasets.push(makeDirDataset('TX', txRes.points, TX_COLOR));
+  } catch (e) { showMsg(t('monitor.queryFailed', { msg: e.message || '' })); return; }
+
+  destroyChart(chartId);
+  const canvas = document.getElementById(chartId);
+  if (!canvas || dataIsEmpty(datasets)) return;
+  CHARTS[chartId] = new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: ifaceChartOptions(isTraffic),
+  });
+}
+
+// ---- Shared chart builders ----
+
+function makeDirDataset(dir, points, color) {
+  const data = points.map(([ts, v]) => ({ x: ts * 1000, y: v }));
+  return {
+    label: dir,
+    data,
+    backgroundColor: color + 'cc',
+    borderColor: color,
+    borderWidth: 2,
+    pointRadius: data.length > 100 ? 0 : 2,
+    tension: 0.3,
+    fill: false,
+  };
+}
+
+function ifaceChartOptions(aggregated) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        type: 'time',
+        time: { displayFormats: { minute: 'HH:mm', hour: 'MM/dd HH:mm', day: 'MM/dd' } },
+        ticks: { color: '#8b94a5', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+        grid: { color: '#2a2f3a' },
+      },
+      y: {
+        min: 0,
+        ticks: { color: '#8b94a5', callback: aggregated ? formatBytesTick : formatRateTick },
+        grid: { color: '#2a2f3a' },
+      },
+    },
+    plugins: {
+      legend: { labels: { color: '#e4e7eb', font: { size: 12 } } },
+      tooltip: {
+        callbacks: {
+          title: (items) => fmtTooltipTime(items[0].parsed.x),
+          label: (c) => `${c.dataset.label}: ${aggregated ? fmtBytes(c.parsed.y) : fmtRate(c.parsed.y)}`,
+        },
+      },
+    },
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+  };
+}
+
 async function drawSeries(Chart, canvasId, category, nameOrNames, from, to, opts) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
@@ -321,7 +499,12 @@ function chartOptions(opts) {
     },
     plugins: {
       legend: { labels: { color: '#e4e7eb', font: { size: 12 } } },
-      tooltip: { callbacks: { label: tooltipLabel } },
+      tooltip: {
+        callbacks: {
+          title: (items) => fmtTooltipTime(items[0].parsed.x),
+          label: tooltipLabel,
+        },
+      },
     },
     interaction: { mode: 'nearest', axis: 'x', intersect: false },
   };
@@ -329,6 +512,15 @@ function chartOptions(opts) {
 
 function dataIsEmpty(datasets) {
   return datasets.every((d) => !d.data || d.data.length === 0);
+}
+
+function fmtTooltipTime(x) {
+  const d = new Date(x);
+  const MM = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const HH = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${MM}/${dd} ${HH}:${mm}`;
 }
 
 function destroyChart(id) {

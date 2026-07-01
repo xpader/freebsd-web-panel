@@ -312,6 +312,33 @@ pub fn query_series(
     Ok(rows)
 }
 
+/// Query a time series aggregated into fixed-size time buckets.
+/// Query delta-value data aggregated into time buckets by SUM.  Each stored
+/// sample is already the bytes transferred in one interval, so summing them
+/// yields exact total bytes per bucket.
+pub fn query_counter_aggregate(
+    conn: &Connection,
+    category: &str,
+    name: &str,
+    from_ts: i64,
+    to_ts: i64,
+    bucket_sec: i64,
+) -> ApiResult<Vec<(i64, f64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT (ts / ?5) * ?5 AS bucket_ts, SUM(value) \
+         FROM metric_samples \
+         WHERE category = ?1 AND name = ?2 AND ts >= ?3 AND ts <= ?4 \
+         GROUP BY bucket_ts \
+         ORDER BY bucket_ts ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![category, name, from_ts, to_ts, bucket_sec], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Get the most recent sample for each (category, name) in a category.
 pub fn latest_in_category(conn: &Connection, category: &str) -> ApiResult<Vec<MetricSample>> {
     let mut stmt = conn.prepare(

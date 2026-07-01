@@ -134,10 +134,14 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
         out.push(MetricSample { ts: now, category: "temp".into(), name: format!("cpu{i}"), value: value as f64 });
     }
 
-    // Network traffic rate (bytes/sec) per interface — requires delta like CPU.
-    for (name, (rx_rate, tx_rate)) in net_rate_delta(now) {
-        out.push(MetricSample { ts: now, category: "net".into(), name: format!("{name}.rx"), value: rx_rate });
-        out.push(MetricSample { ts: now, category: "net".into(), name: format!("{name}.tx"), value: tx_rate });
+    // Network: rate (bytes/sec) for live charts + traffic (bytes per interval)
+    // for accurate aggregation.
+    let net = net_rate_delta(now);
+    for (name, (rx_rate, tx_rate), rx_bytes, tx_bytes) in &net {
+        out.push(MetricSample { ts: now, category: "net".into(), name: format!("{name}.rx"), value: *rx_rate });
+        out.push(MetricSample { ts: now, category: "net".into(), name: format!("{name}.tx"), value: *tx_rate });
+        out.push(MetricSample { ts: now, category: "net_bytes".into(), name: format!("{name}.rx"), value: *rx_bytes as f64 });
+        out.push(MetricSample { ts: now, category: "net_bytes".into(), name: format!("{name}.tx"), value: *tx_bytes as f64 });
     }
 
     Ok(out)
@@ -191,10 +195,12 @@ struct NetState {
 
 static MONITOR_NET: LazyLock<Mutex<Option<NetState>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Compute per-interface RX/TX rates (bytes/sec) from the delta of cumulative
-/// counters.  Uses a monitoring-local static so it doesn't interfere with the
+/// Compute per-interface RX/TX rates (bytes/sec) and actual bytes transferred
+/// since the last sample.  Both are derived from the delta of cumulative
+/// counters — rate = delta / dt, traffic = delta itself.
+/// Uses a monitoring-local static so it doesn't interfere with the
 /// live-metrics endpoint's own delta tracking.
-fn net_rate_delta(now: i64) -> Vec<(String, (f64, f64))> {
+fn net_rate_delta(now: i64) -> Vec<(String, (f64, f64), u64, u64)> {
     let counters = sysinfo::read_net_counters();
     let mut guard = MONITOR_NET.lock();
     let mut out = Vec::with_capacity(counters.len());
@@ -202,9 +208,11 @@ fn net_rate_delta(now: i64) -> Vec<(String, (f64, f64))> {
         let dt = (now - prev.ts).max(1) as f64;
         for (name, cur) in &counters {
             if let Some(p) = prev.counters.get(name) {
-                let rx = cur.rx_bytes.saturating_sub(p.rx_bytes) as f64 / dt;
-                let tx = cur.tx_bytes.saturating_sub(p.tx_bytes) as f64 / dt;
-                out.push((name.clone(), (rx, tx)));
+                let rx_delta = cur.rx_bytes.saturating_sub(p.rx_bytes);
+                let tx_delta = cur.tx_bytes.saturating_sub(p.tx_bytes);
+                let rx_rate = rx_delta as f64 / dt;
+                let tx_rate = tx_delta as f64 / dt;
+                out.push((name.clone(), (rx_rate, tx_rate), rx_delta, tx_delta));
             }
         }
     }
@@ -236,6 +244,39 @@ pub async fn series(
     let conn = state.db.lock().await;
     let samples = db::query_series(&conn, &q.category, &q.name, q.from, q.to)?;
     let points: Vec<(i64, f64)> = samples.into_iter().map(|s| (s.ts, s.value)).collect();
+    Ok(Json(SeriesResponse {
+        category: q.category,
+        name: q.name,
+        points,
+    }))
+}
+
+/// Aggregated series for network traffic totals.  Uses cumulative byte
+/// counters (`net_bytes` category) and computes MAX-MIN per bucket for
+/// exact bytes transferred — not interpolated from instantaneous rates.
+#[derive(Debug, Deserialize)]
+pub struct AggregateQuery {
+    pub category: String,
+    pub name: String,
+    pub from: i64,
+    pub to: i64,
+    pub bucket: i64, // bucket size in seconds
+}
+
+pub async fn aggregate(
+    State(state): State<AppState>,
+    Query(q): Query<AggregateQuery>,
+) -> ApiResult<Json<SeriesResponse>> {
+    let conn = state.db.lock().await;
+    let buckets = db::query_counter_aggregate(
+        &conn,
+        "net_bytes",
+        &q.name,
+        q.from,
+        q.to,
+        q.bucket,
+    )?;
+    let points: Vec<(i64, f64)> = buckets.into_iter().collect();
     Ok(Json(SeriesResponse {
         category: q.category,
         name: q.name,

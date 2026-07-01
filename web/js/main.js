@@ -7,7 +7,7 @@ import { renderLogin, renderSetup } from './pages/auth.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderUsers } from './pages/users.js';
 import { renderAudit } from './pages/audit.js';
-import { renderMonitorCpu, renderMonitorMemory, renderMonitorTemp, renderMonitorNetwork } from './pages/monitor.js';
+import { renderMonitorCpu, renderMonitorMemory, renderMonitorNetwork } from './pages/monitor.js';
 import { makePlannedPage } from './pages/planned.js';
 import { renderFsOverview } from './pages/filesystem.js';
 import { renderDisks } from './pages/disks.js';
@@ -33,7 +33,6 @@ defineRoute('/audit', renderAudit);
 // Monitor routes.
 defineRoute('/monitor', renderMonitorCpu);
 defineRoute('/monitor/memory', renderMonitorMemory);
-defineRoute('/monitor/temp', renderMonitorTemp);
 defineRoute('/monitor/network', renderMonitorNetwork);
 defineRoute('/filesystem', renderFsOverview);
 defineRoute('/filesystem/disks', renderDisks);

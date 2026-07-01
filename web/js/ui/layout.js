@@ -89,7 +89,6 @@ const MENU = [
     items: [
       { path: '/monitor', labelKey: 'nav.monitorCpu', icon: 'fa-solid fa-chart-line' },
       { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: 'fa-solid fa-memory' },
-      { path: '/monitor/temp', labelKey: 'nav.monitorTemp', icon: 'fa-solid fa-temperature-half' },
       { path: '/monitor/network', labelKey: 'common.network', icon: 'fa-solid fa-network-wired' },
     ],
   },
