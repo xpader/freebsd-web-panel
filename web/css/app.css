@@ -87,19 +87,19 @@ a:hover { color: var(--accent-hover); }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 7px 8px;
   background: transparent;
   border: none;
   border-radius: 6px;
   color: var(--text-dim);
-  font-size: 18px;
   font-family: inherit;
   cursor: pointer;
   line-height: 1;
 }
 .lang-btn:hover { background: var(--bg-elev2); }
 #lang-menu.open .lang-btn { background: var(--bg-elev2); }
-.lang-flag { font-size: 18px; line-height: 1; }
+.lang-flag { display: inline-flex; align-items: center; }
+.flag-img { width: 22px; height: 16px; display: block; }
 #lang-menu .settings-dropdown { min-width: 150px; }
 .lang-item.active { color: var(--accent); }
 

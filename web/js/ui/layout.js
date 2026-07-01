@@ -162,7 +162,7 @@ export function renderLayout(app, currentPath, pageContent) {
   const curLang = currentLangMeta();
   const langItems = LANGUAGES.map((l) => `
     <a href="#" class="lang-item ${l.code === curLang.code ? 'active' : ''}" data-lang="${l.code}">
-      <span class="icon lang-flag">${l.flag}</span>${l.label}
+      <img src="${l.flag}" class="flag-img" alt="${l.label}">${l.label}
     </a>`).join('');
 
   app.innerHTML = `
@@ -172,7 +172,7 @@ export function renderLayout(app, currentPath, pageContent) {
       <div class="topbar-right">
         <div class="settings-menu" id="lang-menu">
           <button class="lang-btn" id="lang-toggle" aria-haspopup="true" aria-expanded="false" title="${t('topbar.language')}">
-            <span class="icon lang-flag">${curLang.flag}</span>
+            <img src="${curLang.flag}" class="flag-img" alt="${curLang.label}">
           </button>
           <div class="settings-dropdown">
             ${langItems}

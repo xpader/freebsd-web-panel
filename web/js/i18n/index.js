@@ -12,10 +12,10 @@ import { en, zh } from './translations.js';
 
 const STORAGE_KEY = 'fwp_lang';
 
-// Supported languages — flag emoji as the menu icon.
+// Supported languages — SVG flag files (emoji flags don't render on Windows).
 export const LANGUAGES = [
-  { code: 'en', label: 'English', flag: '🇺🇸' },
-  { code: 'zh', label: '简体中文', flag: '🇨🇳' },
+  { code: 'en', label: 'English', flag: '/img/flag-us.svg' },
+  { code: 'zh', label: '简体中文', flag: '/img/flag-cn.svg' },
 ];
 
 let initPromise = null;
