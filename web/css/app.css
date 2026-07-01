@@ -319,6 +319,13 @@ tr:hover td { background: var(--bg-elev2); }
 .stat-label { font-size: 13px; color: var(--text-dim); white-space: nowrap; min-width: 70px; }
 .stat-val { font-size: 15px; font-weight: 600; word-break: break-all; }
 
+/* ---- Dashboard footer ---- */
+.dash-footer { display: flex; align-items: center; gap: 16px; padding: 16px 0 8px; font-size: 13px; }
+.dash-footer a { color: var(--accent); text-decoration: none; }
+.dash-footer a:hover { text-decoration: underline; }
+.dash-footer .github-icon { vertical-align: text-bottom; filter: brightness(0) invert(1); opacity: 0.85; }
+.dash-footer a:hover .github-icon { opacity: 1; }
+
 /* ---- Metric bars ---- */
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
 .big-pct { font-size: 30px; font-weight: 700; margin-bottom: 10px; }

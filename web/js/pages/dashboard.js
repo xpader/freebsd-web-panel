@@ -71,15 +71,11 @@ export async function renderDashboard(app) {
       <div id="m-network"><div class="text-dim">${t('common.loading')}</div></div>
     </div>
 
-    <div class="card">
-      <div class="card-title">${t('common.moduleStatus')}</div>
-      <table>
-        <thead><tr><th>${t('dash.module')}</th><th>${t('common.status')}</th><th>${t('dash.note')}</th></tr></thead>
-        <tbody>
-          ${MODULES.map(m => `<tr><td><a href="#${m.path}">${t(m.labelKey)}</a></td><td><span class="badge ${m.badge}">${t('status.planned')}</span></td><td class="text-dim">${t(m.noteKey)}</td></tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
+    <footer class="dash-footer">
+      <span>FreeBSD Web Panel (fwp)</span>
+      <span class="text-dim">© 2025</span>
+      <a href="https://github.com/xpader/freebsd-web-panel" target="_blank" rel="noopener"><img src="/img/github.svg" width="16" height="16" class="github-icon" alt="GitHub"> GitHub</a>
+    </footer>`;
 
   // Stop any previous polling, then start fresh.
   clearInterval(pollTimer);
@@ -217,14 +213,3 @@ function esc(s) {
   d.textContent = s ?? '';
   return d.innerHTML;
 }
-
-const MODULES = [
-  { path: '/sysctl', labelKey: 'mod.sysctl.label', noteKey: 'mod.sysctl.note', badge: 'badge-warn' },
-  { path: '/rcconf', labelKey: 'mod.rcconf.label', noteKey: 'mod.rcconf.note', badge: 'badge-warn' },
-  { path: '/network', labelKey: 'mod.network.label', noteKey: 'mod.network.note', badge: 'badge-warn' },
-  { path: '/services', labelKey: 'mod.services.label', noteKey: 'mod.services.note', badge: 'badge-warn' },
-  { path: '/pf', labelKey: 'mod.pf.label', noteKey: 'mod.pf.note', badge: 'badge-warn' },
-  { path: '/jails', labelKey: 'mod.jails.label', noteKey: 'mod.jails.note', badge: 'badge-warn' },
-  { path: '/bhyve', labelKey: 'mod.bhyve.label', noteKey: 'mod.bhyve.note', badge: 'badge-warn' },
-  { path: '/zfs', labelKey: 'mod.zfs.label', noteKey: 'mod.zfs.note', badge: 'badge-warn' },
-];
