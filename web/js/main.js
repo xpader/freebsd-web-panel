@@ -15,6 +15,7 @@ import { renderFiles } from './pages/files.js';
 import { renderZfsPools, renderZfsPoolDetail, renderZfsDatasets, renderZfsSnapshots } from './pages/zfs.js';
 import { renderSysUsers, renderSysGroups } from './pages/accounts.js';
 import { renderRcconf } from './pages/rcconf.js';
+import { renderServices } from './pages/services.js';
 import { renderCron } from './pages/cron.js';
 import { renderTerminal } from './pages/terminal.js';
 import { renderNetwork } from './pages/network.js';
@@ -42,7 +43,7 @@ defineRoute('/rcconf', renderRcconf);
 defineRoute('/cron', renderCron);
 defineRoute('/network', renderNetwork);
 defineRoute('/network/dns', renderDns);
-defineRoute('/services', makePlannedPage({ key: 'services', labelKey: 'nav.services' }));
+defineRoute('/services', renderServices);
 // System accounts routes.
 defineRoute('/accounts/users', renderSysUsers);
 defineRoute('/accounts/groups', renderSysGroups);

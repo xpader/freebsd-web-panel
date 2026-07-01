@@ -16,7 +16,7 @@ export async function renderSysUsers(app) {
     </div>
     <div class="card" style="padding:0;">
       <table>
-        <thead><tr><th>${t('auth.username')}</th><th>${t('accounts.uid')}</th><th>${t('accounts.group')}</th><th>${t('accounts.desc')}</th><th>${t('accounts.home')}</th><th>Shell</th></tr></thead>
+        <thead><tr><th>${t('auth.username')}</th><th>${t('accounts.uid')}</th><th>${t('accounts.group')}</th><th>${t('common.description')}</th><th>${t('accounts.home')}</th><th>Shell</th></tr></thead>
         <tbody id="sysusers-tbody">
           <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>

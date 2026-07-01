@@ -115,8 +115,8 @@ function renderTable(list) {
         ? `<div class="cell-wrap cron-comment">${esc(e.comment)}</div>`
         : `<span class="text-dim">—</span>`;
       const statusBadge = e.disabled
-        ? `<span class="badge badge-dim">${t('cron.disabled')}</span>`
-        : `<span class="badge badge-success">${t('cron.enabled')}</span>`;
+        ? `<span class="badge badge-dim">${t('common.disabled')}</span>`
+        : `<span class="badge badge-success">${t('common.enabled')}</span>`;
       const toggleLabel = e.disabled ? t('cron.enable') : t('cron.disable');
       const sysBadge = e.system_task
         ? `<span class="badge badge-warn" title="${escAttr(t('cron.systemTaskHint'))}">${t('cron.systemTask')}</span> `
@@ -314,7 +314,7 @@ window.__fwpCronToggle = async (source, line) => {
     disabled: !entry.disabled,
   };
   api.put('/api/crontab', payload).then(() => {
-    toast(entry.disabled ? t('cron.enabled') : t('cron.disabled'));
+    toast(entry.disabled ? t('common.enabled') : t('common.disabled'));
     load();
   }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
 };

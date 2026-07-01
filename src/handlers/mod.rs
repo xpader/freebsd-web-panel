@@ -7,6 +7,7 @@ pub mod filesystem;
 pub mod mod_stubs;
 pub mod network;
 pub mod rcconf;
+pub mod services;
 pub mod system;
 pub mod users;
 pub mod zfs;

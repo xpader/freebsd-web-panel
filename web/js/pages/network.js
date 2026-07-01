@@ -17,7 +17,7 @@ export async function renderNetwork(app) {
     <div class="toolbar">
       <span id="net-count" class="text-dim"></span>
       <div></div>
-      <button onclick="window.__fwpNetRefresh()">${t('net.refresh')}</button>
+      <button onclick="window.__fwpNetRefresh()">${t('common.refresh')}</button>
     </div>
 
     <div id="net-interfaces">
