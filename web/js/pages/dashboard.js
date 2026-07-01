@@ -28,12 +28,21 @@ export async function renderDashboard(app) {
 
   el.innerHTML = `
     <div class="stat-grid">
-      <div class="card"><div class="card-title">${t('dash.hostname')}</div><div class="card-value sm">${esc(info.hostname)}</div></div>
-      <div class="card"><div class="card-title">${t('dash.os')}</div><div class="card-value sm">${esc(info.os_release)}</div></div>
-      <div class="card"><div class="card-title">CPU</div><div class="card-value sm">${t('dash.cpuCores', { n: info.cpu_cores, model: esc(info.cpu_model) })}</div></div>
-      <div class="card"><div class="card-title">${t('dash.totalMemory')}</div><div class="card-value sm">${fmtBytes(info.memory_total)}</div></div>
-      <div class="card"><div class="card-title">${t('dash.uptime')}</div><div class="card-value sm" id="m-uptime">—</div></div>
-      <div class="card"><div class="card-title">${t('dash.loadavg')}</div><div class="card-value sm" id="m-loadavg">—</div></div>
+      <div class="card stat-card">
+        <div class="card-title"><i class="fa-solid fa-server"></i> ${t('dash.system')}</div>
+        <div class="stat-row"><span class="stat-label">${t('dash.hostname')}</span><span class="stat-val">${esc(info.hostname)}</span></div>
+        <div class="stat-row"><span class="stat-label">${t('dash.osVersion')}</span><span class="stat-val">${esc(info.os_version)}</span></div>
+      </div>
+      <div class="card stat-card">
+        <div class="card-title"><i class="fa-solid fa-microchip"></i> ${t('dash.hardware')}</div>
+        <div class="stat-row"><span class="stat-label">CPU</span><span class="stat-val">${t('dash.cpuCores', { n: info.cpu_cores, model: esc(info.cpu_model) })}</span></div>
+        <div class="stat-row"><span class="stat-label">${t('dash.totalMemory')}</span><span class="stat-val">${fmtBytes(info.memory_total)}</span></div>
+      </div>
+      <div class="card stat-card">
+        <div class="card-title"><i class="fa-solid fa-gauge-high"></i> ${t('dash.runtimeStatus')}</div>
+        <div class="stat-row"><span class="stat-label">${t('dash.uptime')}</span><span class="stat-val" id="m-uptime">—</span></div>
+        <div class="stat-row"><span class="stat-label">${t('dash.loadavg')}</span><span class="stat-val" id="m-loadavg">—</span></div>
+      </div>
     </div>
 
     <div class="metric-grid">

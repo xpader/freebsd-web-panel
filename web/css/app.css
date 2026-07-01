@@ -313,7 +313,11 @@ tr:hover td { background: var(--bg-elev2); }
 .card-title { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
 .card-value { font-size: 28px; font-weight: 700; }
 .card-value.sm { font-size: 16px; font-weight: 600; }
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+.stat-card .stat-row { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; }
+.stat-card .stat-row + .stat-row { border-top: 1px solid var(--border); }
+.stat-label { font-size: 13px; color: var(--text-dim); white-space: nowrap; min-width: 70px; }
+.stat-val { font-size: 15px; font-weight: 600; word-break: break-all; }
 
 /* ---- Metric bars ---- */
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }

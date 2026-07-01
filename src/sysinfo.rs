@@ -13,6 +13,21 @@ pub fn read_string(name: &str) -> Option<String> {
     Ctl::new(name).ok()?.value_string().ok()
 }
 
+/// Read the full OS version (including patch level, e.g. `15.1-RELEASE-p1`)
+/// via `freebsd-version -k`. Falls back to `kern.osrelease` (without patch
+/// level) if the command is unavailable.
+pub fn read_os_version() -> String {
+    std::process::Command::new("/bin/freebsd-version")
+        .arg("-k")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| read_string("kern.osrelease"))
+        .unwrap_or_default()
+}
+
 /// Read a numeric sysctl node as `u64`. Handles all integer variants.
 pub fn read_u64(name: &str) -> Option<u64> {
     let v = Ctl::new(name).ok()?.value().ok()?;

@@ -30,7 +30,7 @@ pub struct SystemInfo {
 pub async fn system_info() -> ApiResult<Json<SystemInfo>> {
     let hostname = sysinfo::read_string("kern.hostname").unwrap_or_else(|| "unknown".into());
     let os_release = sysinfo::read_string("kern.osrelease").unwrap_or_default();
-    let os_version = sysinfo::read_string("kern.osreldate").unwrap_or_default();
+    let os_version = sysinfo::read_os_version();
     let kernel = sysinfo::read_string("kern.ident").unwrap_or_default();
     let cpu_model = sysinfo::read_string("hw.model").unwrap_or_else(|| "unknown".into());
     let cpu_cores: u32 = sysinfo::read_u64("hw.ncpu").unwrap_or(1) as u32;
