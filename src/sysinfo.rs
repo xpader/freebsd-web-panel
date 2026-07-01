@@ -5,6 +5,7 @@
 //! duplicate sysctl parsing logic or spawn `/sbin/sysctl` on every call.
 
 use std::collections::HashMap;
+use libc::{c_int, sockaddr, sockaddr_dl, sockaddr_in};
 use sysctl::{Ctl, CtlValue, Sysctl};
 
 /// Read a sysctl node as a string (mirrors `sysctl -n <name>`).
@@ -124,6 +125,30 @@ pub fn read_core_temps(ncpu: u32) -> Vec<(usize, f32)> {
 
 // ---- Network ----
 
+/// FFI declarations for `getifaddrs(3)` — the Rust `libc` crate doesn't expose
+/// these on FreeBSD, so we declare them ourselves.  This is the same syscall
+/// `netstat` and `ifconfig` use internally; calling it directly avoids
+/// spawning subprocesses on every poll.
+#[repr(C)]
+struct Ifaddrs {
+    ifa_next: *mut Ifaddrs,
+    ifa_name: *mut libc::c_char,
+    ifa_flags: libc::c_uint,
+    ifa_addr: *mut libc::sockaddr,
+    ifa_netmask: *mut libc::sockaddr,
+    ifa_dstaddr: *mut libc::sockaddr,
+    ifa_data: *mut libc::c_void,
+}
+
+extern "C" {
+    fn getifaddrs(ifap: *mut *mut Ifaddrs) -> libc::c_int;
+    fn freeifaddrs(ifa: *mut Ifaddrs);
+}
+
+const AF_LINK: libc::c_int = 18;
+const AF_INET: libc::c_int = 2;
+const IFF_UP: libc::c_uint = 0x1;
+
 /// Per-interface traffic counters (cumulative since boot).
 #[derive(Debug, Clone, Default)]
 pub struct NetCounters {
@@ -133,7 +158,7 @@ pub struct NetCounters {
     pub tx_packets: u64,
 }
 
-/// Interface metadata from `ifconfig -a`.
+/// Interface metadata.
 #[derive(Debug, Clone)]
 pub struct NetIfaceInfo {
     pub name: String,
@@ -145,147 +170,117 @@ pub struct NetIfaceInfo {
     pub ipv4: Vec<String>,
 }
 
-/// Read per-interface traffic counters from `netstat -ibn`.
+/// Read per-interface traffic counters via `getifaddrs(3)`.
 ///
-/// Only `<Link#N>` rows are used — they carry raw byte/packet totals.
-/// Virtual/pseudo interfaces (loopback, epair, bridge, tap, tunnel, etc.)
-/// are excluded so that only physical NICs are returned.
-///
-/// Column indices are resolved from the header line (not hard-coded) so the
-/// parser is robust against FreeBSD versions that add/remove columns such as
-/// `Idrop`.
+/// Walks the interface address list; for each `AF_LINK` entry the `ifa_data`
+/// pointer references a `struct if_data` containing cumulative byte/packet
+/// counters.  Virtual/pseudo interfaces are excluded via `is_physical_iface`.
 pub fn read_net_counters() -> HashMap<String, NetCounters> {
     let mut map = HashMap::new();
-    let out = std::process::Command::new("/usr/bin/netstat")
-        .args(["-i", "-b", "-n"])
-        .output();
-    let Ok(o) = out else {
+    let mut head: *mut Ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs allocates a linked list; we free it via freeifaddrs.
+    if unsafe { getifaddrs(&mut head) } != 0 {
         return map;
-    };
-    let stdout = String::from_utf8_lossy(&o.stdout);
-    let mut lines = stdout.lines();
-
-    // Parse header to find column positions by name.
-    let headers: Vec<&str> = lines
-        .next()
-        .unwrap_or("")
-        .split_whitespace()
-        .collect();
-    let idx_of = |name: &str| headers.iter().position(|h| *h == name);
-    let ibytes_i = idx_of("Ibytes");
-    let obytes_i = idx_of("Obytes");
-    let ipkts_i = idx_of("Ipkts");
-    let opkts_i = idx_of("Opkts");
-
-    for line in lines {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        // Only <Link#> rows carry the raw byte counters.
-        if cols.len() < 2 || !cols[2].starts_with("<Link#") {
-            continue;
-        }
-        // Strip trailing '*' (marks inactive interfaces in netstat output).
-        let name = cols[0].trim_end_matches('*').to_string();
-        if !is_physical_iface(&name) {
-            continue;
-        }
-        let get = |i: Option<usize>| -> u64 {
-            i.and_then(|n| cols.get(n).and_then(|s| s.parse().ok()))
-                .unwrap_or(0)
-        };
-        map.insert(
-            name,
-            NetCounters {
-                rx_bytes: get(ibytes_i),
-                tx_bytes: get(obytes_i),
-                rx_packets: get(ipkts_i),
-                tx_packets: get(opkts_i),
-            },
-        );
     }
+    let mut cur = head;
+    while !cur.is_null() {
+        let entry = unsafe { &*cur };
+        if !entry.ifa_addr.is_null() {
+            let family = unsafe { (*entry.ifa_addr).sa_family as libc::c_int };
+            if family == AF_LINK && !entry.ifa_data.is_null() {
+                let name = iface_name(entry.ifa_name);
+                if is_physical_iface(&name) {
+                    let data = unsafe { &*(entry.ifa_data as *const libc::if_data) };
+                    map.insert(name, NetCounters {
+                        rx_bytes: data.ifi_ibytes,
+                        tx_bytes: data.ifi_obytes,
+                        rx_packets: data.ifi_ipackets,
+                        tx_packets: data.ifi_opackets,
+                    });
+                }
+            }
+        }
+        cur = entry.ifa_next;
+    }
+    unsafe { freeifaddrs(head) };
     map
 }
 
-/// Read interface metadata (status, addresses, media) from `ifconfig -a`.
+/// Read interface metadata (flags, MTU, MAC, IPv4) via `getifaddrs(3)`.
 ///
-/// Virtual/pseudo interfaces are excluded (same denylist as
-/// `read_net_counters`).  For each physical interface the link status
-/// ("active" / "no carrier"), media description, MAC, MTU, and IPv4 addresses
-/// are extracted.
+/// A single `getifaddrs` call returns multiple entries per interface (one per
+/// address family).  We accumulate data across entries: `AF_LINK` provides
+/// flags/MTU/MAC, `AF_INET` provides IPv4 addresses.  Virtual/pseudo
+/// interfaces are excluded.
 pub fn read_net_info() -> Vec<NetIfaceInfo> {
-    let mut out = Vec::new();
-    let output = std::process::Command::new("/sbin/ifconfig")
-        .arg("-a")
-        .output();
-    let Ok(o) = output else {
-        return out;
-    };
-    let stdout = String::from_utf8_lossy(&o.stdout);
+    let mut ifaces: HashMap<String, NetIfaceInfo> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
 
-    let mut current: Option<NetIfaceInfo> = None;
-    for line in stdout.lines() {
-        // Interface definition lines start at column 0 (no leading whitespace).
-        if !line.starts_with(|c: char| !c.is_whitespace()) {
-            // Detail line — update the current interface.
-            if let Some(ref mut iface) = current {
-                let trimmed = line.trim();
-                if trimmed.starts_with("inet ") {
-                    if let Some(addr) = trimmed.split_whitespace().nth(1) {
-                        iface.ipv4.push(addr.to_string());
-                    }
-                } else if trimmed.starts_with("ether ") {
-                    iface.mac = trimmed.split_whitespace().nth(1).map(String::from);
-                } else if trimmed.starts_with("media:") {
-                    iface.media = trimmed
-                        .strip_prefix("media:")
-                        .unwrap_or(trimmed)
-                        .trim()
-                        .to_string();
-                } else if trimmed.starts_with("status:") {
-                    iface.status = trimmed
-                        .strip_prefix("status:")
-                        .unwrap_or(trimmed)
-                        .trim()
-                        .to_string();
+    let mut head: *mut Ifaddrs = std::ptr::null_mut();
+    if unsafe { getifaddrs(&mut head) } != 0 {
+        return Vec::new();
+    }
+    let mut cur = head;
+    while !cur.is_null() {
+        let entry = unsafe { &*cur };
+        if !entry.ifa_addr.is_null() {
+            let family = unsafe { (*entry.ifa_addr).sa_family as libc::c_int };
+            let name = iface_name(entry.ifa_name);
+            if !is_physical_iface(&name) {
+                cur = entry.ifa_next;
+                continue;
+            }
+            if !ifaces.contains_key(&name) {
+                order.push(name.clone());
+                ifaces.insert(name.clone(), NetIfaceInfo {
+                    name: name.clone(),
+                    mtu: 0,
+                    mac: None,
+                    up: false,
+                    status: String::new(),
+                    media: String::new(),
+                    ipv4: Vec::new(),
+                });
+            }
+            let iface = ifaces.get_mut(&name).unwrap();
+            if family == AF_LINK && !entry.ifa_data.is_null() {
+                let data = unsafe { &*(entry.ifa_data as *const libc::if_data) };
+                iface.mtu = data.ifi_mtu;
+                iface.up = entry.ifa_flags & IFF_UP != 0;
+                // Extract MAC from sockaddr_dl.
+                let sdl = entry.ifa_addr as *const libc::sockaddr_dl;
+                let nlen = unsafe { (*sdl).sdl_nlen } as usize;
+                let alen = unsafe { (*sdl).sdl_alen } as usize;
+                if alen == 6 && nlen + alen <= unsafe { (*sdl).sdl_data }.len() {
+                    let bytes = unsafe { &(*sdl).sdl_data };
+                    iface.mac = Some(format!(
+                        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        bytes[nlen] as u8, bytes[nlen+1] as u8, bytes[nlen+2] as u8,
+                        bytes[nlen+3] as u8, bytes[nlen+4] as u8, bytes[nlen+5] as u8,
+                    ));
                 }
-            }
-            continue;
-        }
-
-        // Flush previous interface.
-        if let Some(iface) = current.take() {
-            if is_physical_iface(&iface.name) {
-                out.push(iface);
+            } else if family == AF_INET {
+                let sin = entry.ifa_addr as *const libc::sockaddr_in;
+                let addr = unsafe { (*sin).sin_addr };
+                let ip = u32::from_be(addr.s_addr);
+                iface.ipv4.push(format!("{}.{}.{}.{}", ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff));
             }
         }
+        cur = entry.ifa_next;
+    }
+    unsafe { freeifaddrs(head) };
 
-        // Parse: "name: flags=..." → extract name, flags, mtu.
-        let name = line.split(':').next().unwrap_or("").to_string();
-        if name.is_empty() {
-            continue;
-        }
-        let up = line.contains("<UP");
-        let mtu = line
-            .split_whitespace()
-            .find(|w| w.starts_with("mtu"))
-            .and_then(|w| w[3..].parse().ok())
-            .unwrap_or(0);
-        current = Some(NetIfaceInfo {
-            name,
-            mtu,
-            mac: None,
-            up,
-            status: String::new(),
-            media: String::new(),
-            ipv4: Vec::new(),
-        });
+    // Return in the order interfaces were first seen.
+    order.into_iter().filter_map(|n| ifaces.remove(&n)).collect()
+}
+
+/// Extract the interface name from a C string pointer.
+fn iface_name(ptr: *const libc::c_char) -> String {
+    unsafe {
+        std::ffi::CStr::from_ptr(ptr)
+            .to_string_lossy()
+            .into_owned()
     }
-    // Flush last interface.
-    if let Some(iface) = current.take() {
-        if is_physical_iface(&iface.name) {
-            out.push(iface);
-        }
-    }
-    out
 }
 
 /// Whether an interface name refers to a physical NIC.

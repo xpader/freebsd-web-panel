@@ -156,12 +156,14 @@ async function refreshMetrics() {
           <div class="dash-net-head">
             <span class="dash-net-name mono">${esc(iface.name)}</span>
             <span class="badge ${statusCls}">${esc(statusText)}</span>
+            <span class="dash-net-rates">
+              <span class="dash-net-rate dash-net-rx">↓ ${fmtRate(iface.rx_rate)}</span>
+              <span class="dash-net-rate dash-net-tx">↑ ${fmtRate(iface.tx_rate)}</span>
+            </span>
+          </div>
+          <div class="dash-net-bottom">
             ${ip ? `<span class="dash-net-ip text-dim mono">${esc(ip)}</span>` : ''}
             ${iface.media ? `<span class="text-dim" style="font-size:11px;">${esc(iface.media)}</span>` : ''}
-          </div>
-          <div class="dash-net-rates">
-            <span class="dash-net-rate dash-net-rx">↓ ${fmtRate(iface.rx_rate)}</span>
-            <span class="dash-net-rate dash-net-tx">↑ ${fmtRate(iface.tx_rate)}</span>
             <span class="dash-net-total text-dim">${t('dash.netTotal', { rx: fmtBytes(iface.rx_bytes), tx: fmtBytes(iface.tx_bytes) })}</span>
           </div>
         </div>`;
