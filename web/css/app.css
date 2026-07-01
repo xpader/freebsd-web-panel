@@ -554,7 +554,7 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .term-page { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 .term-toolbar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .term-host { flex: 1; min-height: 0; background: #0b0e14; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.term-host .terminal { height: 100%; }
+.term-host .terminal { height: 100%; padding: 5px; }
 .term-host .xterm-viewport { overflow-y: auto !important; }
 
 /* Network interface cards */

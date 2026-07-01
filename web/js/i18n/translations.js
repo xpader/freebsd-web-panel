@@ -230,7 +230,6 @@ export const en = {
   },
   term: {
     title: 'Shell',
-    subtitle: 'Interactive terminal session (runs as root)',
     reconnect: 'Reconnect',
     connected: 'Connected',
     disconnected: 'Disconnected',
@@ -788,7 +787,6 @@ export const zh = {
   },
   term: {
     title: '终端',
-    subtitle: '交互式终端会话（以 root 身份运行）',
     reconnect: '重新连接',
     connected: '已连接',
     disconnected: '已断开',

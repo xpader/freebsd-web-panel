@@ -17,7 +17,6 @@ export async function renderTerminal(app) {
   renderLayout(app, '/shell', `
     <div class="page-header">
       <h1>${t('term.title')}</h1>
-      <p>${t('term.subtitle')}</p>
     </div>
     <div class="term-page">
       <div class="term-toolbar">
