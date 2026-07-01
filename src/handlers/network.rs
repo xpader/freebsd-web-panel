@@ -104,6 +104,7 @@ pub struct NetworkInterface {
     pub metric: u32,
     pub mac: Option<String>,
     pub link_state: String,
+    pub baudrate: u64,
     pub ipv4: Vec<IpConfig>,
     pub ipv6: Vec<IpConfig>,
 }
@@ -168,6 +169,7 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
             metric: 0,
             mac: None,
             link_state: String::from("unknown"),
+            baudrate: 0,
             ipv4: Vec::new(),
             ipv6: Vec::new(),
         });
@@ -236,6 +238,7 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
                     let ifd = unsafe { &*(ifa.ifa_data as *const libc::if_data) };
                     entry.mtu = ifd.ifi_mtu;
                     entry.metric = ifd.ifi_metric;
+                    entry.baudrate = ifd.ifi_baudrate;
                     entry.link_state = match ifd.ifi_link_state {
                         0 => String::from("unknown"),
                         1 => String::from("down"),

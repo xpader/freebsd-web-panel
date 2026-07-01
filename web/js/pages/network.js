@@ -117,8 +117,7 @@ function renderCard(iface) {
         <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">${ipv4Rows}</span></div>
         <div class="kv"><span class="kv-key">IPv6</span><span class="kv-val">${ipv6Rows}</span></div>
         <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">${esc(iface.mac || '—')}</span></div>
-        <div class="kv"><span class="kv-key">MTU</span><span class="kv-val">${iface.mtu || '—'}</span></div>
-        ${iface.metric ? `<div class="kv"><span class="kv-key">Metric</span><span class="kv-val">${iface.metric}</span></div>` : ''}
+        ${iface.is_physical && iface.baudrate ? `<div class="kv"><span class="kv-key">${t('net.speed')}</span><span class="kv-val">${fmtSpeed(iface.baudrate)}</span></div>` : ''}
       </div>
       <div class="net-iface-footer">
         <button class="btn-secondary btn-sm" onclick="window.__fwpNetDetail('${escAttr(iface.name)}')">${t('net.detail')}</button>
@@ -255,6 +254,15 @@ function fmtExpire(expire) {
   const m = Math.floor(remain / 60);
   const s = remain % 60;
   return m > 0 ? `${m}m${s}s` : `${s}s`;
+}
+
+function fmtSpeed(baudrate) {
+  if (!baudrate) return '—';
+  const bps = baudrate;
+  if (bps >= 1e9) return `${(bps / 1e9).toFixed(bps % 1e9 ? 1 : 0)} Gbps`;
+  if (bps >= 1e6) return `${(bps / 1e6).toFixed(bps % 1e6 ? 0 : 0)} Mbps`;
+  if (bps >= 1e3) return `${(bps / 1e3).toFixed(0)} Kbps`;
+  return `${bps} bps`;
 }
 
 function esc(s) {
