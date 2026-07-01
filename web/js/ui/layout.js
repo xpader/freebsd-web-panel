@@ -46,6 +46,7 @@ const MENU = [
     default: '/network',
     items: [
       { path: '/network', labelKey: 'nav.networkIf', icon: 'fa-solid fa-ethernet' },
+      { path: '/network/dns', labelKey: 'nav.networkDns', icon: 'fa-solid fa-server' },
       { path: '/pf', labelKey: 'nav.pf', icon: 'fa-solid fa-shield-halved' },
     ],
   },

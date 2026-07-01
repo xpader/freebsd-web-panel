@@ -5,6 +5,7 @@ pub mod crontab;
 pub mod files;
 pub mod filesystem;
 pub mod mod_stubs;
+pub mod network;
 pub mod rcconf;
 pub mod system;
 pub mod users;

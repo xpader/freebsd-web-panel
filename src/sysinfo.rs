@@ -294,7 +294,7 @@ pub fn read_net_info() -> Vec<NetIfaceInfo> {
 /// by FreeBSD: loopback, jail epairs, bridges, taps, tunnels, VPN, netgraph,
 /// vm-bhyve switches, etc.  Everything else (bge, em, igb, ix, ixl, vmx,
 /// vtnet, re, wlan, vlan, ...) is treated as physical.
-fn is_physical_iface(name: &str) -> bool {
+pub fn is_physical_iface(name: &str) -> bool {
     const VIRTUAL: &[&str] = &[
         "lo",         // loopback
         "epair",      // jail vnet pair

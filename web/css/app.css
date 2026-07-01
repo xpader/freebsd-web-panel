@@ -541,3 +541,28 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .term-host { flex: 1; min-height: 0; background: #0b0e14; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .term-host .terminal { height: 100%; }
 .term-host .xterm-viewport { overflow-y: auto !important; }
+
+/* Network interface cards */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card-grid .card { margin-bottom: 0; }
+.net-iface { display: flex; flex-direction: column; padding: 24px; }
+.net-iface-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.net-iface-icon { font-size: 18px; line-height: 1; }
+.net-iface-icon.up { color: var(--success); }
+.net-iface-icon.down { color: var(--danger); }
+.net-iface-name { font-size: 15px; font-weight: 600; }
+.net-iface-name-spacer { flex: 1; }
+.net-iface-body { font-size: 13px; flex: 1; }
+.net-iface-footer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
+.kv { display: grid; grid-template-columns: 70px 1fr; gap: 8px; padding: 6px 0; }
+.kv-key { color: var(--text-dim); font-size: 12px; }
+.kv-val { word-break: break-all; }
+.kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin: 12px 0; }
+
+/* DNS slots */
+.dns-slots { display: flex; flex-direction: column; gap: 14px; }
+.dns-slot { display: flex; align-items: center; gap: 10px; }
+.dns-slot-label { width: 110px; font-size: 13px; font-weight: 600; color: var(--text-dim); flex-shrink: 0; white-space: nowrap; }
+.dns-slot-input { flex: 1; display: flex; gap: 6px; }
+.dns-slot-input input { flex: 1; }
+.dns-slot-clear { flex-shrink: 0; padding: 6px 8px; }

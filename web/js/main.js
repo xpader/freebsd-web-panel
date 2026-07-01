@@ -17,6 +17,8 @@ import { renderSysUsers, renderSysGroups } from './pages/accounts.js';
 import { renderRcconf } from './pages/rcconf.js';
 import { renderCron } from './pages/cron.js';
 import { renderTerminal } from './pages/terminal.js';
+import { renderNetwork } from './pages/network.js';
+import { renderDns } from './pages/dns.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -39,7 +41,8 @@ defineRoute('/filesystem/files', renderFiles);
 defineRoute('/sysctl', makePlannedPage({ key: 'sysctl', labelKey: 'nav.sysctl' }));
 defineRoute('/rcconf', renderRcconf);
 defineRoute('/cron', renderCron);
-defineRoute('/network', makePlannedPage({ key: 'network', labelKey: 'common.network' }));
+defineRoute('/network', renderNetwork);
+defineRoute('/network/dns', renderDns);
 defineRoute('/services', makePlannedPage({ key: 'services', labelKey: 'nav.services' }));
 // System accounts routes.
 defineRoute('/accounts/users', renderSysUsers);
