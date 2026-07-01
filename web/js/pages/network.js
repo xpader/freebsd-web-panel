@@ -118,6 +118,7 @@ function renderCard(iface) {
         <div class="kv"><span class="kv-key">IPv6</span><span class="kv-val">${ipv6Rows}</span></div>
         <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">${esc(iface.mac || '—')}</span></div>
         ${iface.is_physical && iface.baudrate ? `<div class="kv"><span class="kv-key">${t('net.speed')}</span><span class="kv-val">${fmtSpeed(iface.baudrate)}</span></div>` : ''}
+        ${iface.groups.length ? `<div class="kv"><span class="kv-key">${t('net.groups')}</span><span class="kv-val">${iface.groups.map(g => `<span class="badge badge-dim">${esc(g)}</span>`).join(' ')}</span></div>` : ''}
       </div>
       <div class="net-iface-footer">
         <button class="btn-secondary btn-sm" onclick="window.__fwpNetDetail('${escAttr(iface.name)}')">${t('net.detail')}</button>
@@ -223,6 +224,7 @@ window.__fwpNetDetail = (name) => {
         <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">${esc(iface.mac || '—')}</span></div>
         <div class="kv"><span class="kv-key">MTU</span><span class="kv-val">${iface.mtu}</span></div>
         <div class="kv"><span class="kv-key">Metric</span><span class="kv-val">${iface.metric}</span></div>
+        ${iface.groups.length ? `<div class="kv"><span class="kv-key">${t('net.groups')}</span><span class="kv-val">${iface.groups.map(g => `<span class="badge badge-dim">${esc(g)}</span>`).join(' ')}</span></div>` : ''}
       </div>
       ${ipv4Rows ? `
         <h4 style="margin-top:1rem;">IPv4</h4>
