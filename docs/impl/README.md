@@ -25,6 +25,7 @@
 | [16-crontab.md](16-crontab.md) | 定时任务：列出/新增/修改/删除/启停 crontab 条目（crontab） | `handlers/crontab.rs`, `web/js/pages/cron.js` |
 | [17-network.md](17-network.md) | 网络接口管理（只读）：接口列表/路由表/默认网关（getifaddrs + sysctl，无子进程） | `handlers/network.rs`, `web/js/pages/network.js` |
 | [18-services.md](18-services.md) | 服务管理：列出 rc.d 服务（启用/运行状态）、start/stop/restart 控制 | `handlers/services.rs`, `web/js/pages/services.js` |
+| [19-sysctl.md](19-sysctl.md) | sysctl 浏览：列出全部内核参数（值/类型/描述/修改状态），搜索+分页 | `handlers/sysctl.rs`, `web/js/pages/sysctl.js` |
 
 ## 文档规范
 

@@ -28,9 +28,6 @@ macro_rules! status {
     };
 }
 
-status!(sysctl, "sysctl");
-status!(services, "services");
 status!(pf, "pf");
 status!(jails, "jails");
 status!(bhyve, "bhyve");
-status!(zfs, "zfs");

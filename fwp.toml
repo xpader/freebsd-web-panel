@@ -1,6 +1,6 @@
 [server]
 listen = "127.0.0.1:8080"
-web_root = "/usr/local/share/fwp/web"
+web_root = "web"
 
 [paths]
 db = "/var/db/fwp/fwp.db"

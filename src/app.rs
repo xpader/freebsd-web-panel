@@ -38,8 +38,9 @@ pub fn build(state: AppState) -> Router {
         // --- System accounts (FreeBSD users & groups) ---
         .route("/api/accounts/users", get(handlers::accounts::list_users))
         .route("/api/accounts/groups", get(handlers::accounts::list_groups))
-        // --- module stubs (planned) ---
-        .route("/api/sysctl", get(handlers::mod_stubs::sysctl))
+        // --- sysctl ---
+        .route("/api/sysctl", get(handlers::sysctl::list))
+        .route("/api/sysctl/{name}", put(handlers::sysctl::set).delete(handlers::sysctl::reset))
         // --- rc.conf (sysrc) ---
         .route("/api/rcconf", get(handlers::rcconf::list).put(handlers::rcconf::set))
         .route("/api/rcconf", delete(handlers::rcconf::delete))

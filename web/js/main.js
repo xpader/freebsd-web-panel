@@ -20,6 +20,7 @@ import { renderCron } from './pages/cron.js';
 import { renderTerminal } from './pages/terminal.js';
 import { renderNetwork } from './pages/network.js';
 import { renderDns } from './pages/dns.js';
+import { renderSysctl } from './pages/sysctl.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -38,7 +39,7 @@ defineRoute('/monitor/network', renderMonitorNetwork);
 defineRoute('/filesystem', renderFsOverview);
 defineRoute('/filesystem/disks', renderDisks);
 defineRoute('/filesystem/files', renderFiles);
-defineRoute('/sysctl', makePlannedPage({ key: 'sysctl', labelKey: 'nav.sysctl' }));
+defineRoute('/sysctl', renderSysctl);
 defineRoute('/rcconf', renderRcconf);
 defineRoute('/cron', renderCron);
 defineRoute('/network', renderNetwork);

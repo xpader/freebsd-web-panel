@@ -469,6 +469,7 @@ tr.row-dim { opacity: 0.55; }
 .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
 .text-dim { color: var(--text-dim); }
 .cell-wrap { max-width: 480px; overflow-wrap: anywhere; word-break: break-all; }
+.cell-ellipsis { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mb-0 { margin-bottom: 0; }
 .mt-8 { margin-top: 8px; }
 .flex { display: flex; gap: 8px; align-items: center; }
@@ -581,3 +582,33 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .dns-slot-input { flex: 1; display: flex; gap: 6px; }
 .dns-slot-input input { flex: 1; }
 .dns-slot-clear { flex-shrink: 0; padding: 6px 8px; }
+
+/* ---- Sysctl ---- */
+.filter-group { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.filter-btn { padding: 4px 12px; font-size: 12px; background: var(--bg-elev); border: none; color: var(--text-dim); cursor: pointer; border-right: 1px solid var(--border); transition: all 0.15s; }
+.filter-btn:last-child { border-right: none; }
+.filter-btn:hover { color: var(--text); }
+.filter-btn.active { background: var(--accent); color: #fff; }
+.checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.checkbox-label input { margin: 0; }
+.badge-modified {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 6px; border-radius: 3px;
+  font-size: 10px; font-weight: 600;
+  background: rgba(245, 158, 11, 0.15); color: var(--warn);
+}
+.badge-writable {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 6px; border-radius: 3px;
+  font-size: 10px; font-weight: 600;
+  background: rgba(59, 130, 246, 0.15); color: #60a5fa;
+}
+.badge-type {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  font-size: 10px; font-family: "SF Mono", Menlo, Consolas, monospace;
+  background: var(--bg-elev2); color: var(--text-dim);
+}
+tr.row-modified > td { background: rgba(245, 158, 11, 0.04); }
+.pagination { display: flex; align-items: center; gap: 4px; justify-content: center; padding: 12px 0; flex-wrap: wrap; }
+.pagination .btn-sm.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
