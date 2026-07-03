@@ -57,7 +57,8 @@ pub fn build(state: AppState) -> Router {
         .route("/api/services", get(handlers::services::list))
         .route("/api/services/{name}/{action}", post(handlers::services::control))
         .route("/api/pf", get(handlers::mod_stubs::pf))
-        .route("/api/jails", get(handlers::mod_stubs::jails))
+        .route("/api/jails", get(handlers::jails::list))
+        .route("/api/jails/{name}", get(handlers::jails::detail))
         .route("/api/bhyve", get(handlers::mod_stubs::bhyve))
         // --- ZFS ---
         .route("/api/zfs/pools", get(handlers::zfs::pool_list))

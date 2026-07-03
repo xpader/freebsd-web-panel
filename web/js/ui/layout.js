@@ -75,9 +75,16 @@ const MENU = [
     key: 'virtualization',
     labelKey: 'nav.virtualization',
     icon: 'fa-solid fa-cubes',
-    default: '/jails',
+    default: '/jails/running',
     items: [
-      { path: '/jails', labelKey: 'nav.jails', icon: 'fa-solid fa-cube' },
+      {
+        path: '/jails',
+        labelKey: 'nav.jails',
+        icon: 'fa-solid fa-cube',
+        children: [
+          { path: '/jails/running', labelKey: 'nav.jailRunning', icon: 'fa-solid fa-play' },
+        ],
+      },
       { path: '/bhyve', labelKey: 'nav.bhyve', icon: 'fa-regular fa-square' },
     ],
   },

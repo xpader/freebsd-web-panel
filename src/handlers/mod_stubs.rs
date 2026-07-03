@@ -29,5 +29,4 @@ macro_rules! status {
 }
 
 status!(pf, "pf");
-status!(jails, "jails");
 status!(bhyve, "bhyve");

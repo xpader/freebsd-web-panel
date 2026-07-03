@@ -4,6 +4,7 @@ pub mod auth;
 pub mod crontab;
 pub mod files;
 pub mod filesystem;
+pub mod jails;
 pub mod mod_stubs;
 pub mod network;
 pub mod rcconf;
