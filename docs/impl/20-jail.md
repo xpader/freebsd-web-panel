@@ -102,9 +102,29 @@ fn main() {
 
 #### 容器列表与详情
 
-- `list()` → `GET /api/jails` — 调用 `jail::list_jails()`（libjail），仅返回运行中 jail
-- `conf_list()` → `GET /api/jails/all` — 解析 jail.conf，交叉比对 libjail 运行状态，返回全部 jail（含已停止）
-- `detail(name)` → `GET /api/jails/{name}` — 调用 `jail::get_jail()`，返回全部参数
+统一数据结构 `JailInfo`，列表与详情共用，通过 `Option` 字段区分：
+
+```rust
+pub struct JailInfo {
+    pub name: String,
+    pub jid: i32,                              // >0 = 运行中, 0 = 已停止
+    pub hostname: String,
+    pub path: String,
+    pub ip4_addr: String,                      // 逗号分隔，非数组
+    pub ip6_addr: String,
+    pub params: Option<HashMap<String, String>>,   // 仅详情：jail.conf 参数
+    pub runtime: Option<JailRuntime>,              // 仅详情 + 运行中
+}
+
+pub struct JailRuntime {
+    pub jid: i32,
+    pub state: String,                        // "running" | "dying"
+    pub params: HashMap<String, String>,      // libjail 全部运行时参数
+}
+```
+
+- `list(q)` → `GET /api/jails` — 默认返回全部 jail（解析 jail.conf + 交叉比对 libjail 运行状态）；`?running=true` 时走 libjail 快速路径，仅返回运行中 jail。列表视图不填充 `params`/`runtime`。
+- `detail(name)` → `GET /api/jails/{name}` — 始终返回 jail.conf 配置参数（`params`），运行中时额外填充 `runtime`。前端将 conf 参数与 libjail 参数合并展示。
 
 #### Jail 创建
 
@@ -146,7 +166,7 @@ testjail {
 
 ### 基础系统存储架构
 
-#### 核心模型：三种基础系统类型
+#### 核心模型：两种基础系统类型
 
 基础系统有**两种类型**，每种对应一种镜像创建方式：
 
@@ -233,8 +253,8 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 #### 容器列表页（`/jails/running`）
 
 - Tab 切换（运行中 / 全部），使用 `filter-group` + `filter-btn` 样式
-- 运行中：调用 `GET /api/jails`（libjail）
-- 全部：调用 `GET /api/jails/all`（jail.conf 解析）
+- 运行中：调用 `GET /api/jails?running=true`（libjail 快速路径）
+- 全部：调用 `GET /api/jails`（jail.conf 解析 + libjail 状态合并）
 - 表格列：JID / 名称 / 主机名 / 路径 / IP / 状态 / 操作
 - 行可点击跳转详情页
 - 操作列：启动 / 停止（按状态启用/禁用）/ 删除按钮
@@ -252,8 +272,11 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 #### Jail 详情页（`/jails/detail/<name>`）
 
-- 概览卡片（JID、状态、persist、父级 JID）
-- 分区表格：网络 / 主机信息 / 安全 / 系统 / 权限（allow.* 徽章网格）/ 全部参数
+- 单次 API 调用 `GET /api/jails/{name}`，返回配置参数 + 可选运行时
+- 头部行内布局：JID / 状态 / persist / 父级（紧凑展示，非独立卡片）
+- 运行中时额外显示运行时信息卡片（osrelease、osreldate、cpuset 等）
+- 分区表格：网络 / 主机信息 / 安全 / 系统 / 权限（allow.* 徽章网格）
+- conf 参数与 libjail 参数合并后统一展示
 
 #### 基础系统列表页（`/jails/bases`）
 
@@ -287,9 +310,9 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/api/jails` | — | `[{jid, name, hostname, path, ip4_addr[], ip6_addr[], state, persist}]` |
-| GET | `/api/jails/all` | — | `[{name, running, path, hostname, interface, ip4, ip4_addr, params}]` |
-| GET | `/api/jails/{name}` | — | `{jid, name, hostname, path, ip4_addr[], ip6_addr[], state, persist, params}` |
+| GET | `/api/jails` | — | `[{name, jid, hostname, path, ip4_addr, ip6_addr}]`（全部 jail，jid>0=运行中） |
+| GET | `/api/jails?running=true` | — | 同上，仅运行中 jail |
+| GET | `/api/jails/{name}` | — | `{name, jid, hostname, path, ip4_addr, ip6_addr, params?, runtime?}` |
 
 ### Jail 生命周期
 

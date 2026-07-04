@@ -23,32 +23,34 @@ const CP: &str = "/bin/cp";
 
 // ── Running jail list / detail ────────────────────────────────────
 
-/// A running jail's essential runtime information (list view).
-#[derive(Debug, Serialize)]
+/// Unified jail info struct. Used in all list and detail responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JailInfo {
-    pub jid: i32,
     pub name: String,
+    /// JID > 0 if running, 0 if stopped.
+    #[serde(default)]
+    pub jid: i32,
+    // ── basic info (always present, for list display) ──
     pub hostname: String,
     pub path: String,
-    pub ip4_addr: Vec<String>,
-    pub ip6_addr: Vec<String>,
-    /// "running" or "dying".
-    pub state: String,
-    pub persist: bool,
+    pub ip4_addr: String,
+    pub ip6_addr: String,
+    // ── detail-only fields ──
+    /// Config params from jail.conf (merged with globals, variable-substituted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<HashMap<String, String>>,
+    /// Runtime info from libjail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<JailRuntime>,
 }
 
-/// Complete jail detail including all parameters (detail view).
-#[derive(Debug, Serialize)]
-pub struct JailDetail {
+/// Runtime information from libjail (only for running jails in detail view).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JailRuntime {
     pub jid: i32,
-    pub name: String,
-    pub hostname: String,
-    pub path: String,
-    pub ip4_addr: Vec<String>,
-    pub ip6_addr: Vec<String>,
+    /// "running" or "dying".
     pub state: String,
-    pub persist: bool,
-    /// All parameters from libjail, keyed by parameter name.
+    /// All runtime parameters from libjail.
     pub params: HashMap<String, String>,
 }
 
@@ -59,56 +61,84 @@ fn split_addrs(val: &str) -> Vec<String> {
     val.split(',').map(|s| s.trim().to_string()).collect()
 }
 
-fn jail_info(p: &HashMap<String, String>) -> Option<JailInfo> {
-    let jid: i32 = p.get("jid")?.parse().ok()?;
-    let name = p.get("name")?.clone();
-    let hostname = p.get("host.hostname").cloned().unwrap_or_default();
-    let path = p.get("path").cloned().unwrap_or_default();
-    let ip4_addr = split_addrs(p.get("ip4.addr").map(|s| s.as_str()).unwrap_or(""));
-    let ip6_addr = split_addrs(p.get("ip6.addr").map(|s| s.as_str()).unwrap_or(""));
-    let dying = p.get("dying").map(|v| v == "true").unwrap_or(false);
-    let persist = p.get("persist").map(|v| v == "true").unwrap_or(false);
-    Some(JailInfo {
-        jid,
-        name,
-        hostname,
-        path,
-        ip4_addr,
-        ip6_addr,
-        state: if dying { "dying".to_string() } else { "running".to_string() },
-        persist,
-    })
+#[derive(Debug, Deserialize)]
+pub struct ListQuery {
+    /// "true" = only running, "false" or absent = all (from jail.conf).
+    #[serde(default)]
+    pub running: Option<String>,
 }
 
-/// List all running jails (including dying ones).
-pub async fn list() -> ApiResult<Json<Vec<JailInfo>>> {
-    let jails = jail::list_jails()
+/// List jails. By default returns all jails from jail.conf with running
+/// status merged from libjail. Pass ?running=true to get only running jails.
+pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> {
+    let only_running = q.running.as_deref() == Some("true");
+
+    if only_running {
+        // Fast path: query libjail directly.
+        let jails: Vec<JailInfo> = jail::list_jails()
+            .map_err(ApiError::Internal)?
+            .iter()
+            .filter_map(|p| {
+                let jid: i32 = p.get("jid")?.parse().ok()?;
+                Some(JailInfo {
+                    name: p.get("name")?.clone(),
+                    jid,
+                    hostname: p.get("host.hostname").cloned().unwrap_or_default(),
+                    path: p.get("path").cloned().unwrap_or_default(),
+                    ip4_addr: p.get("ip4.addr").cloned().unwrap_or_default(),
+                    ip6_addr: p.get("ip6.addr").cloned().unwrap_or_default(),
+                    params: None,
+                    runtime: None,
+                })
+            })
+            .collect();
+        return Ok(Json(jails));
+    }
+
+    // Default: all jails from jail.conf + running status from libjail.
+    let entries = parse_jail_conf()?;
+
+    let running: HashMap<String, i32> = jail::list_jails()
         .map_err(ApiError::Internal)?
         .iter()
-        .filter_map(|p| jail_info(p))
+        .filter_map(|p| {
+            let name = p.get("name")?;
+            let jid: i32 = p.get("jid")?.parse().ok()?;
+            Some((name.clone(), jid))
+        })
         .collect();
-    Ok(Json(jails))
+
+    let result: Vec<JailInfo> = entries
+        .into_iter()
+        .map(|pj| {
+            let jid = running.get(&pj.name).copied().unwrap_or(0);
+            JailInfo {
+                hostname: pj.params.get("host.hostname").cloned().unwrap_or_else(|| pj.name.clone()),
+                path: pj.params.get("path").cloned().unwrap_or_default(),
+                ip4_addr: pj.params.get("ip4.addr").cloned().unwrap_or_else(|| pj.params.get("ip4").cloned().unwrap_or_default()),
+                ip6_addr: pj.params.get("ip6.addr").cloned().unwrap_or_else(|| pj.params.get("ip6").cloned().unwrap_or_default()),
+                name: pj.name,
+                jid,
+                params: None,
+                runtime: None,
+            }
+        })
+        .collect();
+
+    Ok(Json(result))
 }
 
 // ── jail.conf parsing ─────────────────────────────────────────────
 
-/// A jail defined in /etc/jail.conf (may or may not be running).
-#[derive(Debug, Serialize)]
-pub struct JailConfEntry {
-    pub name: String,
-    pub running: bool,
-    pub path: String,
-    pub hostname: String,
-    pub interface: String,
-    pub ip4: String,
-    pub ip4_addr: String,
-    /// All raw parameters from the jail block (merged with globals).
-    pub params: HashMap<String, String>,
+/// A jail parsed from /etc/jail.conf (internal type, converted to JailInfo).
+struct ParsedJail {
+    name: String,
+    params: HashMap<String, String>,
 }
 
 /// Parse `/etc/jail.conf` into a list of jail entries with variable
 /// substitution applied.
-fn parse_jail_conf() -> ApiResult<Vec<JailConfEntry>> {
+fn parse_jail_conf() -> ApiResult<Vec<ParsedJail>> {
     let content = fs::read_to_string("/etc/jail.conf")
         .map_err(|_| ApiError::NotFound("/etc/jail.conf not found".into()))?;
 
@@ -181,26 +211,7 @@ fn parse_jail_conf() -> ApiResult<Vec<JailConfEntry>> {
     for (name, params) in &entries {
         let mut map: HashMap<String, String> = params.iter().cloned().collect();
         substitute_vars(&mut map, name);
-
-        let path = map.get("path").cloned().unwrap_or_default();
-        let hostname = map
-            .get("host.hostname")
-            .cloned()
-            .unwrap_or_else(|| name.clone());
-        let interface = map.get("interface").cloned().unwrap_or_default();
-        let ip4 = map.get("ip4").cloned().unwrap_or_default();
-        let ip4_addr = map.get("ip4.addr").cloned().unwrap_or_default();
-
-        result.push(JailConfEntry {
-            name: name.clone(),
-            running: false, // filled in by caller
-            path,
-            hostname,
-            interface,
-            ip4,
-            ip4_addr,
-            params: map,
-        });
+        result.push(ParsedJail { name: name.clone(), params: map });
     }
 
     Ok(result)
@@ -245,44 +256,46 @@ fn substitute_vars(map: &mut HashMap<String, String>, name: &str) {
     }
 }
 
-/// List all jails from /etc/jail.conf with running status from libjail.
-pub async fn conf_list() -> ApiResult<Json<Vec<JailConfEntry>>> {
-    let mut entries = parse_jail_conf()?;
-
-    // Get running jail names from libjail.
-    let running: std::collections::HashSet<String> = jail::list_jails()
-        .map_err(ApiError::Internal)?
-        .iter()
-        .filter_map(|p| p.get("name").cloned())
-        .collect();
-
-    for entry in &mut entries {
-        entry.running = running.contains(&entry.name);
-    }
-
-    Ok(Json(entries))
-}
-
-/// Get detailed information about a specific jail by name or JID.
-pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailDetail>> {
+/// Get detailed information about a specific jail.
+/// Always returns params (from jail.conf); includes runtime if running.
+pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
     validate_jail_name(&name)?;
 
-    let params = jail::get_jail(&name).map_err(ApiError::Internal)?;
-    let params = params.ok_or_else(|| ApiError::NotFound(format!("jail \"{name}\" not found")))?;
+    // Config from jail.conf.
+    let entries = parse_jail_conf().unwrap_or_default();
+    let pj = entries
+        .into_iter()
+        .find(|e| e.name == name)
+        .ok_or_else(|| ApiError::NotFound(format!("jail \"{name}\" not found")))?;
 
-    let info = jail_info(&params)
-        .ok_or_else(|| ApiError::Internal("failed to parse jail parameters".into()))?;
+    // Runtime from libjail (if running).
+    let rt_params = jail::get_jail(&name).map_err(ApiError::Internal)?;
+    let mut runtime = None;
+    let mut jid = 0;
 
-    Ok(Json(JailDetail {
-        jid: info.jid,
-        name: info.name,
-        hostname: info.hostname,
-        path: info.path,
-        ip4_addr: info.ip4_addr,
-        ip6_addr: info.ip6_addr,
-        state: info.state,
-        persist: info.persist,
-        params,
+    if let Some(ref params) = rt_params {
+        let rt_jid: i32 = params
+            .get("jid")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        jid = rt_jid;
+        let dying = params.get("dying").map(|v| v == "true").unwrap_or(false);
+        runtime = Some(JailRuntime {
+            jid: rt_jid,
+            state: if dying { "dying".into() } else { "running".into() },
+            params: params.clone(),
+        });
+    }
+
+    Ok(Json(JailInfo {
+        hostname: pj.params.get("host.hostname").cloned().unwrap_or_else(|| pj.name.clone()),
+        path: pj.params.get("path").cloned().unwrap_or_default(),
+        ip4_addr: pj.params.get("ip4.addr").cloned().unwrap_or_else(|| pj.params.get("ip4").cloned().unwrap_or_default()),
+        ip6_addr: pj.params.get("ip6.addr").cloned().unwrap_or_else(|| pj.params.get("ip6").cloned().unwrap_or_default()),
+        name: pj.name,
+        jid,
+        params: Some(pj.params),
+        runtime,
     }))
 }
 
@@ -1216,10 +1229,10 @@ pub async fn jail_delete(
     let entries = parse_jail_conf_from_str(&conf_content).unwrap_or_default();
     let jail_entry = entries.iter().find(|e| e.name == name);
     let jail_path = jail_entry.and_then(|e| {
-        if e.path.is_empty() { None } else { Some(e.path.clone()) }
+        let p = e.params.get("path")?;
+        if p.is_empty() { None } else { Some(p.clone()) }
     });
-    // Check mount.fstab in the raw params (the parsed path is already
-    // variable-substituted, so we look at the raw block for fstab).
+    // Check mount.fstab in the raw params.
     let jail_fstab = jail_entry.and_then(|e| e.params.get("mount.fstab").cloned());
 
     // Backup and remove from jail.conf.
@@ -1293,7 +1306,7 @@ pub async fn jail_delete(
 }
 
 /// Parse jail.conf from a string (for backup file parsing).
-fn parse_jail_conf_from_str(content: &str) -> ApiResult<Vec<JailConfEntry>> {
+fn parse_jail_conf_from_str(content: &str) -> ApiResult<Vec<ParsedJail>> {
     let mut entries = Vec::new();
     let mut global_params: Vec<(String, String)> = Vec::new();
     let mut current: Option<(String, Vec<(String, String)>)> = None;
@@ -1340,19 +1353,8 @@ fn parse_jail_conf_from_str(content: &str) -> ApiResult<Vec<JailConfEntry>> {
     for (name, params) in &entries {
         let mut map: HashMap<String, String> = params.iter().cloned().collect();
         substitute_vars(&mut map, name);
-        let path = map.get("path").cloned().unwrap_or_default();
-        let hostname = map.get("host.hostname").cloned().unwrap_or_else(|| name.clone());
-        let interface = map.get("interface").cloned().unwrap_or_default();
-        let ip4 = map.get("ip4").cloned().unwrap_or_default();
-        let ip4_addr = map.get("ip4.addr").cloned().unwrap_or_default();
-        result.push(JailConfEntry {
+        result.push(ParsedJail {
             name: name.clone(),
-            running: false,
-            path,
-            hostname,
-            interface,
-            ip4,
-            ip4_addr,
             params: map,
         });
     }

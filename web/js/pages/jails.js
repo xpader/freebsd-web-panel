@@ -86,7 +86,7 @@ function bindJailTabs() {
 async function loadJails() {
   const tbody = document.getElementById('jail-tbody');
   const countEl = document.getElementById('jail-count');
-  const url = _jailTab === 'running' ? '/api/jails' : '/api/jails/all';
+  const url = _jailTab === 'running' ? '/api/jails?running=true' : '/api/jails';
 
   try {
     const data = await api.get(url);
@@ -104,21 +104,21 @@ async function loadJails() {
           <td class="mono"><strong>${esc(j.name)}</strong></td>
           <td>${esc(j.hostname || '—')}</td>
           <td class="mono text-dim">${esc(j.path || '—')}</td>
-          <td class="mono">${formatIps(j.ip4_addr, j.ip6_addr)}</td>
-          <td>${stateBadge(j.state)}</td>
+          <td class="mono">${formatIpStr(j.ip4_addr, j.ip6_addr)}</td>
+          <td>${stateBadge('running')}</td>
           <td>${actionButtons(j.name, true)}</td>
         </tr>`).join('');
     } else {
       // All jails from jail.conf.
       tbody.innerHTML = data.map((j) => `
         <tr class="row-clickable" onclick="location.hash='#/jails/detail/${escAttr(j.name)}'">
-          <td class="mono text-dim">${j.running ? j.jid || '—' : '—'}</td>
+          <td class="mono text-dim">${j.jid > 0 ? j.jid : '—'}</td>
           <td class="mono"><strong>${esc(j.name)}</strong></td>
           <td>${esc(j.hostname || '—')}</td>
           <td class="mono text-dim">${esc(j.path || '—')}</td>
-          <td class="mono">${formatConfIps(j)}</td>
-          <td>${j.running ? stateBadge('running') : `<span class="badge badge-dim">${t('jails.stopped')}</span>`}</td>
-          <td>${actionButtons(j.name, j.running)}</td>
+          <td class="mono">${formatIpStr(j.ip4_addr, j.ip6_addr)}</td>
+          <td>${j.jid > 0 ? stateBadge('running') : `<span class="badge badge-dim">${t('jails.stopped')}</span>`}</td>
+          <td>${actionButtons(j.name, j.jid > 0)}</td>
         </tr>`).join('');
     }
   } catch (err) {
@@ -389,6 +389,9 @@ export async function renderJailDetail(app, hashPath) {
   `);
 
   const el = document.getElementById('jail-detail');
+
+  // Single API call: top-level is config (from jail.conf),
+  // runtime is null when stopped.
   let d;
   try {
     d = await api.get(`/api/jails/${encodeURIComponent(name)}`);
@@ -397,68 +400,109 @@ export async function renderJailDetail(app, hashPath) {
     return;
   }
 
-  const allowEntries = Object.entries(d.params)
+  const rt = d.runtime;
+  const running = d.jid > 0;
+  const p = d.params || {};
+
+  // Merge: conf params as base, libjail params overlay.
+  const merged = { ...p };
+  if (rt) {
+    for (const [k, v] of Object.entries(rt.params || {})) {
+      merged[k] = v;
+    }
+  }
+
+  const ip4Addr = rt?.ip4_addr?.length
+    ? rt.ip4_addr
+    : (merged['ip4.addr'] ? merged['ip4.addr'].split(',').map(s => s.trim()) : []);
+  const ip6Addr = rt?.ip6_addr?.length
+    ? rt.ip6_addr
+    : (merged['ip6.addr'] ? merged['ip6.addr'].split(',').map(s => s.trim()) : []);
+
+  const jid = d.jid;
+  const state = running ? (rt?.state || 'running') : 'stopped';
+  const persist = merged.persist === 'true';
+
+  const allowEntries = Object.entries(merged)
     .filter(([k]) => k.startsWith('allow.'))
     .sort(([a], [b]) => a.localeCompare(b));
 
-  const otherEntries = Object.entries(d.params)
+  const otherEntries = Object.entries(merged)
     .filter(([k]) => !k.startsWith('allow.'))
     .sort(([a], [b]) => a.localeCompare(b));
 
   el.innerHTML = `
-    <div class="stat-grid">
-      <div class="card"><div class="card-title">JID</div><div class="card-value sm">${d.jid}</div></div>
-      <div class="card"><div class="card-title">${t('common.status')}</div><div class="card-value sm">${stateBadge(d.state)}</div></div>
-      <div class="card"><div class="card-title">persist</div><div class="card-value sm">${boolBadge(d.persist)}</div></div>
-      <div class="card"><div class="card-title">${t('jails.parent')}</div><div class="card-value sm">${d.params.parent || '0'}</div></div>
+    <div class="card">
+      <div class="flex" style="flex-wrap:wrap;gap:16px;align-items:center;">
+        <div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">JID</span><strong class="mono">${jid || '—'}</strong></div>
+        <div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">${t('common.status')}</span>${stateBadge(state)}</div>
+        <div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">persist</span>${boolBadge(persist)}</div>
+        ${merged.parent ? `<div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">${t('jails.parent')}</span><strong class="mono">${merged.parent}</strong></div>` : ''}
+      </div>
     </div>
 
     <div class="card">
       <div class="card-title">${t('common.network')}</div>
       <table class="kv-table">
-        ${kvRow('ip4.addr', d.ip4_addr.length ? d.ip4_addr.join(', ') : '—')}
-        ${kvRow('ip4.saddrsel', d.params['ip4.saddrsel'] || '—')}
-        ${kvRow('ip6.addr', d.ip6_addr.length ? d.ip6_addr.join(', ') : '—')}
-        ${kvRow('ip6.saddrsel', d.params['ip6.saddrsel'] || '—')}
-        ${kvRow('vnet', d.params.vnet || '—')}
+        ${kvRow('interface', merged.interface || '—')}
+        ${kvRow('ip4', merged.ip4 || '—')}
+        ${kvRow('ip4.addr', ip4Addr.length ? ip4Addr.join(', ') : '—')}
+        ${kvRow('ip6', merged.ip6 || '—')}
+        ${kvRow('ip6.addr', ip6Addr.length ? ip6Addr.join(', ') : '—')}
+        ${kvRow('vnet', merged.vnet || '—')}
       </table>
     </div>
 
     <div class="card">
       <div class="card-title">${t('jails.hostInfo')}</div>
       <table class="kv-table">
-        ${kvRow('host.hostname', d.hostname || '—')}
-        ${kvRow('host.domainname', d.params['host.domainname'] || '—')}
-        ${kvRow('host.hostuuid', d.params['host.hostuuid'] || '—')}
-        ${kvRow('host.hostid', d.params['host.hostid'] || '—')}
+        ${kvRow('host.hostname', merged['host.hostname'] || d.name || '—')}
+        ${kvRow('host.domainname', merged['host.domainname'] || '—')}
+        ${kvRow('host.hostuuid', merged['host.hostuuid'] || '—')}
+        ${kvRow('host.hostid', merged['host.hostid'] || '—')}
       </table>
     </div>
 
     <div class="card">
       <div class="card-title">${t('jails.security')}</div>
       <table class="kv-table">
-        ${kvRow('securelevel', d.params.securelevel || '—')}
-        ${kvRow('enforce_statfs', d.params.enforce_statfs || '—')}
-        ${kvRow('devfs_ruleset', d.params.devfs_ruleset || '—')}
-        ${kvRow('children.max', d.params['children.max'] || '—')}
-        ${kvRow('children.cur', d.params['children.cur'] || '—')}
+        ${kvRow('securelevel', merged.securelevel || '—')}
+        ${kvRow('enforce_statfs', merged.enforce_statfs || '—')}
+        ${kvRow('devfs_ruleset', merged.devfs_ruleset || '—')}
+        ${kvRow('children.max', merged['children.max'] || '—')}
+        ${kvRow('children.cur', merged['children.cur'] || '—')}
       </table>
     </div>
+
+    ${rt ? `
+    <div class="card">
+      <div class="card-title">${t('jails.runtimeInfo')}</div>
+      <table class="kv-table">
+        ${kvRow('jid', jid)}
+        ${kvRow('osrelease', merged.osrelease || '—')}
+        ${kvRow('osreldate', merged.osreldate || '—')}
+        ${kvRow('cpuset.id', merged['cpuset.id'] || '—')}
+        ${kvRow('ip4.saddrsel', merged['ip4.saddrsel'] || '—')}
+        ${kvRow('ip6.saddrsel', merged['ip6.saddrsel'] || '—')}
+        ${kvRow('dying', merged.dying || 'false')}
+      </table>
+    </div>` : ''}
 
     <div class="card">
       <div class="card-title">${t('jails.system')}</div>
       <table class="kv-table">
-        ${kvRow('osrelease', d.params.osrelease || '—')}
-        ${kvRow('osreldate', d.params.osreldate || '—')}
-        ${kvRow('cpuset.id', d.params['cpuset.id'] || '—')}
-        ${kvRow('path', d.path || '—')}
+        ${kvRow('path', merged.path || '—')}
+        ${kvRow('exec.start', merged['exec.start'] || '—')}
+        ${kvRow('exec.stop', merged['exec.stop'] || '—')}
+        ${kvRow('mount.fstab', merged['mount.fstab'] || '—')}
+        ${kvRow('mount.devfs', merged['mount.devfs'] || '—')}
       </table>
     </div>
 
     <div class="card">
       <div class="card-title">${t('jails.permissions')}</div>
       <div class="perm-grid">
-        ${allowEntries.map(([k, v]) => permBadge(k.replace(/^allow\./, ''), v === 'true')).join('')}
+        ${allowEntries.map(([k, v]) => permBadge(k.replace(/^allow\./, ''), v === 'true' || v === '1')).join('')}
       </div>
     </div>
 
@@ -865,22 +909,20 @@ function createImageModal(base, onSubmit) {
 
 // ===== Shared helpers =====
 
-function formatIps(ip4, ip6) {
-  const all = [...(ip4 || []), ...(ip6 || [])];
-  if (!all.length) return '<span class="text-dim">—</span>';
-  return all.map((ip) => `<span class="badge badge-dim">${esc(ip)}</span>`).join(' ');
-}
-
-/// Format IP info from a jail.conf entry (has ip4 / ip4_addr fields).
-function formatConfIps(j) {
-  if (j.ip4_addr) return `<span class="badge badge-dim">${esc(j.ip4_addr)}</span>`;
-  if (j.ip4) return `<span class="badge badge-dim">${esc(j.ip4)}</span>`;
-  return '<span class="text-dim">—</span>';
+function formatIpStr(ip4, ip6) {
+  const parts = [];
+  if (ip4 && ip4 !== 'inherit' && ip4 !== 'disable') parts.push(ip4);
+  if (ip6 && ip6 !== 'inherit' && ip6 !== 'disable') parts.push(ip6);
+  if (ip4 === 'inherit' || ip6 === 'inherit') parts.push('inherit');
+  if (!parts.length) return '<span class="text-dim">—</span>';
+  return parts.map((ip) => `<span class="badge badge-dim">${esc(ip)}</span>`).join(' ');
 }
 
 function stateBadge(state) {
   if (state === 'dying') return `<span class="badge badge-warn">${t('jails.dying')}</span>`;
-  return `<span class="badge badge-success">${t('jails.running')}</span>`;
+  if (state === 'stopped') return `<span class="badge badge-dim">${t('jails.stopped')}</span>`;
+  if (state === 'running') return `<span class="badge badge-success">${t('jails.running')}</span>`;
+  return `<span class="badge badge-dim">${t('common.unknown')}</span>`;
 }
 
 function boolBadge(val) {
