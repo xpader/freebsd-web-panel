@@ -285,6 +285,31 @@ input[type="checkbox"], input[type="radio"] {
 }
 .type-desc-row i { margin-top: 3px; flex-shrink: 0; }
 
+/* ---- Horizontal form rows ---- */
+.form-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.form-row > label { margin-bottom: 0; }
+.form-row .field-hint { font-size: 12px; color: var(--text-dim); margin-top: 4px; grid-column: 2; }
+@media (max-width: 640px) {
+  .form-row { grid-template-columns: 1fr; }
+  .form-row > label { margin-bottom: 4px; }
+}
+
+.form-actions-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.btn-loading { pointer-events: none; opacity: 0.6; }
+
 button, .btn {
   display: inline-flex;
   align-items: center;

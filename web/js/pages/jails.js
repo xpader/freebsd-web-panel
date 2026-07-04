@@ -45,7 +45,7 @@ export async function renderJailsRunning(app) {
       <span id="jail-count" class="text-dim"></span>
       <div></div>
       <button onclick="window.__fwpJailReload()">${t('common.refresh')}</button>
-      <button onclick="window.__fwpJailCreate()">${t('jails.create')}</button>
+      <button onclick="location.hash='#/jails/create'">${t('jails.create')}</button>
     </div>
     <div class="card" style="padding:0;">
       <table>
@@ -169,207 +169,207 @@ window.__fwpJailDelete = async (name) => {
 
 // ===== Create jail =====
 
-window.__fwpJailCreate = async () => {
+// ===== Jail create page =====
+
+export async function renderJailCreate(app) {
   let bases = [];
   try { bases = await api.get('/api/jails/bases'); } catch {}
 
-  await createJailModal(bases, async (result) => {
-    await api.post('/api/jails/create', result);
-    toast(t('jails.jailCreated'));
-    _jailTab = 'all';
-    document.querySelectorAll('#jail-tab-group .filter-btn').forEach((b) => {
-      b.classList.toggle('active', b.dataset.val === 'all');
-    });
-    await loadJails();
-  });
-};
+  const baseOptions = bases.map((b) =>
+    `<option value="${escAttr(b.name)}">${esc(b.name)} (${b.type})</option>`
+  ).join('');
 
-function createJailModal(bases, onSubmit) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
+  renderLayout(app, '/jails/running', `
+    <div class="page-header">
+      <div class="flex">
+        <a href="#/jails/running" class="btn-secondary btn-sm">${t('common.navBack')}</a>
+        <h1>${t('jails.createTitle')}</h1>
+      </div>
+    </div>
+    <form id="create-jail-form">
+      <div class="card">
+        <div class="card-title">${t('jails.basicInfo')}</div>
+        <div class="form-row">
+          <label>${t('jails.jailName')} <span style="color:var(--danger)">*</span></label>
+          <input type="text" name="name" id="cj-name" required placeholder="web01" />
+        </div>
+        <div class="form-row">
+          <label>${t('jails.hostname')}</label>
+          <input type="text" name="hostname" placeholder="${t('jails.hostnamePh')}" />
+        </div>
+      </div>
 
-    const baseOptions = bases.map((b) =>
-      `<option value="${escAttr(b.name)}">${esc(b.name)} (${b.type})</option>`
-    ).join('');
+      <div class="card">
+        <div class="card-title">${t('jails.locationType')}</div>
+        <div class="form-row">
+          <label>${t('jails.locationType')} <span style="color:var(--danger)">*</span></label>
+          <select name="location_type" id="cj-loc-type" required>
+            <option value="">${t('common.pleaseSelect')}</option>
+            <option value="directory">${t('jails.locDirectory')}</option>
+            <option value="base">${t('jails.locBase')}</option>
+          </select>
+        </div>
 
-    overlay.innerHTML = `
-      <div class="modal" style="max-width:560px;">
-        <h3>${t('jails.create')}</h3>
-        <form id="create-jail-form">
-          <div class="field">
-            <label>${t('jails.jailName')} <span style="color:var(--danger)">*</span></label>
-            <input type="text" name="name" id="cj-name" required placeholder="web01" />
+        <div id="cj-dir-fields" style="display:none;">
+          <div class="form-row">
+            <label>${t('jails.path')} <span style="color:var(--danger)">*</span></label>
+            <input type="text" name="dir_path" id="cj-dir-path" placeholder="/jails/web01" />
           </div>
-          <div class="field">
-            <label>${t('jails.hostname')}</label>
-            <input type="text" name="hostname" placeholder="${t('jails.hostnamePh')}" />
-          </div>
-          <div class="field">
-            <label>${t('jails.locationType')} <span style="color:var(--danger)">*</span></label>
-            <select name="location_type" id="cj-loc-type" required>
+        </div>
+
+        <div id="cj-base-fields" style="display:none;">
+          <div class="form-row">
+            <label>${t('jails.selectBase')} <span style="color:var(--danger)">*</span></label>
+            <select name="base_name" id="cj-base-name">
               <option value="">${t('common.pleaseSelect')}</option>
-              <option value="directory">${t('jails.locDirectory')}</option>
-              <option value="base">${t('jails.locBase')}</option>
+              ${baseOptions}
             </select>
           </div>
-
-          <div id="cj-dir-fields" style="display:none;">
-            <div class="field">
-              <label>${t('jails.path')} <span style="color:var(--danger)">*</span></label>
-              <input type="text" name="dir_path" id="cj-dir-path" placeholder="/jails/web01" />
+          <div id="cj-zfs-base-fields" style="display:none;">
+            <div class="form-row">
+              <label>${t('jails.cloneSnapshot')} <span style="color:var(--danger)">*</span></label>
+              <select name="snapshot" id="cj-snapshot"></select>
+            </div>
+            <div class="form-row">
+              <label>${t('jails.targetDataset')}</label>
+              <input type="text" name="target_dataset" id="cj-dataset" placeholder="${t('jails.datasetDefault')}" />
+            </div>
+            <div class="form-row">
+              <label>${t('jails.mountPoint')}</label>
+              <input type="text" name="base_path" id="cj-mountpoint" placeholder="/jails/web01" />
             </div>
           </div>
-
-          <div id="cj-base-fields" style="display:none;">
-            <div class="field">
-              <label>${t('jails.selectBase')} <span style="color:var(--danger)">*</span></label>
-              <select name="base_name" id="cj-base-name">
-                <option value="">${t('common.pleaseSelect')}</option>
-                ${baseOptions}
-              </select>
-            </div>
-            <div id="cj-zfs-base-fields" style="display:none;">
-              <div class="field">
-                <label>${t('jails.cloneSnapshot')} <span style="color:var(--danger)">*</span></label>
-                <select name="snapshot" id="cj-snapshot"></select>
-              </div>
-              <div class="field">
-                <label>${t('jails.targetDataset')}</label>
-                <input type="text" name="target_dataset" id="cj-dataset" placeholder="${t('jails.datasetDefault')}" />
-              </div>
-              <div class="field">
-                <label>${t('jails.mountPoint')}</label>
-                <input type="text" name="base_path" id="cj-mountpoint" placeholder="/jails/web01" />
-              </div>
-            </div>
-            <div id="cj-sfs-base-fields" style="display:none;">
-              <div class="field">
-                <label>${t('jails.targetLocation')}</label>
-                <input type="text" name="sfs_path" id="cj-sfs-path" placeholder="/jails/web01" />
-              </div>
+          <div id="cj-sfs-base-fields" style="display:none;">
+            <div class="form-row">
+              <label>${t('jails.targetLocation')}</label>
+              <input type="text" name="sfs_path" id="cj-sfs-path" placeholder="/jails/web01" />
             </div>
           </div>
+        </div>
+      </div>
 
-          <div class="field">
-            <label>${t('jails.networkInterface')}</label>
-            <input type="text" name="interface" placeholder="bge0" />
-          </div>
-          <div class="field">
-            <label>IPv4</label>
-            <input type="text" name="ip4" placeholder="${t('jails.ip4Ph')}" />
-          </div>
-          <div class="field">
-            <label>IPv6</label>
-            <input type="text" name="ip6" placeholder="${t('jails.ip6Ph')}" />
-          </div>
+      <div class="card">
+        <div class="card-title">${t('common.network')}</div>
+        <div class="form-row">
+          <label>${t('jails.networkInterface')}</label>
+          <input type="text" name="interface" placeholder="bge0" />
+        </div>
+        <div class="form-row">
+          <label>IPv4</label>
+          <input type="text" name="ip4" placeholder="${t('jails.ip4Ph')}" />
+        </div>
+        <div class="form-row">
+          <label>IPv6</label>
+          <input type="text" name="ip6" placeholder="${t('jails.ip6Ph')}" />
+        </div>
+      </div>
 
-          <div class="modal-actions">
-            <button type="button" class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
-            <button type="submit">${t('common.confirm')}</button>
-          </div>
-        </form>
-      </div>`;
+      <div class="form-actions-bar">
+        <a href="#/jails/running" class="btn btn-secondary">${t('common.cancel')}</a>
+        <button type="submit" id="cj-submit">${t('common.confirm')}</button>
+      </div>
+    </form>
+  `);
 
-    document.body.appendChild(overlay);
+  const form = document.getElementById('create-jail-form');
+  const nameInput = document.getElementById('cj-name');
+  const locType = document.getElementById('cj-loc-type');
+  const dirFields = document.getElementById('cj-dir-fields');
+  const baseFields = document.getElementById('cj-base-fields');
+  const baseSel = document.getElementById('cj-base-name');
+  const zfsBaseFields = document.getElementById('cj-zfs-base-fields');
+  const sfsBaseFields = document.getElementById('cj-sfs-base-fields');
+  const snapSel = document.getElementById('cj-snapshot');
+  const datasetInput = document.getElementById('cj-dataset');
+  const mountInput = document.getElementById('cj-mountpoint');
+  const sfsPathInput = document.getElementById('cj-sfs-path');
+  const submitBtn = document.getElementById('cj-submit');
 
-    const nameInput = overlay.querySelector('#cj-name');
-    const locType = overlay.querySelector('#cj-loc-type');
-    const dirFields = overlay.querySelector('#cj-dir-fields');
-    const baseFields = overlay.querySelector('#cj-base-fields');
-    const baseSel = overlay.querySelector('#cj-base-name');
-    const zfsBaseFields = overlay.querySelector('#cj-zfs-base-fields');
-    const sfsBaseFields = overlay.querySelector('#cj-sfs-base-fields');
-    const snapSel = overlay.querySelector('#cj-snapshot');
-    const datasetInput = overlay.querySelector('#cj-dataset');
-    const mountInput = overlay.querySelector('#cj-mountpoint');
-    const sfsPathInput = overlay.querySelector('#cj-sfs-path');
+  const _bases = bases;
 
-    let _bases = bases;
+  const updateDefaults = () => {
+    const name = nameInput.value.trim();
+    if (mountInput && !mountInput.value && name) mountInput.placeholder = `/jails/${name}`;
+    if (sfsPathInput && !sfsPathInput.value && name) sfsPathInput.placeholder = `/jails/${name}`;
+    if (dirFields.style.display !== 'none') {
+      const dp = document.getElementById('cj-dir-path');
+      if (dp && !dp.value && name) dp.placeholder = `/jails/${name}`;
+    }
+  };
+  nameInput.addEventListener('input', updateDefaults);
 
-    // Update default paths when name changes.
-    const updateDefaults = () => {
-      const name = nameInput.value.trim();
-      if (mountInput && !mountInput.value && name) mountInput.placeholder = `/jails/${name}`;
-      if (sfsPathInput && !sfsPathInput.value && name) sfsPathInput.placeholder = `/jails/${name}`;
-      if (dirFields.style.display !== 'none') {
-        const dp = overlay.querySelector('#cj-dir-path');
-        if (dp && !dp.value && name) dp.placeholder = `/jails/${name}`;
-      }
-    };
-    nameInput.addEventListener('input', updateDefaults);
-
-    // Location type toggle.
-    locType.addEventListener('change', () => {
-      const isDir = locType.value === 'directory';
-      const isBase = locType.value === 'base';
-      dirFields.style.display = isDir ? '' : 'none';
-      baseFields.style.display = isBase ? '' : 'none';
-      updateDefaults();
-    });
-
-    // Base system selection → show ZFS or SharedFS fields.
-    baseSel.addEventListener('change', () => {
-      const base = _bases.find((b) => b.name === baseSel.value);
-      if (!base) { zfsBaseFields.style.display = 'none'; sfsBaseFields.style.display = 'none'; return; }
-
-      const isZfs = base.type === 'zfs';
-      zfsBaseFields.style.display = isZfs ? '' : 'none';
-      sfsBaseFields.style.display = isZfs ? 'none' : '';
-
-      if (isZfs) {
-        // Populate snapshot options.
-        snapSel.innerHTML = '<option value="">' + t('common.pleaseSelect') + '</option>' +
-          (base.snapshots || []).map((s) => {
-            const short = s.includes('@') ? s.split('@').pop() : s;
-            return `<option value="${escAttr(s)}">${esc(short)}</option>`;
-          }).join('');
-        // Default dataset from base source_path parent.
-        const parent = base.source_path.includes('/')
-          ? base.source_path.substring(0, base.source_path.lastIndexOf('/'))
-          : base.source_path;
-        datasetInput.placeholder = `${parent}/${nameInput.value || 'jailname'}`;
-      }
-    });
-
-    overlay.addEventListener('click', (e) => {
-      if (e.target.dataset.act === 'cancel') { overlay.remove(); resolve(null); }
-    });
-
-    overlay.querySelector('#create-jail-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const name = fd.get('name');
-      const locType = fd.get('location_type');
-
-      const result = {
-        name,
-        hostname: fd.get('hostname') || null,
-        location_type: locType,
-        interface: fd.get('interface') || null,
-        ip4: fd.get('ip4') || null,
-        ip6: fd.get('ip6') || null,
-      };
-
-      if (locType === 'directory') {
-        result.path = fd.get('dir_path');
-      } else if (locType === 'base') {
-        result.base_name = fd.get('base_name');
-        const base = _bases.find((b) => b.name === result.base_name);
-        if (base && base.type === 'zfs') {
-          result.snapshot = fd.get('snapshot');
-          result.target_dataset = fd.get('target_dataset') || null;
-          result.path = fd.get('base_path') || null;
-        } else if (base && base.type === 'sharedfs') {
-          result.path = fd.get('sfs_path') || null;
-        }
-      }
-
-      submitModal(overlay, onSubmit, result);
-    });
-
-    setTimeout(() => nameInput.focus(), 50);
+  locType.addEventListener('change', () => {
+    const isDir = locType.value === 'directory';
+    const isBase = locType.value === 'base';
+    dirFields.style.display = isDir ? '' : 'none';
+    baseFields.style.display = isBase ? '' : 'none';
+    updateDefaults();
   });
+
+  baseSel.addEventListener('change', () => {
+    const base = _bases.find((b) => b.name === baseSel.value);
+    if (!base) { zfsBaseFields.style.display = 'none'; sfsBaseFields.style.display = 'none'; return; }
+
+    const isZfs = base.type === 'zfs';
+    zfsBaseFields.style.display = isZfs ? '' : 'none';
+    sfsBaseFields.style.display = isZfs ? 'none' : '';
+
+    if (isZfs) {
+      snapSel.innerHTML = '<option value="">' + t('common.pleaseSelect') + '</option>' +
+        (base.snapshots || []).map((s) => {
+          const short = s.includes('@') ? s.split('@').pop() : s;
+          return `<option value="${escAttr(s)}">${esc(short)}</option>`;
+        }).join('');
+      const parent = base.source_path.includes('/')
+        ? base.source_path.substring(0, base.source_path.lastIndexOf('/'))
+        : base.source_path;
+      datasetInput.placeholder = `${parent}/${nameInput.value || 'jailname'}`;
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const name = fd.get('name');
+    const locVal = fd.get('location_type');
+
+    const result = {
+      name,
+      hostname: fd.get('hostname') || null,
+      location_type: locVal,
+      interface: fd.get('interface') || null,
+      ip4: fd.get('ip4') || null,
+      ip6: fd.get('ip6') || null,
+    };
+
+    if (locVal === 'directory') {
+      result.path = fd.get('dir_path');
+    } else if (locVal === 'base') {
+      result.base_name = fd.get('base_name');
+      const base = _bases.find((b) => b.name === result.base_name);
+      if (base && base.type === 'zfs') {
+        result.snapshot = fd.get('snapshot');
+        result.target_dataset = fd.get('target_dataset') || null;
+        result.path = fd.get('base_path') || null;
+      } else if (base && base.type === 'sharedfs') {
+        result.path = fd.get('sfs_path') || null;
+      }
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.classList.add('btn-loading');
+    try {
+      await api.post('/api/jails/create', result);
+      toast(t('jails.jailCreated'));
+      location.hash = '#/jails/running';
+    } catch (e) {
+      toast(e.message || t('common.operationFailed'), 'error');
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('btn-loading');
+    }
+  });
+
+  setTimeout(() => nameInput.focus(), 50);
 }
 
 // ===== Jail detail page =====
