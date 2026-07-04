@@ -267,6 +267,24 @@ input[type="checkbox"], input[type="radio"] {
   accent-color: var(--accent);
 }
 
+.type-desc-box {
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.type-desc-text { margin-bottom: 8px; line-height: 1.5; }
+.type-desc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--text-dim);
+}
+.type-desc-row i { margin-top: 3px; flex-shrink: 0; }
+
 button, .btn {
   display: inline-flex;
   align-items: center;

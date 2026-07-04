@@ -39,8 +39,8 @@ export async function renderJailsRunning(app) {
     </div>
     <div class="toolbar">
       <div class="filter-group" id="jail-tab-group">
-        <button class="filter-btn active" data-val="running">${t('jails.tabRunning')}</button>
-        <button class="filter-btn" data-val="all">${t('jails.tabAll')}</button>
+        <button class="filter-btn active" data-val="running">${t('jails.running')}</button>
+        <button class="filter-btn" data-val="all">${t('common.all')}</button>
       </div>
       <span id="jail-count" class="text-dim"></span>
       <div></div>
@@ -697,6 +697,25 @@ window.__fwpBaseImage = async (name) => {
   });
 };
 
+function renderTypeDesc(container, type) {
+  if (!type) { container.innerHTML = ''; return; }
+  const desc = type === 'zfs' ? t('jails.zfsTypeDesc') : t('jails.sharedfsTypeDesc');
+  const pros = type === 'zfs' ? t('jails.zfsTypePros') : t('jails.sharedfsTypePros');
+  const cons = type === 'zfs' ? t('jails.zfsTypeCons') : t('jails.sharedfsTypeCons');
+  container.innerHTML = `
+    <div class="type-desc-box">
+      <p class="type-desc-text">${esc(desc)}</p>
+      <div class="type-desc-row">
+        <i class="fa-solid fa-circle-check" style="color:var(--success);"></i>
+        <span>${esc(pros)}</span>
+      </div>
+      <div class="type-desc-row">
+        <i class="fa-solid fa-circle-xmark" style="color:var(--danger);"></i>
+        <span>${esc(cons)}</span>
+      </div>
+    </div>`;
+}
+
 /// Import base system modal — type selector with dynamic fields.
 function importBaseModal(onSubmit) {
   return new Promise((resolve) => {
@@ -712,12 +731,13 @@ function importBaseModal(onSubmit) {
             <input type="text" name="name" required placeholder="freebsd-15.1" />
           </div>
           <div class="field">
-            <label>${t('jails.baseType')} <span style="color:var(--danger)">*</span></label>
+            <label>${t('common.type')} <span style="color:var(--danger)">*</span></label>
             <select name="type" id="import-type" required>
               <option value="">${t('common.pleaseSelect')}</option>
               <option value="zfs">ZFS ${t('jails.dataset')}</option>
               <option value="sharedfs">SharedFS</option>
             </select>
+            <div id="import-type-desc"></div>
           </div>
           <div id="zfs-import-fields" style="display:none;">
             <div class="field">
@@ -751,6 +771,7 @@ function importBaseModal(onSubmit) {
     document.body.appendChild(overlay);
 
     const typeSel = overlay.querySelector('#import-type');
+    const typeDesc = overlay.querySelector('#import-type-desc');
     const zfsFields = overlay.querySelector('#zfs-import-fields');
     const sfsFields = overlay.querySelector('#sharedfs-import-fields');
     const datasetSel = overlay.querySelector('#import-zfs-dataset');
@@ -771,6 +792,7 @@ function importBaseModal(onSubmit) {
       const isSfs = typeSel.value === 'sharedfs';
       zfsFields.style.display = isZfs ? '' : 'none';
       sfsFields.style.display = isSfs ? '' : 'none';
+      renderTypeDesc(typeDesc, typeSel.value);
     });
 
     // Dataset change → load snapshots.
