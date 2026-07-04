@@ -27,6 +27,7 @@
 | [18-services.md](18-services.md) | 服务管理：列出 rc.d 服务（启用/运行状态）、start/stop/restart 控制 | `handlers/services.rs`, `web/js/pages/services.js` |
 | [19-sysctl.md](19-sysctl.md) | sysctl 浏览：列出全部内核参数（值/类型/描述/修改状态），搜索+分页 | `handlers/sysctl.rs`, `web/js/pages/sysctl.js` |
 | [20-jail.md](20-jail.md) | Jail 容器：libjail FFI 运行时查询、基础系统管理（导入/镜像创建：ZFS Clone/unionfs/sharedfs） | `jail.rs`, `handlers/jails.rs`, `web/js/pages/jails.js` |
+| [21-pkg.md](21-pkg.md) | pkg 软件包管理：列出已安装包（全部/手动/自动）、查看包详情（描述/依赖/反向依赖/文件列表） | `handlers/pkg.rs`, `web/js/pages/pkg.js` |
 
 ## 文档规范
 

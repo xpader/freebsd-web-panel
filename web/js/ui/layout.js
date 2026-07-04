@@ -28,6 +28,7 @@ const MENU = [
       { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
       { path: '/cron', labelKey: 'nav.cron', icon: 'fa-solid fa-clock-rotate-left' },
       { path: '/services', labelKey: 'nav.services', icon: 'fa-solid fa-play' },
+      { path: '/pkg', labelKey: 'nav.packages', icon: 'fa-solid fa-box' },
       {
         path: '/accounts/users',
         labelKey: 'nav.accounts',

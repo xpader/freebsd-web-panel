@@ -274,7 +274,7 @@ function listHtml(entries) {
   }).join('');
   return `
     <table class="fm-table">
-      <thead><tr><th>${t('common.name')}</th><th>${t('common.size')}</th><th>${t('fm.owner')}</th><th>${t('fm.group')}</th><th>${t('fm.permissions')}</th><th>${t('fm.modified')}</th><th>${t('common.actions')}</th></tr></thead>
+      <thead><tr><th>${t('common.name')}</th><th>${t('common.size')}</th><th>${t('common.owner')}</th><th>${t('common.group')}</th><th>${t('common.permissions')}</th><th>${t('fm.modified')}</th><th>${t('common.actions')}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
@@ -436,11 +436,11 @@ function showStatModal(info) {
         ${info.symlink_target ? statRow(t('fm.target'), info.symlink_target, 'mono') : ''}
         ${statRow(t('common.size'), info.is_dir ? '—' : t('fm.sizeVal', { fmt: fmtBytes(info.size), bytes: info.size.toLocaleString() }), 'mono')}
         <div class="fm-stat-row">
-          <div class="fm-stat-label">${t('fm.permissions')}</div>
+          <div class="fm-stat-label">${t('common.permissions')}</div>
           <div class="fm-stat-val"><span class="mono">${esc(info.permissions)}</span><button class="fm-act" data-act="chmod" style="margin-left:6px;" title="${t('fm.editPermissions')}"><i class="fa-solid fa-pen"></i></button></div>
         </div>
         <div class="fm-stat-row">
-          <div class="fm-stat-label">${t('fm.owner')}</div>
+          <div class="fm-stat-label">${t('common.owner')}</div>
           <div class="fm-stat-val mono">${esc(info.user)} (${info.uid}) / ${esc(info.group)} (${info.gid})<button class="fm-act" data-act="chown" style="margin-left:6px;" title="${t('fm.editOwner')}"><i class="fa-solid fa-pen"></i></button></div>
         </div>
         ${statRow(t('fm.inode'), `${info.inode}`, 'mono')}
@@ -475,8 +475,8 @@ async function editPermissions(info) {
   overlay.className = 'modal-overlay';
   const mode = info.mode & 0o7777;
   const rows = [
-    { label: t('fm.owner'), bits: { r: 0o400, w: 0o200, x: 0o100 }, special: { s: 0o4000, label: 'setuid' } },
-    { label: t('fm.group'), bits: { r: 0o040, w: 0o020, x: 0o010 }, special: { s: 0o2000, label: 'setgid' } },
+    { label: t('common.owner'), bits: { r: 0o400, w: 0o200, x: 0o100 }, special: { s: 0o4000, label: 'setuid' } },
+    { label: t('common.group'), bits: { r: 0o040, w: 0o020, x: 0o010 }, special: { s: 0o2000, label: 'setgid' } },
     { label: t('fm.other'), bits: { r: 0o004, w: 0o002, x: 0o001 }, special: { s: 0o1000, label: 'sticky' } },
   ];
   const gridHtml = rows.map((row) => `
@@ -493,7 +493,7 @@ async function editPermissions(info) {
       <h3>${t('fm.editPermissions')} — ${esc(info.name)}</h3>
       <div class="fm-perm-grid">${gridHtml}</div>
       <div class="fm-perm-preview">
-        <span class="text-dim">${t('fm.permissions')}:</span>
+        <span class="text-dim">${t('common.permissions')}:</span>
         <span class="mono" id="fm-perm-str">${esc(permStringFull(mode))}</span>
         <span class="text-dim">${t('fm.octalMode')}:</span>
         <span class="mono" id="fm-perm-oct">${octStr(mode)}</span>
@@ -594,7 +594,7 @@ async function editOwner(info) {
         <select id="fm-chown-user"><option value="">— ${t('common.unknown')} —</option>${userOpts}</select>
       </div>
       <div class="field">
-        <label>${t('fm.group')}</label>
+        <label>${t('common.group')}</label>
         <select id="fm-chown-group"><option value="">— ${t('common.unknown')} —</option>${groupOpts}</select>
       </div>
       <div class="modal-actions">

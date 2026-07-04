@@ -22,6 +22,7 @@ import { renderNetwork } from './pages/network.js';
 import { renderDns } from './pages/dns.js';
 import { renderSysctl } from './pages/sysctl.js';
 import { renderJailsRunning, renderJailCreate, renderJailDetail, renderJailBases } from './pages/jails.js';
+import { renderPackages, renderPackageDetail } from './pages/pkg.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -59,6 +60,10 @@ defineRoute('/zfs/pools', renderZfsPools);
 defineRoute('/zfs/pools/', renderZfsPoolDetail);
 defineRoute('/zfs/datasets', renderZfsDatasets);
 defineRoute('/zfs/snapshots', renderZfsSnapshots);
+
+// Package management routes.
+defineRoute('/pkg', renderPackages);
+defineRoute('/pkg/', renderPackageDetail);
 
 // Global logout handler.
 window.__fwpLogout = async () => {

@@ -7,6 +7,7 @@ pub mod filesystem;
 pub mod jails;
 pub mod mod_stubs;
 pub mod network;
+pub mod pkg;
 pub mod rcconf;
 pub mod services;
 pub mod sysctl;

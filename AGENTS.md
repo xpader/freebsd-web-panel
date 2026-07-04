@@ -104,7 +104,7 @@ rc.d/fwp                  # FreeBSD rc.d 启动脚本
 - **Mutex 选择**：不跨 `.await` 的同步代码用 `parking_lot::Mutex`（如 `LAST_CP_TIMES`、审计日志文件）。仅当 guard 必须在 `.await` 间存活时才用 `tokio::sync::Mutex`。禁止用 `std::sync::Mutex`。
 - **静态变量**：初始化在编译期已知的用 `std::sync::LazyLock`（不用 `once_cell`、不用 `OnceLock`，除非需要运行时输入）。
 - **路由**：axum 0.8 捕获参数语法是 `{name}`（不是 `:name`）。
-- **FFI**：Jail 模块将使用 libjail（`jailparam_*`）——所有 `unsafe` 集中在 `sys` 子模块，配安全封装。
+- **FFI**：Jail 模块使用 libjail（`jailparam_*`）——所有 `unsafe` 集中在 `sys` 子模块，配安全封装。详见"系统命令模式"中的判定准则。
 - **匹配模式**：用 match ergonomics（`match &value`），不在模式里写显式 `ref`/`ref mut`。
 
 ### 前端
@@ -124,7 +124,17 @@ rc.d/fwp                  # FreeBSD rc.d 启动脚本
 
 FreeBSD 管理通过 spawn 系统二进制并传校验过的参数完成。**禁止字符串拼接 shell**——始终用 `Command::new().arg()` 防注入。传给命令前先校验输入（如 jailname 匹配 `^[a-zA-Z0-9_.-]+$`）。
 
-本机已确认存在的关键工具：`/sbin/sysctl`、`/usr/sbin/sysrc`、`/sbin/ifconfig`、`/sbin/pfctl`、`/sbin/zfs`、`/sbin/zpool`、`/usr/sbin/jail`、`/usr/local/sbin/vm`（vm-bhyve 1.7.3）。
+本机已确认存在的关键工具：`/sbin/sysctl`、`/usr/sbin/sysrc`、`/sbin/ifconfig`、`/sbin/pfctl`、`/sbin/zfs`、`/sbin/zpool`、`/usr/sbin/jail`、`/usr/sbin/pkg`、`/usr/local/sbin/vm`（vm-bhyve 1.7.3）。
+
+### 何时用 C API / FFI，何时用 spawn 命令？
+
+默认用 **spawn 命令**。仅当满足以下条件之一时，才用 C API（libc syscall）或 FFI（共享库）：
+
+1. **无合适的命令行替代**——如 `jail.rs` 用 libjail FFI（`jls` 输出固定列，无法获取完整 jail 参数）；`network.rs` 用 `getifaddrs(3)` + `sysctl(NET_RT_DUMP)`（路由表是二进制 `rt_msghdr` 消息，`netstat -r` 文本格式不稳定）。
+2. **高频调用下 fork/exec 开销不可忽视**——如 `sysinfo.rs`/`sysctl.rs` 供后台监控采集器每 5 秒采样，用 `sysctl(3)` syscall 替代 spawn `/sbin/sysctl`。
+3. **数据是二进制结构，文本解析反而更脆弱**——如 `cp_times` 数组、路由表套接字消息。
+
+当成熟的命令行工具存在、调用频率低（用户交互时才请求）、且有机器可读输出（`-H -p`、TSV、JSON 等）时，用 spawn 命令。示例：`pkg`（`pkg query`/`pkg info --raw-format json-compact`）、`zfs`/`zpool`（`-H -p`）、`service`、`sysrc`、`crontab`、`df`/`geom`/`mount`。
 
 ## 文档维护（强制）
 

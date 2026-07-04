@@ -94,6 +94,10 @@ pub fn build(state: AppState) -> Router {
         .route("/api/monitor/series", get(crate::monitor::series))
         .route("/api/monitor/aggregate", get(crate::monitor::aggregate))
         .route("/api/monitor/latest", get(crate::monitor::latest))
+        // --- pkg (package management) ---
+        .route("/api/pkg/packages", get(handlers::pkg::list_packages))
+        .route("/api/pkg/packages/{name}", get(handlers::pkg::package_detail))
+        .route("/api/pkg/packages/{name}/files", get(handlers::pkg::package_files))
         .layer(from_fn_with_state(state.clone(), require_auth));
 
     // File upload sends raw bytes as the request body and can be large;
