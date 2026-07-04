@@ -21,7 +21,7 @@ import { renderTerminal } from './pages/terminal.js';
 import { renderNetwork } from './pages/network.js';
 import { renderDns } from './pages/dns.js';
 import { renderSysctl } from './pages/sysctl.js';
-import { renderJailsRunning, renderJailDetail } from './pages/jails.js';
+import { renderJailsRunning, renderJailDetail, renderJailBases } from './pages/jails.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -51,6 +51,7 @@ defineRoute('/accounts/users', renderSysUsers);
 defineRoute('/accounts/groups', renderSysGroups);
 defineRoute('/pf', makePlannedPage({ key: 'pf', labelKey: 'nav.pf' }));
 defineRoute('/jails/running', renderJailsRunning);
+defineRoute('/jails/bases', renderJailBases);
 defineRoute('/jails/detail/', renderJailDetail);
 // ZFS routes.
 defineRoute('/zfs/pools', renderZfsPools);

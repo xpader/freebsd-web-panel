@@ -82,7 +82,8 @@ const MENU = [
         labelKey: 'nav.jails',
         icon: 'fa-solid fa-cube',
         children: [
-          { path: '/jails/running', labelKey: 'nav.jailRunning', icon: 'fa-solid fa-play' },
+          { path: '/jails/running', labelKey: 'nav.jailList', icon: 'fa-solid fa-list' },
+          { path: '/jails/bases', labelKey: 'nav.jailBases', icon: 'fa-solid fa-layer-group' },
         ],
       },
       { path: '/bhyve', labelKey: 'nav.bhyve', icon: 'fa-regular fa-square' },
