@@ -677,6 +677,55 @@ pub async fn base_destroy(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BaseUpdateBody {
+    /// New list of allowed snapshots (full names). Only for ZFS type.
+    pub snapshots: Vec<String>,
+}
+
+/// Update a base system (currently only ZFS snapshots list).
+pub async fn base_update(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<BaseUpdateBody>,
+) -> ApiResult<Json<BaseSystem>> {
+    let mut bases = read_bases(&state);
+    let base = bases
+        .iter_mut()
+        .find(|b| b.name == name)
+        .ok_or_else(|| ApiError::NotFound(format!("base system \"{name}\" not found")))?;
+
+    if base.type_ != "zfs" {
+        return Err(ApiError::BadRequest(
+            "snapshot update is only supported for ZFS base systems".into(),
+        ));
+    }
+
+    if body.snapshots.is_empty() {
+        return Err(ApiError::BadRequest("at least one snapshot is required".into()));
+    }
+
+    validate_zfs_snapshots(&base.source_path, &body.snapshots)?;
+
+    base.snapshots = body.snapshots.clone();
+    let updated = base.clone();
+    write_bases(&state, &bases)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        &format!("/api/jails/bases/{name}"),
+        200,
+        Some(format!(
+            "updated base system {name} snapshots: [{}]",
+            updated.snapshots.join(", ")
+        )),
+    );
+
+    Ok(Json(updated))
+}
+
 /// Create a jail image from a base system.
 pub async fn base_create_image(
     State(state): State<AppState>,
@@ -821,4 +870,536 @@ fn validate_zfs_name(name: &str) -> ApiResult<()> {
         return Err(ApiError::BadRequest("invalid dataset name".into()));
     }
     Ok(())
+}
+
+// ── Jail creation ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct JailCreateBody {
+    pub name: String,
+    pub hostname: Option<String>,
+    /// "directory" | "base"
+    pub location_type: String,
+    /// For "directory": the path. For "base": the base system name.
+    pub path: Option<String>,
+    pub base_name: Option<String>,
+    /// ZFS base: snapshot to clone, target dataset, mount point.
+    pub snapshot: Option<String>,
+    pub target_dataset: Option<String>,
+    /// Network.
+    pub interface: Option<String>,
+    pub ip4: Option<String>,
+    pub ip6: Option<String>,
+}
+
+const JAIL_CONF: &str = "/etc/jail.conf";
+
+/// Backup jail.conf to /var/db/fwp/backup/ with timestamp.
+fn backup_jail_conf(state: &AppState) -> ApiResult<()> {
+    let backup_dir = bases_file(state)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("/var/db/fwp"))
+        .join("backup");
+    fs::create_dir_all(&backup_dir)?;
+    let ts = state.now_ts();
+    let backup_path = backup_dir.join(format!("jail.conf.{ts}"));
+    if std::path::Path::new(JAIL_CONF).exists() {
+        fs::copy(JAIL_CONF, &backup_path)?;
+    }
+    Ok(())
+}
+
+/// Write a new jail.conf (atomic: write tmp + rename).
+fn write_jail_conf_atomic(content: &str) -> ApiResult<()> {
+    let tmp = format!("{JAIL_CONF}.fwp.tmp");
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, JAIL_CONF)?;
+    Ok(())
+}
+
+/// Generate a jail.conf block for a new jail.
+fn generate_jail_block(
+    name: &str,
+    path: &str,
+    hostname: Option<&str>,
+    interface: Option<&str>,
+    ip4: Option<&str>,
+    ip6: Option<&str>,
+    fstab_path: Option<&str>,
+) -> String {
+    let mut lines = vec![format!("{name} {{")];
+
+    // Only emit parameters that differ from the global defaults.
+    // Global defaults in this system typically include:
+    //   path="/jails/${name}";  host.hostname = "${name}";
+    // So we only emit path/hostname if they differ from the pattern.
+    let default_path = format!("/jails/{name}");
+    if path != default_path {
+        lines.push(format!("    path = \"{path}\";"));
+    }
+
+    if let Some(hn) = hostname {
+        if !hn.is_empty() && hn != name {
+            lines.push(format!("    host.hostname = \"{hn}\";"));
+        }
+    }
+
+    if let Some(iface) = interface {
+        if !iface.is_empty() {
+            lines.push(format!("    interface = \"{iface}\";"));
+        }
+    }
+
+    if let Some(ip) = ip4 {
+        if !ip.is_empty() {
+            if ip == "inherit" {
+                lines.push("    ip4 = \"inherit\";".into());
+            } else {
+                lines.push(format!("    ip4.addr = {ip};"));
+            }
+        }
+    }
+
+    if let Some(ip) = ip6 {
+        if !ip.is_empty() {
+            if ip == "inherit" {
+                lines.push("    ip6 = \"inherit\";".into());
+            } else {
+                lines.push(format!("    ip6.addr = {ip};"));
+            }
+        }
+    }
+
+    if let Some(fstab) = fstab_path {
+        lines.push(format!("    mount.fstab = \"{fstab}\";"));
+    }
+
+    lines.push("}".into());
+    lines.join("\n")
+}
+
+/// Create a new jail: prepare filesystem + write jail.conf entry.
+pub async fn jail_create(
+    State(state): State<AppState>,
+    Json(body): Json<JailCreateBody>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    validate_jail_name(&body.name)?;
+
+    // Check for duplicate name in jail.conf.
+    let existing = parse_jail_conf().unwrap_or_default();
+    if existing.iter().any(|e| e.name == body.name) {
+        return Err(ApiError::Conflict(format!(
+            "jail \"{}\" already exists in jail.conf",
+            body.name
+        )));
+    }
+
+    let mut fstab_path: Option<String> = None;
+    let jail_path: String;
+
+    match body.location_type.as_str() {
+        "directory" => {
+            let p = body
+                .path
+                .as_deref()
+                .ok_or_else(|| ApiError::BadRequest("path is required".into()))?;
+            validate_target_path(p)?;
+            if !std::path::Path::new(p).exists() {
+                fs::create_dir_all(p)?;
+            }
+            jail_path = p.to_string();
+        }
+
+        "base" => {
+            let base_name = body.base_name.as_deref().ok_or_else(|| {
+                ApiError::BadRequest("base_name is required for base location type".into())
+            })?;
+            let bases = read_bases(&state);
+            let base = bases
+                .iter()
+                .find(|b| b.name == base_name)
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("base system \"{base_name}\" not found"))
+                })?;
+
+            match base.type_.as_str() {
+                "zfs" => {
+                    let snapshot = body.snapshot.as_deref().ok_or_else(|| {
+                        ApiError::BadRequest("snapshot is required for ZFS base".into())
+                    })?;
+                    if !base.snapshots.iter().any(|s| s == snapshot) {
+                        return Err(ApiError::BadRequest(format!(
+                            "snapshot \"{snapshot}\" is not registered for base \"{base_name}\""
+                        )));
+                    }
+
+                    // Default dataset: <source_dataset_parent>/<jail_name>
+                    let default_ds = {
+                        let parent = base
+                            .source_path
+                            .rfind('/')
+                            .map(|i| &base.source_path[..i])
+                            .unwrap_or("zroot/jails");
+                        format!("{parent}/{}", body.name)
+                    };
+                    let dataset = body.target_dataset.as_deref().unwrap_or(&default_ds);
+                    validate_zfs_name(dataset)?;
+
+                    // Default mount point.
+                    let default_mp = format!("/jails/{}", body.name);
+                    let mountpoint = body.path.as_deref().unwrap_or(&default_mp);
+                    validate_target_path(mountpoint)?;
+
+                    run(ZFS, &["clone", snapshot, dataset])?;
+                    run(ZFS, &["set", &format!("mountpoint={mountpoint}"), dataset])?;
+
+                    jail_path = mountpoint.to_string();
+
+                    crate::audit::record(
+                        &state, None, "POST", "/api/jails/create", 201,
+                        Some(format!("zfs clone {snapshot} → {dataset} at {mountpoint}")),
+                    );
+                }
+
+                "sharedfs" => {
+                    let sharedfs_path = base.sharedfs_path.as_deref().ok_or_else(|| {
+                        ApiError::Internal("sharedfs base missing sharedfs_path".into())
+                    })?;
+                    let template = &base.source_path;
+
+                    let default_target = format!("/jails/{}", body.name);
+                    let target = body.path.as_deref().unwrap_or(&default_target);
+                    validate_target_path(target)?;
+
+                    // Copy template skeleton.
+                    fs::create_dir_all(target)?;
+                    let cp_status = Command::new(CP)
+                        .args(["-R", &format!("{template}/."), target])
+                        .output()?;
+                    if !cp_status.status.success() {
+                        let stderr =
+                            String::from_utf8_lossy(&cp_status.stderr).trim().to_string();
+                        return Err(ApiError::Command(if stderr.is_empty() {
+                            "cp failed".into()
+                        } else {
+                            stderr
+                        }));
+                    }
+
+                    // Write fstab.
+                    let fstab = image_fstab_path(&state, target);
+                    if let Some(parent) = fstab.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(
+                        &fstab,
+                        format!("{sharedfs_path}\t{target}/sharedfs\tnullfs\tro\t0\t0\n"),
+                    )?;
+                    fstab_path = Some(fstab.to_string_lossy().into_owned());
+
+                    jail_path = target.to_string();
+
+                    crate::audit::record(
+                        &state, None, "POST", "/api/jails/create", 201,
+                        Some(format!("sharedfs image at {target}")),
+                    );
+                }
+
+                other => {
+                    return Err(ApiError::BadRequest(format!(
+                        "unknown base type: \"{other}\""
+                    )));
+                }
+            }
+        }
+
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "unknown location_type: \"{other}\""
+            )));
+        }
+    }
+
+    // Backup and write jail.conf.
+    backup_jail_conf(&state)?;
+
+    let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
+    let block = generate_jail_block(
+        &body.name,
+        &jail_path,
+        body.hostname.as_deref(),
+        body.interface.as_deref(),
+        body.ip4.as_deref(),
+        body.ip6.as_deref(),
+        fstab_path.as_deref(),
+    );
+
+    let new_content = if conf_content.is_empty() {
+        block
+    } else {
+        // Ensure existing content ends with newline before appending.
+        let separator = if conf_content.ends_with('\n') { "" } else { "\n" };
+        // Add a blank line between existing content and new block.
+        format!("{conf_content}{separator}\n{block}\n")
+    };
+
+    write_jail_conf_atomic(&new_content)?;
+
+    crate::audit::record(
+        &state, None, "POST", "/api/jails/create", 201,
+        Some(format!("created jail {} at {}", body.name, jail_path)),
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "name": body.name,
+            "path": jail_path,
+            "fstab": fstab_path,
+        })),
+    ))
+}
+
+// ── Jail lifecycle control (start/stop/delete) ────────────────────
+
+/// Start a jail.
+pub async fn jail_start(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_jail_name(&name)?;
+    jail::start_jail(&name).map_err(ApiError::Command)?;
+    crate::audit::record(
+        &state, None, "POST", &format!("/api/jails/{name}/start"), 200,
+        Some(format!("started jail {name}")),
+    );
+    Ok(Json(serde_json::json!({"name": name, "action": "start"})))
+}
+
+/// Stop a jail.
+pub async fn jail_stop(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_jail_name(&name)?;
+    jail::stop_jail(&name).map_err(ApiError::Command)?;
+    crate::audit::record(
+        &state, None, "POST", &format!("/api/jails/{name}/stop"), 200,
+        Some(format!("stopped jail {name}")),
+    );
+    Ok(Json(serde_json::json!({"name": name, "action": "stop"})))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JailDeleteQuery {
+    /// If "true", remove the jail's filesystem (zfs destroy or rm -rf).
+    #[serde(default)]
+    pub remove_files: String,
+}
+
+/// Delete a jail: stop if running, remove from jail.conf, optionally
+/// destroy its filesystem.
+pub async fn jail_delete(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<JailDeleteQuery>,
+) -> ApiResult<StatusCode> {
+    validate_jail_name(&name)?;
+
+    // Stop if running.
+    if jail::is_jail_running(&name) {
+        jail::stop_jail(&name).map_err(ApiError::Command)?;
+    }
+
+    // Extract jail path and mount.fstab BEFORE modifying jail.conf.
+    let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
+    let entries = parse_jail_conf_from_str(&conf_content).unwrap_or_default();
+    let jail_entry = entries.iter().find(|e| e.name == name);
+    let jail_path = jail_entry.and_then(|e| {
+        if e.path.is_empty() { None } else { Some(e.path.clone()) }
+    });
+    // Check mount.fstab in the raw params (the parsed path is already
+    // variable-substituted, so we look at the raw block for fstab).
+    let jail_fstab = jail_entry.and_then(|e| e.params.get("mount.fstab").cloned());
+
+    // Backup and remove from jail.conf.
+    backup_jail_conf(&state)?;
+    let new_content = remove_jail_block(&conf_content, &name);
+    write_jail_conf_atomic(&new_content)?;
+
+    let remove_files = q.remove_files == "true";
+    let mut detail_msg = format!("removed jail {name} from jail.conf");
+
+    if remove_files {
+        if let Some(ref path) = jail_path {
+            // Determine if the path is its own ZFS dataset or just a directory
+            // inside a parent dataset. `zfs list` resolves to the nearest parent
+            // dataset, so we MUST verify the mountpoint matches exactly.
+            let zfs_info = Command::new(ZFS)
+                .args(["list", "-H", "-o", "name,mountpoint", path])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| {
+                    let line = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    let parts: Vec<&str> = line.split('\t').collect();
+                    if parts.len() >= 2 {
+                        Some((parts[0].to_string(), parts[1].to_string()))
+                    } else {
+                        None
+                    }
+                });
+
+            // Only treat as ZFS dataset if the mountpoint matches the path
+            // exactly — otherwise it's a subdirectory of a parent dataset
+            // and must be removed as a plain directory.
+            let is_dedicated_dataset = zfs_info
+                .as_ref()
+                .map(|(_, mp)| mp == path)
+                .unwrap_or(false);
+
+            if is_dedicated_dataset {
+                if let Some((dataset, _)) = zfs_info {
+                    match run(ZFS, &["destroy", "-r", &dataset]) {
+                        Ok(()) => detail_msg.push_str(&format!(", destroyed dataset {dataset}")),
+                        Err(e) => tracing::warn!("failed to destroy dataset {dataset}: {e}"),
+                    }
+                }
+            } else if std::path::Path::new(path).exists() {
+                // Plain directory (possibly inside a ZFS dataset) — rm -rf.
+                match std::fs::remove_dir_all(path) {
+                    Ok(()) => detail_msg.push_str(&format!(", removed directory {path}")),
+                    Err(e) => tracing::warn!("failed to remove {path}: {e}"),
+                }
+            }
+        }
+
+        // Remove fstab file if referenced.
+        if let Some(ref fstab) = jail_fstab {
+            let fstab_path = std::path::Path::new(fstab);
+            if fstab_path.exists() {
+                let _ = std::fs::remove_file(fstab_path);
+                detail_msg.push_str(&format!(", removed fstab {fstab}"));
+            }
+        }
+    }
+
+    crate::audit::record(
+        &state, None, "DELETE", &format!("/api/jails/{name}"), 200,
+        Some(detail_msg),
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Parse jail.conf from a string (for backup file parsing).
+fn parse_jail_conf_from_str(content: &str) -> ApiResult<Vec<JailConfEntry>> {
+    let mut entries = Vec::new();
+    let mut global_params: Vec<(String, String)> = Vec::new();
+    let mut current: Option<(String, Vec<(String, String)>)> = None;
+    let mut in_block_comment = false;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if in_block_comment {
+            if line.contains("*/") { in_block_comment = false; }
+            continue;
+        }
+        if line.starts_with("/*") {
+            if !line.contains("*/") { in_block_comment = true; }
+            continue;
+        }
+        let line = if let Some(pos) = line.find('#') { &line[..pos] } else { line };
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        if line.ends_with('{') {
+            let name = line.trim_end_matches('{').trim();
+            if !name.contains('=') && !name.contains(';') && !name.is_empty() {
+                current = Some((name.to_string(), Vec::new()));
+            }
+            continue;
+        }
+        if line.starts_with('}') {
+            if let Some((name, params)) = current.take() {
+                let mut merged: Vec<(String, String)> = global_params.clone();
+                merged.extend(params);
+                entries.push((name, merged));
+            }
+            continue;
+        }
+        let param = parse_param(line);
+        if let Some((k, v)) = param {
+            if let Some((_, ref mut params)) = current {
+                params.push((k, v));
+            } else {
+                global_params.push((k, v));
+            }
+        }
+    }
+    let mut result = Vec::new();
+    for (name, params) in &entries {
+        let mut map: HashMap<String, String> = params.iter().cloned().collect();
+        substitute_vars(&mut map, name);
+        let path = map.get("path").cloned().unwrap_or_default();
+        let hostname = map.get("host.hostname").cloned().unwrap_or_else(|| name.clone());
+        let interface = map.get("interface").cloned().unwrap_or_default();
+        let ip4 = map.get("ip4").cloned().unwrap_or_default();
+        let ip4_addr = map.get("ip4.addr").cloned().unwrap_or_default();
+        result.push(JailConfEntry {
+            name: name.clone(),
+            running: false,
+            path,
+            hostname,
+            interface,
+            ip4,
+            ip4_addr,
+            params: map,
+        });
+    }
+    Ok(result)
+}
+
+/// Remove a jail block from jail.conf content.
+fn remove_jail_block(conf: &str, name: &str) -> String {
+    // Find the block boundaries: "name {" ... "}".
+    let lines: Vec<&str> = conf.lines().collect();
+    let mut result = Vec::new();
+    let mut skipping = false;
+
+    for line in &lines {
+        let trimmed = line.trim();
+
+        if !skipping {
+            // Check if this line starts the target block.
+            if trimmed == format!("{name} {{")
+                || trimmed == format!("{name}{{")
+                || trimmed.starts_with(&format!("{name} {{"))
+            {
+                // But make sure it's a jail name, not a parameter.
+                // A jail block start has the name followed by optional whitespace and '{'.
+                let before_brace = trimmed.trim_end_matches('{').trim();
+                if before_brace == name {
+                    skipping = true;
+                    continue;
+                }
+            }
+            result.push(*line);
+        } else {
+            // Inside the block being removed.
+            if trimmed.starts_with('}') {
+                skipping = false;
+                // Skip the blank line after the block if present.
+                continue;
+            }
+        }
+    }
+
+    // Clean up: remove trailing blank lines, ensure single trailing newline.
+    let content = result.join("\n");
+    let content = content.trim_end_matches('\n');
+    if content.is_empty() {
+        String::new()
+    } else {
+        format!("{content}\n")
+    }
 }

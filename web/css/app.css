@@ -452,6 +452,11 @@ tr.row-clickable { cursor: pointer; }
 }
 .modal h3 { margin-bottom: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.modal-busy {
+  position: absolute; inset: 0; background: rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius); z-index: 1;
+}
 
 /* ---- Cron entry editor ---- */
 .cron-fields {

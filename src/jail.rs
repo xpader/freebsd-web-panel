@@ -16,6 +16,9 @@ mod sys {
     use super::*;
 
     pub const JAIL_DYING: c_int = 0x08;
+    pub const JAIL_CREATE: c_int = 0x01;
+    pub const JAIL_UPDATE: c_int = 0x02;
+    pub const JAIL_ATTACH: c_int = 0x04;
 
     #[repr(C)]
     #[derive(Clone)]
@@ -33,9 +36,11 @@ mod sys {
         pub fn jailparam_all(jpp: *mut *mut Jailparam) -> c_int;
         pub fn jailparam_init(jp: *mut Jailparam, name: *const c_char) -> c_int;
         pub fn jailparam_import(jp: *mut Jailparam, value: *const c_char) -> c_int;
+        pub fn jailparam_set(jp: *mut Jailparam, njp: c_uint, flags: c_int) -> c_int;
         pub fn jailparam_get(jp: *mut Jailparam, njp: c_uint, flags: c_int) -> c_int;
         pub fn jailparam_export(jp: *const Jailparam) -> *mut c_char;
         pub fn jailparam_free(jp: *mut Jailparam, njp: c_uint);
+        pub fn jail_remove(jid: c_int) -> c_int;
         pub static jail_errmsg: [c_char; 1024];
     }
 }
@@ -219,4 +224,46 @@ pub fn get_jail(name: &str) -> Result<Option<HashMap<String, String>>, String> {
         return Err(errmsg());
     }
     Ok(Some(params.export_all()))
+}
+
+/// Start a jail by reading its definition from /etc/jail.conf via the
+/// `jail(8)` command. libjail's `jailparam_set` requires assembling all
+/// parameters manually, but `jail -c` handles fstab, exec.start, mount.devfs,
+/// and global defaults automatically.
+pub fn start_jail(name: &str) -> Result<(), String> {
+    let output = std::process::Command::new("/usr/sbin/jail")
+        .args(["-q", "-c", name])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            errmsg()
+        } else {
+            stderr
+        });
+    }
+    Ok(())
+}
+
+/// Stop a running jail using `jail -r`.
+pub fn stop_jail(name: &str) -> Result<(), String> {
+    let output = std::process::Command::new("/usr/sbin/jail")
+        .args(["-q", "-r", name])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            errmsg()
+        } else {
+            stderr
+        });
+    }
+    Ok(())
+}
+
+/// Check if a jail is currently running.
+pub fn is_jail_running(name: &str) -> bool {
+    get_jail(name).map(|opt| opt.is_some()).unwrap_or(false)
 }

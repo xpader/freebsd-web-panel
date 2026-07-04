@@ -2,15 +2,22 @@
 
 ## 概述
 
-Jail 模块提供运行中 jail 的列表/详情查询，以及基础系统管理（导入源目录/ZFS 数据集、创建镜像）。运行时查询通过 libjail C API（`jailparam_*`）直接调用，不 spawn `jls` 子进程。基础系统支持两种镜像创建方式：ZFS Clone 和 SharedFS。
+Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/全部）、详情查看、创建（从基础系统或目录）、启动/停止/删除，以及基础系统管理（导入/编辑/镜像创建）。运行时查询通过 libjail C API（`jailparam_*`）直接调用，配置管理通过解析/写回 `/etc/jail.conf` 实现。
 
 当前阶段已实现：
 - libjail FFI 绑定 + RAII 安全封装
-- 运行中 jail 列表 + 详情页（全参数展示）
-- 基础系统导入/列表/删除（JSON 注册表）
-- 两种方式创建镜像（ZFS Clone / sharedfs）
+- 容器列表页（运行中 Tab / 全部 Tab，全部 Tab 解析 jail.conf）
+- Jail 详情页（全参数展示）
+- Jail 创建（从基础系统 ZFS Clone / SharedFS，或直接指定目录）
+- Jail 启动 / 停止（`jail -c` / `jail -r`）
+- Jail 删除（从 jail.conf 移除 + 可选删除文件系统）
+- jail.conf 解析器（变量替换、注释处理、全局参数继承）
+- jail.conf 块写入（备份 + 原子替换，智能省略与全局默认相同的参数）
+- 基础系统导入（ZFS 类型选快照、SharedFS 类型选 template + sharedfs）、列表、编辑快照、删除
+- 镜像创建（ZFS Clone / SharedFS，生成 fstab）
+- 弹窗提交安全（遮罩 + spin，成功才关闭，失败保留弹窗）
 
-未实现：jail.conf 解析/写回、jail 创建/编辑/删除（jail.conf CRUD）、start/stop/restart 控制、控制台 WebSocket、快照/回滚 UI。
+未实现：jail 编辑（修改已有 jail.conf 条目）、restart、控制台 WebSocket、快照/回滚 UI。
 
 ## 实现细节
 
@@ -22,27 +29,24 @@ Jail 模块提供运行中 jail 的列表/详情查询，以及基础系统管�
 
 ```rust
 mod sys {
-    pub const JAIL_DYING: c_int = 0x08;
+    pub const JAIL_DYING: c_int   = 0x08;
+    pub const JAIL_CREATE: c_int  = 0x01;
+    pub const JAIL_UPDATE: c_int  = 0x02;
+    pub const JAIL_ATTACH: c_int  = 0x04;
 
     #[repr(C)]
     #[derive(Clone)]
-    pub struct Jailparam {
-        pub jp_name: *mut c_char,
-        pub jp_value: *mut c_void,
-        pub jp_valuelen: size_t,
-        pub jp_elemlen: size_t,
-        pub jp_ctltype: c_int,
-        pub jp_structtype: c_int,
-        pub jp_flags: c_uint,
-    }
+    pub struct Jailparam { /* jp_name, jp_value, jp_valuelen, ... */ }
 
     extern "C" {
         pub fn jailparam_all(jpp: *mut *mut Jailparam) -> c_int;
         pub fn jailparam_init(jp: *mut Jailparam, name: *const c_char) -> c_int;
         pub fn jailparam_import(jp: *mut Jailparam, value: *const c_char) -> c_int;
+        pub fn jailparam_set(jp: *mut Jailparam, njp: c_uint, flags: c_int) -> c_int;
         pub fn jailparam_get(jp: *mut Jailparam, njp: c_uint, flags: c_int) -> c_int;
         pub fn jailparam_export(jp: *const Jailparam) -> *mut c_char;
         pub fn jailparam_free(jp: *mut Jailparam, njp: c_uint);
+        pub fn jail_remove(jid: c_int) -> c_int;
         pub static jail_errmsg: [c_char; 1024];
     }
 }
@@ -50,7 +54,7 @@ mod sys {
 
 #### RAII 封装 `JailParams`
 
-- `JailParams::all()` — 调用 `jailparam_all()` 获取系统全部已知参数名，返回 RAII 封装
+- `JailParams::all()` — 调用 `jailparam_all()` 获取系统全部已知参数名
 - `JailParams::from_names(&[&str])` — 从指定参数名列表创建
 - `set(name, value)` — 调用 `jailparam_import()` 导入字符串值
 - `query(flags)` — 调用 `jailparam_get()`，返回 JID 或 -1
@@ -60,21 +64,16 @@ mod sys {
 #### 高层 API
 
 ```rust
-/// 列出所有运行中 jail（含 dying），返回参数 map 列表
 pub fn list_jails() -> Result<Vec<HashMap<String, String>>, String>
-
-/// 按名称查询单个 jail 的全部参数，不存在返回 Ok(None)
 pub fn get_jail(name: &str) -> Result<Option<HashMap<String, String>>, String>
+pub fn start_jail(name: &str) -> Result<(), String>     // jail -c
+pub fn stop_jail(name: &str) -> Result<(), String>      // jail -r
+pub fn is_jail_running(name: &str) -> bool
 ```
 
-**列出 jail 的迭代机制**：使用 `lastjid` 参数迭代。初始 `lastjid=0`，每次 `jailparam_get()` 返回下一个 JID，设为新的 `lastjid` 继续，直到返回 -1。使用 `JAIL_DYING` 标志包含正在关闭的 jail。
+`start_jail` / `stop_jail` 使用 `jail(8)` 命令而非 `jailparam_set`，因为 `jail -c` 能自动处理 fstab 挂载、exec.start、mount.devfs 等全局默认参数。
 
-**libjail 导出值格式**：
-- 布尔参数（`JP_BOOL`）→ `"true"` / `"false"`
-- jailsys 参数（`JP_JAILSYS`）→ `"disable"` / `"new"` / `"inherit"`
-- 字符串参数 → 原始字符串
-- 整数参数 → 数字字符串
-- IP 地址 → 逗号分隔
+**列出 jail 的迭代机制**：使用 `lastjid` 参数迭代。初始 `lastjid=0`，每次 `jailparam_get()` 返回下一个 JID，设为新的 `lastjid` 继续，直到返回 -1。使用 `JAIL_DYING` 标志包含正在关闭的 jail。
 
 ### 链接 `build.rs`
 
@@ -84,70 +83,138 @@ fn main() {
 }
 ```
 
+### jail.conf 解析器
+
+`parse_jail_conf()` / `parse_jail_conf_from_str()` 解析 `/etc/jail.conf`：
+- 处理 `#` 行注释和 `/* */` 块注释
+- 区分全局参数（文件顶部）和 jail 块参数（jail 块继承全局默认值）
+- 变量替换：`${name}`、`${path}`、`${host.hostname}`、`$name`
+- 解析每个 jail 块的参数（path, hostname, interface, ip4, ip4.addr 等）
+
+### jail.conf 写入
+
+- `backup_jail_conf(state)` — 备份到 `/var/db/fwp/backup/jail.conf.<timestamp>`
+- `write_jail_conf_atomic(content)` — 写入临时文件 + rename（原子操作）
+- `generate_jail_block(...)` — 生成 jail 块，**智能省略与全局默认相同的参数**（如 `path="/jails/${name}"` 匹配默认值时不写入）
+- `remove_jail_block(conf, name)` — 从内容中移除指定 jail 块
+
 ### Handler 模块 `src/handlers/jails.rs`
 
-#### 运行时查询
+#### 容器列表与详情
 
-- `list()` → `GET /api/jails` — 调用 `jail::list_jails()`，提取 `JailInfo` 结构（jid, name, hostname, path, ip4_addr, ip6_addr, state, persist）
-- `detail(name)` → `GET /api/jails/{name}` — 调用 `jail::get_jail()`，返回 `JailDetail`（含 `params: HashMap` 全部参数）
-- 输入校验：jailname 匹配 `^[a-zA-Z0-9_.-]+$`
+- `list()` → `GET /api/jails` — 调用 `jail::list_jails()`（libjail），仅返回运行中 jail
+- `conf_list()` → `GET /api/jails/all` — 解析 jail.conf，交叉比对 libjail 运行状态，返回全部 jail（含已停止）
+- `detail(name)` → `GET /api/jails/{name}` — 调用 `jail::get_jail()`，返回全部参数
 
-#### 基础系统管理
+#### Jail 创建
 
-基础系统注册表存储在 JSON 文件中，路径由 `config.paths.db` 的父目录 + `jail-bases.json` 拼接。
+`jail_create()` → `POST /api/jails/create`
 
-```rust
-struct BaseSystem {
-    name: String,
-    source_path: String,              // ZFS 数据集 / 完整目录 / template 骨架目录
-    is_zfs: bool,                     // 是否为 ZFS 数据集
-    sharedfs_path: Option<String>,    // Some = SharedFS 模板，共享二进制目录路径
-    created_at: i64,
+流程：
+1. 校验名称 + 检查 jail.conf 重名
+2. 准备文件系统：
+   - `directory` 类型：`mkdir -p` 目标路径
+   - `base` + ZFS 类型：`zfs clone <snapshot> <dataset>` + `zfs set mountpoint=<target>`
+   - `base` + SharedFS 类型：`cp -R template/. target/` + 写 fstab 文件
+3. 备份 jail.conf
+4. 生成 jail.conf 块（智能省略全局默认参数）
+5. 原子写入 jail.conf
+
+jail.conf 块生成示例（hostname 与 name 不同时才输出）：
+```
+testjail {
+    host.hostname = "testjail.example.com";
+    interface = "bge1";
+    ip4 = "inherit";
 }
 ```
 
-- `base_list()` — 读取 JSON，对 ZFS 类型的基础系统额外查询快照列表（`zfs list -t snapshot -H -o name -d 1`）
-- `base_import(body)` — 校验名称和路径，检测是否为 ZFS 数据集（`zfs list -H -o name`），如有 `sharedfs_path` 则验证其存在，写入 JSON
-- `base_destroy(name)` — 从 JSON 移除（不删除源文件）
+#### Jail 生命周期控制
 
-**基础系统类型判定**：`sharedfs_path` 为 `Some` → SharedFS 模板；为 `None` 且 `is_zfs` → ZFS 完整系统；为 `None` 且非 ZFS → 目录完整系统。
+- `jail_start(name)` → `POST /api/jails/{name}/start` — `jail -c`
+- `jail_stop(name)` → `POST /api/jails/{name}/stop` — `jail -r`
+- `jail_delete(name)` → `DELETE /api/jails/{name}?remove_files=true|false`
 
-**路径验证**：`validate_source_path()` 同时接受绝对路径（`/`开头）和 ZFS 数据集名（`pool/dataset` 格式）。`validate_target_path()` 仅接受绝对路径。
-
-**ZFS 数据集名解析**：`resolve_fs_path()` 将 ZFS 数据集名转换为文件系统挂载点路径（`zfs list -H -o mountpoint`），用于 sharedfs 创建时拷贝配置目录。
+**删除流程**：
+1. 停止 jail（如运行中）
+2. **在修改 jail.conf 之前**提取 jail 的 path 和 mount.fstab
+3. 备份 jail.conf → 移除 jail 块 → 原子写回
+4. `remove_files=true` 时：
+   - 用 `zfs list -H -o name,mountpoint <path>` 检测是否为独立 ZFS 数据集
+   - **关键安全校验**：只有 `mountpoint == path` 精确匹配时才执行 `zfs destroy`，否则按普通目录 `rm -rf`（避免误删父数据集）
+   - 删除 jail.conf 中引用的 fstab 文件
 
 ### 基础系统存储架构
 
 #### 核心模型：三种基础系统类型
 
-基础系统有**三种类型**，每种对应一种镜像创建方式。类型在导入时确定，不可在创建镜像时混用：
+基础系统有**两种类型**，每种对应一种镜像创建方式：
 
 | 基础系统类型 | source_path 含义 | sharedfs_path | 可用创建方式 |
 |---|---|---|---|
-| ZFS 快照 | ZFS 数据集名（含快照） | — | ZFS Clone |
-| 完整目录 | 完整 FreeBSD 系统目录 | — | （未来可能支持 UnionFS/OverlayFS） |
-| SharedFS 模板 | template 骨架目录（配置 + 符号链接） | 共享二进制目录 | SharedFS |
+| ZFS | ZFS 数据集名（含快照） | — | ZFS Clone |
+| SharedFS | template 骨架目录（配置 + 符号链接） | 共享二进制目录 | SharedFS |
 
-**SharedFS 模板与共享二进制是两个独立的东西**（借鉴 qjail 的设计）：
-- `sharedfs`（共享二进制目录）— 含 `bin/ lib/ sbin/ usr/` 等系统二进制，所有 jail 通过 nullfs ro 共享同一份
-- `template`（骨架目录）— 含 `etc/ var/ root/` 等配置目录 + 指向 `/sharedfs/*` 的符号链接，每个 jail 从此目录拷贝
+#### 数据结构
 
-导入时提供 `sharedfs_path` 的基础系统即为 SharedFS 模板类型。不提供的则为完整系统（ZFS 或目录）。
+```rust
+struct BaseSystem {
+    name: String,
+    type: String,                    // "zfs" 或 "sharedfs"
+    source_path: String,             // ZFS: 数据集名 | SharedFS: template 路径
+    snapshots: Vec<String>,          // ZFS: 导入时选择的快照全名 | SharedFS: 空
+    sharedfs_path: Option<String>,   // SharedFS: 共享二进制目录路径
+    created_at: i64,
+}
+```
+
+#### 导入校验
+
+导入时验证源是否为有效的 FreeBSD 结构：
+- ZFS：dataset 有效 + 至少选一个快照 + mountpoint 有 `bin/ sbin/ usr/bin/ usr/lib/ etc/`
+- SharedFS：template 有 `etc/` + `sharedfs/`，sharedfs 目录有 `bin/ lib/ sbin/ usr/bin/`
 
 #### ZFS Clone — 独立 COW 副本
 
 ```
-zroot/jails/bases/freebsd-15.1           ← 基础系统（ZFS 数据集）
 zroot/jails/bases/freebsd-15.1@clean     ← 快照
-
 创建 jail:
-zfs clone zroot/jails/bases/freebsd-15.1@clean  zroot/jails/web01
-zfs set mountpoint=/jails/web01  zroot/jails/web01
-→ /jails/web01 是完全独立的可写副本
-→ jail.conf: path = "/jails/web01"（无需额外 fstab）
+zfs clone snapshot  target_dataset
+zfs set mountpoint=target  target_dataset
+→ 完全独立的可写副本
 ```
 
-每个 jail 完全独立，可独立 `freebsd-update`、`pkg upgrade`。ZFS 快照/回滚原生支持。
+#### SharedFS — 模板拷贝 + nullfs 只读挂载
+
+```
+基础系统（template 骨架）:          共享二进制（sharedfs）:
+/usr/jails/template/               /usr/jails/sharedfs/
+├── bin -> /sharedfs/bin           ├── bin/ lib/ sbin/
+├── etc/                           └── usr/{bin,lib,...}
+├── sharedfs/                      ← nullfs ro 挂载点
+└── ...
+
+创建 Jail:
+1. cp -R template/.  target/
+2. fstab: sharedfs_path  target/sharedfs  nullfs  ro  0  0
+```
+
+| 共享（符号链接到 /sharedfs，只读） | 独立（每 jail 拷贝，可写） |
+|---|---|
+| bin, lib, libexec, sbin | etc, var, root |
+| usr/bin, usr/lib, usr/sbin | home, tmp, usr/local |
+
+#### 两种方式对比
+
+| | ZFS Clone | SharedFS |
+|---|---|---|
+| **jail 独立性** | 完全独立 | 配置独立，系统二进制共享 |
+| **创建速度** | 秒级（ZFS clone） | 秒级（cp -R 模板） |
+| **磁盘占用** | COW 增量 | 系统二进制一份 + 各 jail 配置 |
+| **修改/删除系统文件** | ✅ | ❌ 只读 |
+| **系统更新** | 每 jail 独立 | 更新 base 即更新所有 jail |
+| **快照/回滚** | ZFS 原生 | 仅 jail 目录 |
+| **FS 要求** | ZFS | 任意 |
 
 #### UnionFS / OverlayFS — 未来选项（暂不支持）
 
@@ -155,101 +222,33 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 **暂不支持的原因**：
 
-1. **ZFS 不支持 whiteout** — FreeBSD 13+ 默认使用 ZFS，而 ZFS 文件系统不实现 whiteout inode。实测在 ZFS 上 unionfs 可以创建和修改文件（copy-up），但**无法删除**底层文件（返回 `Operation not supported`）。这导致 `pkg delete`、`freebsd-update` 等需要删除文件的操作失败。UFS 上完整支持 whiteout，但 UFS 不是现代 FreeBSD 的默认选择。
+1. **ZFS 不支持 whiteout** — FreeBSD 13+ 默认使用 ZFS，而 ZFS 文件系统不实现 whiteout inode。实测在 ZFS 上 unionfs 可以创建和修改文件（copy-up），但**无法删除**底层文件（返回 `Operation not supported`）。
+2. **稳定性** — unionfs 在 FreeBSD 上有长期稳定性争议。
+3. **现有方案已覆盖需求** — ZFS Clone + SharedFS 覆盖了实际使用场景。
 
-2. **稳定性** — unionfs 在 FreeBSD 上有长期稳定性争议，历史上多次重写。虽然 FreeBSD 13+ 大幅改善，但社区中仍不推荐用于可写 jail 场景。
-
-3. **现有方案已覆盖需求** — ZFS Clone 提供完整独立性（需 ZFS），SharedFS 提供共享二进制 + 独立配置（任意文件系统），两者的组合覆盖了实际使用场景。
-
-**未来可能重新引入的条件**：
-- FreeBSD 内核为 ZFS 添加 whiteout 支持，或
-- FreeBSD 引入类似 Linux overlayfs 的新联合文件系统，或
-- 面向 UFS 用户的明确需求
-
-#### sharedfs — 模板拷贝 + nullfs 只读挂载
-
-借鉴 qjail 的 sharedfs + template 设计。基础系统是**预构建的 template 骨架目录**（含配置目录 + 指向 `/sharedfs/*` 的符号链接），不是完整系统目录。共享二进制（sharedfs）是独立管理的资源。
-
-```
-基础系统（template 骨架）:          共享二进制（sharedfs）:
-/usr/jails/template/               /usr/jails/sharedfs/
-├── bin -> /sharedfs/bin           ├── bin/ lib/ sbin/
-├── lib -> /sharedfs/lib           └── usr/{bin,lib,...}
-├── sbin -> /sharedfs/sbin
-├── usr/
-│   ├── bin -> /sharedfs/usr/bin
-│   ├── lib -> /sharedfs/usr/lib
-│   └── local/                ← 可写（pkg 安装目录）
-├── etc/                      ← 配置（每 jail 拷贝一份）
-├── var/
-├── root/
-├── home/
-├── tmp/
-└── sharedfs/                 ← nullfs ro 挂载点
-
-创建 Jail:
-1. cp -R template/.  /jails/web01/    ← 拷贝骨架（保留符号链接）
-2. jail 启动时 fstab 挂载:
-   /usr/jails/sharedfs  /jails/web01/sharedfs  nullfs  ro  0  0
-```
-
-**符号链接解析机制**：链接 `bin -> /sharedfs/bin` 是绝对路径。jail 内 chroot 后，`/sharedfs` 解析到 `jailroot/sharedfs`，即 nullfs 挂载点。每个 jail 的符号链接相同，但各自指向自己的 nullfs 挂载。
-
-**与旧实现的差异**（重构）：旧实现在创建 jail 时动态生成符号链接 + 从完整系统目录拆分 system/config 目录。新实现直接拷贝预构建的 template（`cp -R`，保留符号链接），不再动态生成——template 在导入时已是现成的骨架。
-
-**共享 vs 独立目录划分**（template 内）：
-
-| 共享（符号链接到 /sharedfs，只读） | 独立（每 jail 拷贝，可写） |
-|---|---|
-| bin, lib, libexec, sbin | etc, var, root |
-| usr/bin, usr/include, usr/lib | home, tmp |
-| usr/libdata, usr/libexec, usr/sbin | usr/local（pkg 安装目录） |
-| usr/share | |
-
-`/usr/local` 独立是关键——每个 jail 可独立 `pkg bootstrap` + 安装包。系统二进制只读共享，jail 无法修改也无法覆盖。
-
-#### 两种方式对比
-
-| | ZFS Clone | sharedfs |
-|---|---|---|
-| **基础系统** | ZFS 快照（完整系统） | template 骨架 + sharedfs 共享二进制 |
-| **jail 独立性** | 完全独立 | 配置独立，系统二进制共享 |
-| **创建速度** | 秒级（ZFS clone） | 秒级（cp -R 模板） |
-| **磁盘占用** | COW 增量 | 系统二进制一份 + 各 jail 配置 |
-| **修改系统文件** | ✅ 自由修改 | ❌ 只读 |
-| **删除系统文件** | ✅ | ❌ |
-| **系统更新** | 每 jail 独立 | 更新 base 即更新所有 jail |
-| **快照/回滚** | ZFS 原生 | 仅 jail 目录 |
-| **FS 要求** | ZFS | 任意 |
-| **jail.conf 额外项** | 无 | mount.fstab |
-
-#### 创建镜像 `base_create_image()`
-
-创建前根据基础系统类型校验方法合法性：
-- SharedFS 模板（`sharedfs_path` 非空）→ 仅允许 `sharedfs`
-- ZFS 完整系统 → 仅允许 `zfs-clone`
-
-两种方式：
-
-**ZFS Clone**：
-1. 校验 source 是 ZFS 数据集且非模板
-2. `zfs clone <snapshot> <target_dataset>`
-3. `zfs set mountpoint=<target> <target_dataset>`
-
-**sharedfs**：
-1. 校验基础系统是 SharedFS 模板（`sharedfs_path` 非空）
-2. `cp -R <template>/. <target>` — 拷贝骨架目录（`-R` 保留符号链接）
-3. 生成 fstab 文件到 `/var/db/fwp/jail-fstabs/<sanitized_target>.fstab`，内容：
-   ```
-   <sharedfs_path>  <target>/sharedfs  nullfs  ro  0  0
-   ```
-4. API 响应返回 fstab 路径，供后续 jail.conf 写入 `mount.fstab` 引用
+**未来可能重新引入的条件**：FreeBSD 为 ZFS 添加 whiteout 支持，或引入新的联合文件系统。
 
 ### 前端 `web/js/pages/jails.js`
 
-#### 运行中 Jail 列表页（`/jails/running`）
+#### 容器列表页（`/jails/running`）
 
-表格展示 JID / 名称 / 主机名 / 路径 / IP / 状态。行可点击跳转到详情页。
+- Tab 切换（运行中 / 全部），使用 `filter-group` + `filter-btn` 样式
+- 运行中：调用 `GET /api/jails`（libjail）
+- 全部：调用 `GET /api/jails/all`（jail.conf 解析）
+- 表格列：JID / 名称 / 主机名 / 路径 / IP / 状态 / 操作
+- 行可点击跳转详情页
+- 操作列：启动 / 停止（按状态启用/禁用）/ 删除按钮
+- 右上角"创建"按钮
+
+#### 创建 Jail 弹窗
+
+自定义 modal，动态字段：
+- 名称 + hostname + 位置类型选择器
+- "目录路径"→ 路径输入框
+- "从基础系统创建"→ 基础系统下拉：
+  - ZFS 类型 → 快照选择 + 目标数据集（默认值）+ 挂载点（默认值）
+  - SharedFS 类型 → 目标目录（默认值）
+- 网络接口 + IPv4 + IPv6
 
 #### Jail 详情页（`/jails/detail/<name>`）
 
@@ -258,24 +257,26 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 #### 基础系统列表页（`/jails/bases`）
 
-- 表格展示：名称 / 源路径 / 类型（ZFS/Directory 徽章）/ 快照数 / 操作按钮
-- "导入"按钮 → `formModal`（名称 + 源路径）
-- "创建镜像"按钮 → 自定义弹窗（动态字段）
-- "删除"按钮 → `confirmDialog`
+- 表格：名称 / 源路径 / 类型徽章（ZFS/SharedFS）/ 快照数 / 操作按钮
+- "导入"按钮 → 动态弹窗（类型选择器 → ZFS：数据集下拉 + 快照多选；SharedFS：双路径输入）
+- "编辑"按钮（仅 ZFS 类型）→ 快照编辑弹窗
+- "创建镜像"按钮 → 按基础系统类型显示对应字段
+- "删除"按钮 → 确认弹窗
 
-#### 创建镜像弹窗
+#### 弹窗提交安全机制 `submitModal()`
 
-自定义 modal（非 `formModal`），字段根据创建方式动态显示/隐藏：
-- 创建方式：下拉选择 ZFS Clone / SharedFS（ZFS Clone 仅在源为 ZFS 时出现，SharedFS 仅在模板时出现）
-- ZFS Clone 时显示：克隆快照（下拉）、目标数据集（输入）
-- 目标位置：始终显示
+所有写操作弹窗（创建 Jail、导入/编辑基础系统、创建镜像）统一使用：
+1. 提交时在弹窗内显示遮罩层 + spinner（`.modal-busy`）
+2. 调用 API
+3. 成功 → 关闭弹窗
+4. 失败 → 移除遮罩，弹窗保留，toast 报错
 
 ### 导航结构 `web/js/ui/layout.js`
 
 ```
 虚拟化 (topbar)
   └── Jail 容器 (collapsible)
-      ├── 运行中    /jails/running
+      ├── 容器列表  /jails/running
       └── 基础系统  /jails/bases
   └── Bhyve 虚拟机
 ```
@@ -287,22 +288,36 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
 | GET | `/api/jails` | — | `[{jid, name, hostname, path, ip4_addr[], ip6_addr[], state, persist}]` |
-| GET | `/api/jails/{name}` | — | `{jid, name, hostname, path, ip4_addr[], ip6_addr[], state, persist, params: {key: value}}` |
+| GET | `/api/jails/all` | — | `[{name, running, path, hostname, interface, ip4, ip4_addr, params}]` |
+| GET | `/api/jails/{name}` | — | `{jid, name, hostname, path, ip4_addr[], ip6_addr[], state, persist, params}` |
+
+### Jail 生命周期
+
+| 方法 | 路径 | 请求 | 响应 |
+|---|---|---|---|
+| POST | `/api/jails/create` | `{name, hostname?, location_type, path?, base_name?, snapshot?, target_dataset?, interface?, ip4?, ip6?}` | `201 {name, path, fstab?}` |
+| POST | `/api/jails/{name}/start` | — | `200 {name, action}` |
+| POST | `/api/jails/{name}/stop` | — | `200 {name, action}` |
+| DELETE | `/api/jails/{name}?remove_files=true` | — | `204` |
 
 ### 基础系统管理
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/api/jails/bases` | — | `[{name, source_path, is_zfs, sharedfs_path?, created_at, snapshots[]}]` |
-| POST | `/api/jails/bases` | `{name, source_path, sharedfs_path?}` | `201 {name, source_path, is_zfs, sharedfs_path?, created_at}` |
+| GET | `/api/jails/bases` | — | `[{name, type, source_path, snapshots[], sharedfs_path?, created_at}]` |
+| POST | `/api/jails/bases` | `{name, type, source_path, snapshots?, sharedfs_path?}` | `201 {name, type, ...}` |
+| PUT | `/api/jails/bases/{name}` | `{snapshots[]}` | `200 {name, type, ...}` |
 | DELETE | `/api/jails/bases/{name}` | — | `204` |
+| GET | `/api/jails/bases/snapshots?name=dataset` | — | `["pool@snap1", "pool@snap2"]` |
 | POST | `/api/jails/bases/{name}/image` | `{method, snapshot?, dataset?, target}` | `201 {method, target, sharedfs_path?, fstab?}` |
 
 ## 外部依赖
 
 - **libjail**（`-ljail`）— 通过 `build.rs` 链接，提供 `jailparam_*` C API
-- **`/sbin/zfs`** — ZFS 数据集检测、快照列举、clone、set mountpoint
-- **`/bin/cp`** — sharedfs 模式拷贝配置目录
+- **`/usr/sbin/jail`** — jail 启动（`jail -c`）、停止（`jail -r`）
+- **`/sbin/zfs`** — ZFS 数据集检测、快照列举、clone、destroy
+- **`/bin/cp`** — SharedFS 模板拷贝
+- **`/etc/jail.conf`** — Jail 配置文件（读取 + 备份 + 原子写入）
 - **crate: libc** — FFI 类型（`c_char`, `c_int`, `c_void`, `size_t`）
 - **crate: serde_json** — 基础系统注册表 JSON 读写
 
@@ -315,14 +330,17 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 db = "/var/db/fwp/fwp.db"
 ```
 
-注册表文件路径 = `db` 的父目录 + `jail-bases.json`（即 `/var/db/fwp/jail-bases.json`）。
+派生路径：
+- 注册表：`/var/db/fwp/jail-bases.json`
+- SharedFS fstab：`/var/db/fwp/jail-fstabs/<sanitized_target>.fstab`
+- jail.conf 备份：`/var/db/fwp/backup/jail.conf.<timestamp>`
 
 ## 已知限制 / TODO
 
-- **jail.conf 解析/写回** — 未实现。设计文档 `docs/plan/10-jail.md` §2 规划了 AST 解析器，保留注释和格式，原子写回 + 备份。
-- **jail CRUD** — 未实现创建/编辑/删除 jail.conf 条目。
-- **start/stop/restart** — 未实现。libjail 的 `jailparam_set` + `JAIL_CREATE` 和 `jail_remove` 已在 FFI 模块中声明但未封装为安全 API。
+- **Jail 编辑** — 未实现修改已有 jail.conf 条目（如修改 IP、接口等参数）。
+- **restart** — 未实现（可通过先 stop 再 start 实现）。
 - **控制台 WebSocket** — 未实现。设计为 `jexec` + PTY。
-- **UnionFS/OverlayFS** — 设计阶段调研并实测后暂不实现。原因：ZFS 不支持 whiteout（无法删除底层文件），unionfs 稳定性争议。详见上文"UnionFS / OverlayFS — 未来选项"章节。
-- **基础系统源路径校验** — 当前仅检查路径存在或 ZFS 数据集有效，不验证目录内容是否为有效的 FreeBSD 基础系统。
-- **镜像创建后不写 jail.conf** — 当前只准备文件系统，不自动生成 jail.conf 条目。jail.conf 解析器实现后才能完成完整的 jail 创建流程。
+- **jail.conf 写回格式保留** — 当前创建/删除 jail 时是文本追加/移除块，不是 AST 级编辑，不保留块内注释和原始缩进格式。设计文档 `docs/plan/10-jail.md` §2 规划了 AST 解析器。
+- **UnionFS/OverlayFS** — 设计阶段调研并实测后暂不实现。原因：ZFS 不支持 whiteout。
+- **VNET 管理** — 未实现（epair 创建/销毁、bridge 管理）。
+- **资源限制** — 未实现（rctl CPU/内存/进程数限制）。
