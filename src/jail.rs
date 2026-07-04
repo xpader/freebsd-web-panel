@@ -16,8 +16,11 @@ mod sys {
     use super::*;
 
     pub const JAIL_DYING: c_int = 0x08;
+    #[allow(dead_code)]
     pub const JAIL_CREATE: c_int = 0x01;
+    #[allow(dead_code)]
     pub const JAIL_UPDATE: c_int = 0x02;
+    #[allow(dead_code)]
     pub const JAIL_ATTACH: c_int = 0x04;
 
     #[repr(C)]
@@ -36,10 +39,12 @@ mod sys {
         pub fn jailparam_all(jpp: *mut *mut Jailparam) -> c_int;
         pub fn jailparam_init(jp: *mut Jailparam, name: *const c_char) -> c_int;
         pub fn jailparam_import(jp: *mut Jailparam, value: *const c_char) -> c_int;
+        #[allow(dead_code)]
         pub fn jailparam_set(jp: *mut Jailparam, njp: c_uint, flags: c_int) -> c_int;
         pub fn jailparam_get(jp: *mut Jailparam, njp: c_uint, flags: c_int) -> c_int;
         pub fn jailparam_export(jp: *const Jailparam) -> *mut c_char;
         pub fn jailparam_free(jp: *mut Jailparam, njp: c_uint);
+        #[allow(dead_code)]
         pub fn jail_remove(jid: c_int) -> c_int;
         pub static jail_errmsg: [c_char; 1024];
     }

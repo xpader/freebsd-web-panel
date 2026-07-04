@@ -54,13 +54,6 @@ pub struct JailRuntime {
     pub params: HashMap<String, String>,
 }
 
-fn split_addrs(val: &str) -> Vec<String> {
-    if val.is_empty() {
-        return Vec::new();
-    }
-    val.split(',').map(|s| s.trim().to_string()).collect()
-}
-
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     /// "true" = only running, "false" or absent = all (from jail.conf).

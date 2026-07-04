@@ -507,7 +507,7 @@ pub struct SnapshotQuery {
 pub async fn snapshot_list(
     Query(q): Query<SnapshotQuery>,
 ) -> ApiResult<Json<Vec<Snapshot>>> {
-    let mut args = vec!["list", "-t", "snapshot", "-H", "-p", "-o", "name,used,refer,creation"];
+    let args = vec!["list", "-t", "snapshot", "-H", "-p", "-o", "name,used,refer,creation"];
     let mut owned_args: Vec<String> = vec![];
     if let Some(ref ds) = q.dataset {
         validate_name(ds)?;

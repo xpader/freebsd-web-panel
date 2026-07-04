@@ -33,8 +33,6 @@ const CTL_SYSCTL_OIDDESCR: c_int = 5;
 const CTLTYPE_MASK: c_uint = 0xf;
 const CTLTYPE_NODE: c_uint = 1;
 const CTLFLAG_WR: c_uint = 0x4000_0000;
-const CTLFLAG_TUN: c_uint = 0x0008_0000;
-
 const CTL_MAXNAME: usize = 24;
 const SYSCTL_CONF: &str = "/etc/sysctl.conf";
 const MAX_BACKUPS: usize = 5;

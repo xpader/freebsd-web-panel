@@ -488,6 +488,7 @@ pub struct ChownBody {
     pub gid: Option<u32>,
     /// Do not follow symlinks (operate on the link itself).
     #[serde(default = "default_true")]
+    #[allow(dead_code)]
     pub no_follow: bool,
 }
 

@@ -11,7 +11,7 @@
 //! 3. **Running status** (fallback): services whose pidfile/procname cannot
 //!    be resolved fall back to `service <name> status`, run in parallel.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;

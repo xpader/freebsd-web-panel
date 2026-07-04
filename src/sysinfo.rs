@@ -5,7 +5,6 @@
 //! duplicate sysctl parsing logic or spawn `/sbin/sysctl` on every call.
 
 use std::collections::HashMap;
-use libc::{c_int, sockaddr, sockaddr_dl, sockaddr_in};
 use sysctl::{Ctl, CtlValue, Sysctl};
 
 /// Read a sysctl node as a string (mirrors `sysctl -n <name>`).
