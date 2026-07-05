@@ -368,6 +368,16 @@ tr:hover td { background: var(--bg-elev2); }
 .kv-table td:first-child { width: 40%; color: var(--text-dim); white-space: nowrap; }
 .kv-table tr:last-child td { border-bottom: none; }
 
+/* ---- Repository config form ---- */
+.repo-form { display: flex; flex-direction: column; gap: 12px; }
+.repo-form-row { display: flex; gap: 12px; }
+.repo-form-label { width: 130px; flex-shrink: 0; color: var(--text-dim); font-size: 13px; padding-top: 6px; }
+.repo-form-field { flex: 1; min-width: 0; }
+.repo-form-field input[type="text"],
+.repo-form-field input[type="number"],
+.repo-form-field select { margin-bottom: 4px; }
+.repo-form-hint { font-size: 11px; color: var(--text-dim); margin: 0; }
+
 /* ---- Permission badge grid ---- */
 .perm-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .perm-grid .badge { font-size: 12px; }

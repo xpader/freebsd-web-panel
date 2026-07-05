@@ -28,7 +28,15 @@ const MENU = [
       { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
       { path: '/cron', labelKey: 'nav.cron', icon: 'fa-solid fa-clock-rotate-left' },
       { path: '/services', labelKey: 'nav.services', icon: 'fa-solid fa-play' },
-      { path: '/pkg', labelKey: 'nav.packages', icon: 'fa-solid fa-box' },
+      {
+        path: '/pkg',
+        labelKey: 'nav.packages',
+        icon: 'fa-solid fa-box',
+        children: [
+          { path: '/pkg', labelKey: 'nav.pkgList', icon: 'fa-solid fa-list' },
+          { path: '/pkg/repos', labelKey: 'nav.pkgRepos', icon: 'fa-solid fa-server' },
+        ],
+      },
       {
         path: '/accounts/users',
         labelKey: 'nav.accounts',

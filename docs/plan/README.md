@@ -16,6 +16,7 @@
 | [70-task-queue.md](70-task-queue.md) | 长任务队列（ISO 下载、scrub、send/receive 的异步化与进度） |
 | [80-roadmap.md](80-roadmap.md) | **分阶段实施路线图**（Phase 0–8，验收标准，依赖关系图） |
 | [90-monitoring.md](90-monitoring.md) | 监控模块设计（时序采集、SQLite 存储、图表、告警规则、通知渠道） |
+| [22-pkg-repos.md](22-pkg-repos.md) | PKG 软件源配置管理设计（仓库 CRUD、UCL 配置、镜像模板、`pkg update` 后台任务） |
 
 ## 架构一图速览
 

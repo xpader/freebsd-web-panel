@@ -28,6 +28,7 @@
 | [19-sysctl.md](19-sysctl.md) | sysctl 浏览：列出全部内核参数（值/类型/描述/修改状态），搜索+分页 | `handlers/sysctl.rs`, `web/js/pages/sysctl.js` |
 | [20-jail.md](20-jail.md) | Jail 容器：libjail FFI 运行时查询、基础系统管理（导入/镜像创建：ZFS Clone/unionfs/sharedfs） | `jail.rs`, `handlers/jails.rs`, `web/js/pages/jails.js` |
 | [21-pkg.md](21-pkg.md) | pkg 软件包管理：列出已安装包（全部/手动/自动）、查看包详情（描述/依赖/反向依赖/文件列表） | `handlers/pkg.rs`, `web/js/pages/pkg.js` |
+| [22-pkg-repos.md](22-pkg-repos.md) | pkg 软件源配置管理：仓库 CRUD（UCL 解析/生成）、启用/禁用、`pkg update -f` 后台任务、预设镜像模板 | `handlers/pkg.rs`, `web/js/pages/pkg-repos.js` |
 
 ## 文档规范
 

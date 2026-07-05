@@ -106,6 +106,10 @@ pub fn build(state: AppState) -> Router {
         .route("/api/pkg/tasks/{id}", get(handlers::pkg::task_status))
         .route("/api/pkg/packages/{name}", get(handlers::pkg::package_detail))
         .route("/api/pkg/packages/{name}/files", get(handlers::pkg::package_files))
+        // --- pkg repos (repository management) ---
+        .route("/api/pkg/repos", get(handlers::pkg::list_repos).post(handlers::pkg::create_repo))
+        .route("/api/pkg/repos/{name}", put(handlers::pkg::update_repo).delete(handlers::pkg::delete_repo))
+        .route("/api/pkg/repos/update", post(handlers::pkg::repo_update))
         .layer(from_fn_with_state(state.clone(), require_auth));
 
     // File upload sends raw bytes as the request body and can be large;

@@ -23,6 +23,7 @@ import { renderDns } from './pages/dns.js';
 import { renderSysctl } from './pages/sysctl.js';
 import { renderJailsRunning, renderJailCreate, renderJailDetail, renderJailBases } from './pages/jails.js';
 import { renderPackages, renderPackageDetail } from './pages/pkg.js';
+import { renderPkgRepos } from './pages/pkg-repos.js';
 
 // Auth routes.
 defineRoute('/login', renderLogin);
@@ -64,6 +65,7 @@ defineRoute('/zfs/snapshots', renderZfsSnapshots);
 // Package management routes.
 defineRoute('/pkg', renderPackages);
 defineRoute('/pkg/', renderPackageDetail);
+defineRoute('/pkg/repos', renderPkgRepos);
 
 // Global logout handler.
 window.__fwpLogout = async () => {
