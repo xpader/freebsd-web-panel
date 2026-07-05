@@ -188,7 +188,10 @@ export async function renderZfsDatasets(app) {
     </div>
     <div class="toolbar">
       <div></div>
-      <button onclick="window.__fwpCreateDataset()">${t('zfs.dsCreate')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpCreateDataset()"><i class="fa-solid fa-plus"></i> ${t('zfs.dsCreate')}</button>
+        <button onclick="window.__fwpZfsDsReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>
@@ -236,6 +239,12 @@ async function loadDatasets() {
     tbody.innerHTML = `<tr><td colspan="7" class="empty">${t('common.loadFailed', { msg: esc(e.message || '') })}</td></tr>`;
   }
 }
+
+window.__fwpZfsDsReload = () => {
+  const tbody = document.getElementById('ds-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>`;
+  loadDatasets();
+};
 
 window.__fwpCreateDataset = async () => {
   const result = await formModal(t('zfs.dsCreateTitle'), [
@@ -304,7 +313,10 @@ export async function renderZfsSnapshots(app) {
     </div>
     <div class="toolbar">
       <input type="text" id="snap-filter" class="search" placeholder="${t('zfs.snapFilter')}" oninput="window.__fwpSnapFilter()" />
-      <button onclick="window.__fwpCreateSnap()">${t('zfs.snapCreate')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpCreateSnap()"><i class="fa-solid fa-plus"></i> ${t('zfs.snapCreate')}</button>
+        <button onclick="window.__fwpZfsSnapReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>
@@ -351,6 +363,12 @@ window.__fwpSnapFilter = () => {
   renderSnapRows(_allSnaps.filter(s => s.dataset.toLowerCase().includes(q) || s.snap_name.toLowerCase().includes(q)));
 };
 
+
+window.__fwpZfsSnapReload = () => {
+  const tbody = document.getElementById('snap-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>`;
+  loadSnapshots();
+};
 
 window.__fwpCreateSnap = async () => {
   const result = await formModal(t('zfs.snapCreateTitle'), [

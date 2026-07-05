@@ -18,8 +18,9 @@ export async function renderRcconf(app) {
     <div class="toolbar">
       <input type="text" id="rc-filter" class="filter-input" placeholder="${t('rcconf.filter')}" oninput="window.__fwpRcFilter()" />
       <span id="rc-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpRcAdd()">${t('rcconf.add')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpRcAdd()"><i class="fa-solid fa-plus"></i> ${t('rcconf.add')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>

@@ -29,7 +29,14 @@ async function submitModal(overlay, onSubmit, result) {
 
 // ===== Jail list (with Running / All tabs) =====
 
-let _jailTab = 'running';
+let _jailTab = 'all';
+const _pendingActions = new Set();
+
+function jailState(name, running) {
+  if (_pendingActions.has(`${name}:start`)) return 'starting';
+  if (_pendingActions.has(`${name}:stop`)) return 'stopping';
+  return running ? 'running' : 'stopped';
+}
 
 export async function renderJailsRunning(app) {
   renderLayout(app, '/jails/running', `
@@ -39,13 +46,14 @@ export async function renderJailsRunning(app) {
     </div>
     <div class="toolbar">
       <div class="filter-group" id="jail-tab-group">
-        <button class="filter-btn active" data-val="running">${t('jails.running')}</button>
-        <button class="filter-btn" data-val="all">${t('common.all')}</button>
+        <button class="filter-btn active" data-val="all">${t('common.all')}</button>
+        <button class="filter-btn" data-val="running">${t('jails.running')}</button>
       </div>
       <span id="jail-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpJailReload()">${t('common.refresh')}</button>
-      <button onclick="location.hash='#/jails/create'">${t('jails.create')}</button>
+      <div class="flex">
+        <button onclick="location.hash='#/jails/create'"><i class="fa-solid fa-plus"></i> ${t('jails.create')}</button>
+        <button onclick="window.__fwpJailReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>
@@ -65,7 +73,6 @@ export async function renderJailsRunning(app) {
     </div>
   `);
 
-  _jailTab = 'running';
   bindJailTabs();
   await loadJails();
 }
@@ -105,8 +112,8 @@ async function loadJails() {
           <td>${esc(j.hostname || '—')}</td>
           <td class="mono text-dim">${esc(j.path || '—')}</td>
           <td class="mono">${formatIpStr(j.ip4_addr, j.ip6_addr)}</td>
-          <td>${stateBadge('running')}</td>
-          <td>${actionButtons(j.name, true)}</td>
+          <td>${stateBadge(jailState(j.name, true))}</td>
+          <td>${actionButtons(j.name, jailState(j.name, true))}</td>
         </tr>`).join('');
     } else {
       // All jails from jail.conf.
@@ -117,8 +124,8 @@ async function loadJails() {
           <td>${esc(j.hostname || '—')}</td>
           <td class="mono text-dim">${esc(j.path || '—')}</td>
           <td class="mono">${formatIpStr(j.ip4_addr, j.ip6_addr)}</td>
-          <td>${j.jid > 0 ? stateBadge('running') : `<span class="badge badge-dim">${t('jails.stopped')}</span>`}</td>
-          <td>${actionButtons(j.name, j.jid > 0)}</td>
+          <td>${stateBadge(jailState(j.name, j.jid > 0))}</td>
+          <td>${actionButtons(j.name, jailState(j.name, j.jid > 0))}</td>
         </tr>`).join('');
     }
   } catch (err) {
@@ -129,7 +136,16 @@ async function loadJails() {
 
 // ===== Jail actions (start/stop/delete) =====
 
-function actionButtons(name, running) {
+function actionButtons(name, state) {
+  const busy = state === 'starting' || state === 'stopping';
+  if (busy) {
+    return `<div class="btn-group" onclick="event.stopPropagation()">
+      <button class="btn-secondary btn-sm" disabled>${t('jails.start')}</button>
+      <button class="btn-secondary btn-sm" disabled>${t('jails.stop')}</button>
+      <button class="btn-danger btn-sm" disabled>${t('common.delete')}</button>
+    </div>`;
+  }
+  const running = state === 'running';
   const startBtn = running
     ? `<button class="btn-secondary btn-sm" disabled>${t('jails.start')}</button>`
     : `<button class="btn-secondary btn-sm" onclick="window.__fwpJailAction('${escAttr(name)}','start')">${t('jails.start')}</button>`;
@@ -141,12 +157,17 @@ function actionButtons(name, running) {
 }
 
 window.__fwpJailAction = async (name, action) => {
+  _pendingActions.add(`${name}:${action}`);
+  loadJails();
+
   try {
     await api.post(`/api/jails/${encodeURIComponent(name)}/${action}`);
     toast(t('jails.actionDone', { name, action: t('jails.' + action) }));
-    await loadJails();
   } catch (e) {
     toast(e.message || t('common.operationFailed'), 'error');
+  } finally {
+    _pendingActions.delete(`${name}:${action}`);
+    await loadJails();
   }
 };
 
@@ -524,9 +545,10 @@ export async function renderJailBases(app) {
     </div>
     <div class="toolbar">
       <span id="bases-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpBasesReload()">${t('common.refresh')}</button>
-      <button onclick="window.__fwpBaseImport()">${t('jails.importBase')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpBaseImport()"><i class="fa-solid fa-download"></i> ${t('jails.importBase')}</button>
+        <button onclick="window.__fwpBasesReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>
@@ -944,6 +966,8 @@ function stateBadge(state) {
   if (state === 'dying') return `<span class="badge badge-warn">${t('jails.dying')}</span>`;
   if (state === 'stopped') return `<span class="badge badge-dim">${t('jails.stopped')}</span>`;
   if (state === 'running') return `<span class="badge badge-success">${t('jails.running')}</span>`;
+  if (state === 'starting') return `<span class="badge badge-warn"><span class="spinner" style="width:11px;height:11px;border-width:1.5px;margin-right:4px;vertical-align:-1px;"></span>${t('jails.starting')}</span>`;
+  if (state === 'stopping') return `<span class="badge badge-warn"><span class="spinner" style="width:11px;height:11px;border-width:1.5px;margin-right:4px;vertical-align:-1px;"></span>${t('jails.stopping')}</span>`;
   return `<span class="badge badge-dim">${t('common.unknown')}</span>`;
 }
 

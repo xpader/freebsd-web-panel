@@ -33,8 +33,9 @@ export async function renderSysctl(app) {
         <button class="filter-btn" data-val="all">${t('common.all')}</button>
       </div>
       <span id="sysctl-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpSysctlRefresh()">${t('common.refresh')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpSysctlRefresh()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>

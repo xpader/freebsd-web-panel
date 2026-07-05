@@ -69,14 +69,10 @@ export async function renderFsOverview(app) {
     </tr>`).join('');
 
   el.innerHTML = `
-    <div class="page-header" style="margin-bottom:16px;">
-      <h1 style="font-size:18px;">${t('fs.zfsPools')}</h1>
-    </div>
+    <div class="section-title">${t('fs.zfsPools')}</div>
     ${poolCards || `<div class="card empty">${t('fs.noPools')}</div>`}
 
-    <div class="page-header" style="margin-bottom:16px;">
-      <h1 style="font-size:18px;">${t('fs.physicalDisks', { n: data.disks.length })}</h1>
-    </div>
+    <div class="section-title" style="margin-top:32px;">${t('fs.physicalDisks', { n: data.disks.length })}</div>
     <div class="card" style="padding:0;">
       <table>
         <thead><tr><th>${t('common.device')}</th><th>${t('fs.model')}</th><th>${t('common.size')}</th><th>${t('fs.rpm')}</th></tr></thead>
@@ -84,9 +80,7 @@ export async function renderFsOverview(app) {
       </table>
     </div>
 
-    <div class="page-header" style="margin-bottom:16px;margin-top:32px;">
-      <h1 style="font-size:18px;">${t('fs.mountpoints', { n: data.mounts.length })}</h1>
-    </div>
+    <div class="section-title" style="margin-top:32px;">${t('fs.mountpoints', { n: data.mounts.length })}</div>
     <div class="card" style="padding:0;">
       <table>
         <thead><tr><th>${t('common.device')}</th><th>${t('fs.mountpoint')}</th><th>${t('fs.fstype')}</th><th>${t('common.total')}</th><th>${t('common.used')}</th><th>${t('common.available')}</th><th>${t('common.usage')}</th></tr></thead>

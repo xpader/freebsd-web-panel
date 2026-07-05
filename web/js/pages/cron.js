@@ -25,8 +25,9 @@ export async function renderCron(app) {
     <div class="toolbar">
       <input type="text" id="cron-filter" class="filter-input" placeholder="${t('cron.filter')}" oninput="window.__fwpCronFilter()" />
       <span id="cron-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpCronAdd()">${t('cron.add')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpCronAdd()"><i class="fa-solid fa-plus"></i> ${t('cron.add')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>

@@ -16,8 +16,9 @@ export async function renderServices(app) {
     <div class="toolbar">
       <input type="text" id="svc-filter" class="filter-input" placeholder="${t('svc.filter')}" oninput="window.__fwpSvcFilter()" />
       <span id="svc-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpSvcReload()">${t('common.refresh')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpSvcReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>

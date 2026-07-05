@@ -15,8 +15,9 @@ export async function renderDns(app) {
     </div>
     <div class="toolbar">
       <span></span>
-      <div></div>
-      <button onclick="window.__fwpDnsApply()">${t('common.apply')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpDnsApply()"><i class="fa-solid fa-check"></i> ${t('common.apply')}</button>
+      </div>
     </div>
     <div id="dns-content">
       <div class="card" style="padding:1rem;"><span class="spinner"></span> ${t('common.loading')}</div>

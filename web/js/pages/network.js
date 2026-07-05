@@ -16,8 +16,9 @@ export async function renderNetwork(app) {
     </div>
     <div class="toolbar">
       <span id="net-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpNetRefresh()">${t('common.refresh')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpNetRefresh()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
 
     <div id="net-interfaces">
@@ -26,7 +27,7 @@ export async function renderNetwork(app) {
 
     <div id="net-gateway-section"></div>
 
-    <h2 style="margin-top:2rem;">${t('net.routes')}</h2>
+    <div class="section-title" style="margin-top:32px;">${t('net.routes')}</div>
     <div id="net-routes-container">
       <div class="card" style="padding:0;">
         <table>
@@ -74,11 +75,11 @@ function renderInterfaces() {
 
   let html = '';
   if (physical.length) {
-    html += `<h3>${t('net.physical')}</h3>`;
+    html += `<div class="section-title">${t('net.physical')}</div>`;
     html += `<div class="card-grid">${physical.map(renderCard).join('')}</div>`;
   }
   if (others.length) {
-    html += `<h3 style="margin-top:${physical.length ? '2rem' : '0'};">${t('net.virtual')}</h3>`;
+    html += `<div class="section-title" style="${physical.length ? 'margin-top:32px;' : ''}">${t('net.virtual')}</div>`;
     html += `<div class="card-grid">${others.map(renderCard).join('')}</div>`;
   }
   container.innerHTML = html;
@@ -137,7 +138,7 @@ function renderGateway() {
   const cfgVal = gw.configured ? `<span class="mono">${esc(gw.configured)}</span>` : `<span class="text-dim">${t('net.notConfigured')}</span>`;
 
   container.innerHTML = `
-    <h2 style="margin-top:2rem;">${t('net.defaultGateway')}</h2>
+    <div class="section-title" style="margin-top:32px;">${t('net.defaultGateway')}</div>
     <div class="card" style="padding:1rem;">
       <div class="kv"><span class="kv-key">${t('net.defaultGateway')}</span><span class="kv-val">${gwVal} ${ifVal}</span></div>
       <div class="kv"><span class="kv-key">${t('net.gatewayConfigured')}</span><span class="kv-val">${cfgVal}</span></div>
