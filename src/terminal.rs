@@ -16,8 +16,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::auth::{hash_token, AuthUser};
-use crate::error::{ApiError, ApiResult};
+use crate::auth::{AuthUser, validate_token};
+use crate::error::ApiResult;
 use crate::AppState;
 
 const DEFAULT_COLS: u16 = 80;
@@ -48,23 +48,7 @@ pub async fn ws_handler(
 }
 
 async fn authenticate(state: &AppState, token: &str) -> ApiResult<AuthUser> {
-    let hash = hash_token(token);
-    let now = state.now_ts();
-    let session = {
-        let conn = state.db.lock().await;
-        crate::db::get_session_by_hash(&conn, &hash, now)?
-    };
-    let session = session.ok_or(ApiError::NotAuthenticated)?;
-    let user = {
-        let conn = state.db.lock().await;
-        crate::db::get_user(&conn, session.user_id)?
-    };
-    let user = user.ok_or(ApiError::NotAuthenticated)?;
-    Ok(AuthUser {
-        user_id: user.id,
-        username: user.username.clone(),
-        role: user.role.clone(),
-    })
+    validate_token(state, token).await
 }
 
 /// Drive one terminal session: spawn the PTY shell, then pump bytes between the

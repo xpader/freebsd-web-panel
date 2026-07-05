@@ -1,4 +1,4 @@
-// pkg package management — list installed packages, view package details.
+// pkg package management — list, search, install, delete, view details.
 
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
@@ -20,12 +20,13 @@ export async function renderPackages(app) {
       <div class="filter-group" id="pkg-filter-group">
         <button class="filter-btn active" data-val="all">${t('common.all')}</button>
         <button class="filter-btn" data-val="manual">${t('pkg.manual')}</button>
-        <button class="filter-btn" data-val="automatic">${t('pkg.automatic')}</button>
       </div>
-      <input type="text" id="pkg-search" class="filter-input" placeholder="${t('pkg.searchPh')}" oninput="window.__fwpPkgSearch()" />
+      <input type="text" id="pkg-search" class="filter-input" placeholder="${t('pkg.filterPh')}" oninput="window.__fwpPkgSearch()" />
       <span id="pkg-count" class="text-dim"></span>
-      <div></div>
-      <button onclick="window.__fwpPkgReload()">${t('common.refresh')}</button>
+      <div class="flex">
+        <button onclick="window.__fwpPkgInstallOpen()"><i class="fa-solid fa-download"></i> ${t('pkg.installBtn')}</button>
+        <button onclick="window.__fwpPkgReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
+      </div>
     </div>
     <div class="card" style="padding:0;">
       <table>
@@ -35,9 +36,10 @@ export async function renderPackages(app) {
           <th>${t('common.description')}</th>
           <th>${t('common.size')}</th>
           <th>${t('common.status')}</th>
+          <th>${t('common.actions')}</th>
         </tr></thead>
         <tbody id="pkg-tbody">
-          <tr><td colspan="5" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
+          <tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>
         </tbody>
       </table>
     </div>
@@ -70,7 +72,7 @@ async function loadPackages() {
   try {
     _allPackages = await api.get(`/api/pkg/packages?filter=${_pkgFilter}`);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('common.loadFailed', { msg: esc(err.message || '') })}</td></tr>`;
     return;
   }
   renderPkgRows(_allPackages, countEl);
@@ -80,18 +82,21 @@ function renderPkgRows(packages, countEl) {
   const tbody = document.getElementById('pkg-tbody');
   if (countEl) countEl.textContent = t('pkg.count', { n: packages.length });
   if (!packages.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty">${t('pkg.noPackages')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${t('pkg.noPackages')}</td></tr>`;
     return;
   }
   tbody.innerHTML = packages.map((p) => `
-    <tr style="cursor:pointer;" onclick="location.hash='#/pkg/${escAttr(p.name)}'">
-      <td class="mono"><strong>${esc(p.name)}</strong></td>
+    <tr>
+      <td class="mono"><strong><a href="#/pkg/${escAttr(p.name)}">${esc(p.name)}</a></strong></td>
       <td class="mono text-dim">${esc(p.version)}</td>
       <td><div class="cell-wrap">${esc(p.comment) || '<span class="text-dim">—</span>'}</div></td>
       <td class="mono">${esc(p.size)}</td>
       <td>${p.automatic
         ? `<span class="badge badge-dim">${t('pkg.automatic')}</span>`
         : `<span class="badge badge-success">${t('pkg.manual')}</span>`}
+      </td>
+      <td>
+        <button class="btn-secondary btn-sm" onclick="window.__fwpPkgDelete('${escAttr(p.name)}')">${t('common.delete')}</button>
       </td>
     </tr>`).join('');
 }
@@ -109,9 +114,269 @@ window.__fwpPkgSearch = () => {
 
 window.__fwpPkgReload = () => {
   const tbody = document.getElementById('pkg-tbody');
-  if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>`;
+  if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="empty"><span class="spinner"></span> ${t('common.loading')}</td></tr>`;
   loadPackages();
 };
+
+// ===== Install: search modal =====
+
+window.__fwpPkgInstallOpen = () => {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:680px;">
+      <h3><i class="fa-solid fa-download"></i> ${t('pkg.installTitle')}</h3>
+      <div class="field" style="margin-bottom:12px;">
+        <div class="flex">
+          <input type="text" id="pkg-remote-search" class="filter-input" style="flex:1;" placeholder="${t('pkg.searchRemotePh')}" />
+          <button onclick="window.__fwpPkgRemoteSearch()"><i class="fa-solid fa-magnifying-glass"></i> ${t('pkg.searchBtn')}</button>
+        </div>
+      </div>
+      <div id="pkg-search-results" style="max-height:360px; overflow-y:auto;">
+        <div class="empty" style="padding:20px;">${t('pkg.searchHint')}</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">${t('common.close')}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const input = document.getElementById('pkg-remote-search');
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      window.__fwpPkgRemoteSearch();
+    }
+  });
+  input.focus();
+};
+
+let _installedNames = new Set();
+
+window.__fwpPkgRemoteSearch = () => {
+  const input = document.getElementById('pkg-remote-search');
+  if (!input) return;
+  const q = input.value.trim();
+  if (!q) return;
+  doRemoteSearch(q);
+};
+
+async function doRemoteSearch(q) {
+  const el = document.getElementById('pkg-search-results');
+  el.innerHTML = `<div class="empty" style="padding:20px;"><span class="spinner"></span> ${t('common.loading')}</div>`;
+  try {
+    const results = await api.get(`/api/pkg/search?q=${encodeURIComponent(q)}`);
+    // Build set of installed names for marking.
+    const installed = await api.get('/api/pkg/packages');
+    _installedNames = new Set(installed.map((p) => p.name));
+
+    if (!results.length) {
+      el.innerHTML = `<div class="empty" style="padding:20px;">${t('pkg.noSearchResults')}</div>`;
+      return;
+    }
+    el.innerHTML = `
+      <table style="width:100%;">
+        <thead><tr><th>${t('common.name')}</th><th>${t('common.description')}</th><th>${t('common.size')}</th><th style="white-space:nowrap;"></th></tr></thead>
+        <tbody>
+          ${results.map((r) => `
+            <tr>
+              <td class="mono"><strong>${esc(r.name)}</strong><br><span class="text-dim" style="font-size:11px;">${esc(r.version)}</span></td>
+              <td><div class="cell-wrap">${esc(r.comment)}</div></td>
+              <td class="mono text-dim">${esc(r.size)}</td>
+              <td style="white-space:nowrap;">${_installedNames.has(r.name)
+                ? `<span class="badge badge-dim">${t('pkg.installedBadge')}</span>`
+                : `<button class="btn-secondary btn-sm" onclick="window.__fwpPkgDoInstall('${escAttr(r.name)}')">${t('pkg.installBtn')}</button>`}
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="empty" style="padding:20px;">${t('common.loadFailed', { msg: esc(e.message || '') })}</div>`;
+  }
+}
+
+window.__fwpPkgDoInstall = async (name) => {
+  await confirmPkgAction('install', [name]);
+};
+
+// ===== Delete =====
+
+window.__fwpPkgDelete = async (name) => {
+  await confirmPkgAction('delete', [name]);
+};
+
+async function confirmPkgAction(action, packages) {
+  const result = await showPreviewConfirm(action, packages);
+  if (!result) return;
+
+  if (action === 'install') {
+    const overlay = document.querySelector('.modal-overlay');
+    if (overlay) overlay.remove();
+  }
+  await startPkgTask(action, packages);
+}
+
+async function showPreviewConfirm(action, packages) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal" style="max-width:560px;">
+        <h3>${esc(action === 'install'
+          ? t('pkg.installConfirm', { name: packages.join(', ') })
+          : t('pkg.deleteConfirm', { name: packages.join(', ') }))}</h3>
+        <div id="pkg-preview-body" style="min-height:60px;">
+          <div class="empty" style="padding:20px;"><span class="spinner"></span> ${t('common.loading')}</div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
+          <button class="btn-danger" data-act="ok" disabled>${esc(action === 'install' ? t('pkg.installBtn') : t('common.delete'))}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const okBtn = overlay.querySelector('[data-act="ok"]');
+    const cancelBtn = overlay.querySelector('[data-act="cancel"]');
+    cancelBtn.addEventListener('click', () => { overlay.remove(); resolve(false); });
+    okBtn.addEventListener('click', () => { overlay.remove(); resolve(true); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+
+    const bodyEl = overlay.querySelector('#pkg-preview-body');
+
+    api.post('/api/pkg/preview', { action, packages })
+      .then((preview) => {
+        const affected = action === 'install' ? preview.install : preview.delete;
+        const deps = affected.filter((n) => !packages.includes(n));
+        const targetStr = esc(packages.join(', '));
+
+        let html = '';
+
+        if (deps.length) {
+          html += `<p class="text-dim">${esc(action === 'install'
+            ? t('pkg.willInstallDeps', { n: deps.length })
+            : t('pkg.willDeleteDeps', { n: deps.length }))}</p>`;
+          html += `<div style="max-height:160px; overflow-y:auto; margin-top:8px;">`;
+          html += deps.map((n) => `<div class="mono text-dim" style="padding:2px 0; font-size:12px;">${esc(n)}</div>`).join('');
+          html += `</div>`;
+        } else if (action === 'install' && affected.length === 0) {
+          html += `<p class="text-dim">${esc(t('pkg.alreadyInstalled'))}</p>`;
+        } else {
+          html += `<p class="text-dim">${esc(action === 'install'
+            ? t('pkg.noDepsToInstall')
+            : t('pkg.noDepsToDelete'))}</p>`;
+        }
+
+        bodyEl.innerHTML = html;
+        okBtn.disabled = false;
+      })
+      .catch((e) => {
+        bodyEl.innerHTML = `<p>${esc(e.message || t('common.operationFailed'))}</p>`;
+        okBtn.disabled = false;
+        okBtn.textContent = t('common.close');
+      });
+  });
+}
+
+// ===== Task output modal (shared by install & delete) =====
+
+async function startPkgTask(action, packages) {
+  const endpoint = action === 'install' ? '/api/pkg/install' : '/api/pkg/delete';
+  const body = action === 'delete' ? { packages } : { packages };
+
+  let taskId;
+  try {
+    const res = await api.post(endpoint, body);
+    taskId = res.task_id;
+  } catch (e) {
+    toast(e.message || t('common.operationFailed'), 'error');
+    return;
+  }
+
+  showTaskModal(action, packages, taskId);
+}
+
+function showTaskModal(action, packages, taskId) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:680px;">
+      <h3 id="pkg-task-title">
+        <span id="pkg-task-icon" class="spinner"></span>
+        ${esc(action === 'install' ? t('pkg.installing') : t('pkg.deleting'))} ${esc(packages.join(', '))}
+      </h3>
+      <div id="pkg-task-output" style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all;"></div>
+      <div class="modal-actions">
+        <button id="pkg-task-close" class="btn-secondary" disabled>${t('common.close')}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const outputEl = document.getElementById('pkg-task-output');
+  const closeBtn = document.getElementById('pkg-task-close');
+  const titleEl = document.getElementById('pkg-task-title');
+  closeBtn.addEventListener('click', () => overlay.remove());
+
+  streamTask(taskId, outputEl, closeBtn, titleEl, action, packages, overlay);
+}
+
+function streamTask(taskId, outputEl, closeBtn, titleEl, action, packages, overlay) {
+  const token = sessionStorage.getItem('fwp_token');
+  const url = `/api/pkg/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
+  const es = new EventSource(url);
+
+  const finish = (success, pkgNames) => {
+    es.close();
+    closeBtn.disabled = false;
+    const nameStr = pkgNames || packages.join(', ');
+    const doneLabel = success
+      ? t(action === 'install' ? 'pkg.installDone' : 'pkg.deleteDone', { name: nameStr })
+      : t(action === 'install' ? 'pkg.installFailed' : 'pkg.deleteFailed', { name: nameStr });
+    const color = success ? 'var(--success)' : 'var(--danger)';
+    titleEl.innerHTML = `<span style="color:${color}; font-weight:700;">${esc(doneLabel)}</span>`;
+    if (success) {
+      outputEl.textContent += `\n[${t('common.done')}]\n`;
+    }
+    toast(doneLabel, success ? 'success' : 'error');
+    if (document.getElementById('pkg-tbody')) loadPackages();
+  };
+
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.lines && data.lines.length) {
+        const atBottom = outputEl.scrollTop + outputEl.clientHeight >= outputEl.scrollHeight - 2;
+        outputEl.textContent += data.lines.join('\n') + '\n';
+        if (atBottom) outputEl.scrollTop = outputEl.scrollHeight;
+      }
+      if (data.status && data.status !== 'running') {
+        const pkgNames = Array.isArray(data.packages) ? data.packages.join(', ') : (data.packages || '');
+        finish(data.status === 'done', pkgNames);
+      }
+    } catch {}
+  };
+
+  es.addEventListener('done', () => {
+    es.close();
+    closeBtn.disabled = false;
+  });
+
+  es.onerror = () => {
+    es.close();
+    api.get(`/api/pkg/tasks/${encodeURIComponent(taskId)}`).then((task) => {
+      if (task.status !== 'running') {
+        finish(task.status === 'done', task.packages.join(', '));
+      } else {
+        closeBtn.disabled = false;
+      }
+    }).catch(() => {
+      closeBtn.disabled = false;
+    });
+  };
+}
 
 // ===== Package detail page =====
 
@@ -205,11 +470,6 @@ function renderInfoTab(info) {
       </div>
       ${esc(info.comment) ? `<p style="margin-bottom:16px; font-size:15px; color:var(--text-dim);">${esc(info.comment)}</p>` : ''}
       ${esc(info.description) ? `<div style="margin-bottom:16px;"><div class="card-title">${t('common.description')}</div><p style="white-space:pre-wrap;">${esc(info.description)}</p></div>` : ''}
-      ${info.messages && info.messages.length ? `
-      <div class="card" style="border-color:var(--warn); margin-bottom:16px;">
-        <div class="card-title" style="color:var(--warn);">${t('pkg.messages')}</div>
-        ${info.messages.map((m) => `<pre style="white-space:pre-wrap; font-family:inherit; margin:0;">${esc(m)}</pre>`).join('<hr style="border-color:var(--border); margin:8px 0;">')}
-      </div>` : ''}
       <table class="kv-table">
         <tr><td>${t('pkg.origin')}</td><td class="mono">${esc(info.origin)}</td></tr>
         <tr><td>${t('pkg.version')}</td><td class="mono">${esc(info.version)}</td></tr>
@@ -224,6 +484,11 @@ function renderInfoTab(info) {
         <tr><td>${t('pkg.categories')}</td><td>${cats}</td></tr>
         <tr><td>${t('pkg.licenses')}</td><td>${licenses}</td></tr>
       </table>
+      ${info.messages && info.messages.length ? `
+      <div class="card" style="border-color:var(--warn); margin-top:16px;">
+        <div class="card-title" style="color:var(--warn);">${t('pkg.messages')}</div>
+        ${info.messages.map((m) => `<pre style="white-space:pre-wrap; font-family:inherit; margin:0;">${esc(m)}</pre>`).join('<hr style="border-color:var(--border); margin:8px 0;">')}
+      </div>` : ''}
     </div>
   `;
 }

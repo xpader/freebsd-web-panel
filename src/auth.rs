@@ -76,6 +76,29 @@ impl axum::extract::FromRequestParts<AppState> for AuthUser {
             .ok_or(ApiError::NotAuthenticated)
     }
 }
+/// Validate a raw session token (e.g. from a query param for WS/SSE endpoints
+/// that cannot set Authorization headers). Returns the authenticated user on
+/// success.
+pub async fn validate_token(state: &AppState, token: &str) -> ApiResult<AuthUser> {
+    let hash = hash_token(token);
+    let now = state.now_ts();
+    let session = {
+        let conn = state.db.lock().await;
+        crate::db::get_session_by_hash(&conn, &hash, now)?
+    };
+    let session = session.ok_or(ApiError::NotAuthenticated)?;
+    let user = {
+        let conn = state.db.lock().await;
+        crate::db::get_user(&conn, session.user_id)?
+    };
+    let user = user.ok_or(ApiError::NotAuthenticated)?;
+    Ok(AuthUser {
+        user_id: user.id,
+        username: user.username.clone(),
+        role: user.role.clone(),
+    })
+}
+
 /// Require authentication on all routes layered under it.
 pub async fn require_auth(
     State(state): State<AppState>,

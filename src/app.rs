@@ -22,7 +22,10 @@ pub fn build(state: AppState) -> Router {
         .route("/api/users/bootstrap", get(handlers::users::bootstrap_status))
         .route("/api/users/bootstrap", post(handlers::users::bootstrap))
         .route("/api/auth/login", post(handlers::auth::login))
-        .route("/api/term/ws", get(crate::terminal::ws_handler));
+        .route("/api/term/ws", get(crate::terminal::ws_handler))
+        // SSE stream for pkg tasks — EventSource cannot set Authorization
+        // headers, so token is validated via query param inside the handler.
+        .route("/api/pkg/tasks/{id}/stream", get(handlers::pkg::task_stream));
 
     // Authenticated routes.
     let api = Router::new()
@@ -96,6 +99,11 @@ pub fn build(state: AppState) -> Router {
         .route("/api/monitor/latest", get(crate::monitor::latest))
         // --- pkg (package management) ---
         .route("/api/pkg/packages", get(handlers::pkg::list_packages))
+        .route("/api/pkg/search", get(handlers::pkg::search))
+        .route("/api/pkg/preview", post(handlers::pkg::preview))
+        .route("/api/pkg/install", post(handlers::pkg::install))
+        .route("/api/pkg/delete", post(handlers::pkg::delete))
+        .route("/api/pkg/tasks/{id}", get(handlers::pkg::task_status))
         .route("/api/pkg/packages/{name}", get(handlers::pkg::package_detail))
         .route("/api/pkg/packages/{name}/files", get(handlers::pkg::package_files))
         .layer(from_fn_with_state(state.clone(), require_auth));

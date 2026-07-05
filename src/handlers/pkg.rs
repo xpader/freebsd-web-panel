@@ -1,5 +1,4 @@
-//! pkg package management — list installed packages, view details (description,
-//! dependencies, reverse dependencies, file list).
+//! pkg package management — list, search, install, delete, and view details.
 //!
 //! ## Strategy
 //!
@@ -10,22 +9,40 @@
 //!   raw manifest (automatic/locked/vital/repository), and
 //!   `pkg query '%rn\t%rv'` for reverse dependencies.
 //! - **Files**: `pkg query '%Fp\t%Fu\t%Fg\t%Fm'` (lazy-loaded).
+//! - **Search**: `pkg rquery -g '%n\t%v\t%o\t%c\t%sh' '*pattern*'` (remote repo).
+//! - **Install/Delete**: background `tokio::spawn` running `pkg install -y` /
+//!   `pkg delete -y`, with stdout/stderr captured line-by-line into a shared
+//!   task store polled by the frontend.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Path as AxumPath, Query};
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response};
 use axum::Json;
+use futures_util::stream::{self, StreamExt};
+use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::audit;
+use crate::auth::{validate_token, AuthUser};
 use crate::error::{ApiError, ApiResult};
+use crate::AppState;
 
 const PKG: &str = "/usr/sbin/pkg";
 
 static RE_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_+.{}@-]+$").unwrap());
+
+static RE_SEARCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_+.{}@*?-]+$").unwrap());
 
 // ---- Public data models ----
 
@@ -82,6 +99,15 @@ pub struct PackageFile {
     pub mode: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SearchResult {
+    pub name: String,
+    pub version: String,
+    pub origin: String,
+    pub comment: String,
+    pub size: String,
+}
+
 // ---- Internal: raw manifest deserialized from `pkg info -R` JSON ----
 
 #[derive(Debug, Deserialize)]
@@ -125,11 +151,109 @@ struct RawMessage {
     r#type: String,
 }
 
+// ---- Background task infrastructure ----
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Running,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PkgTask {
+    pub id: String,
+    pub action: String,
+    pub packages: Vec<String>,
+    pub status: TaskStatus,
+    pub exit_code: Option<i32>,
+    pub lines: Vec<String>,
+    pub created_at: i64,
+}
+
+static TASKS: LazyLock<Mutex<HashMap<String, PkgTask>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const MAX_SEARCH_RESULTS: usize = 100;
+const TASK_TTL_SECS: i64 = 600;
+
+fn now_ts() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn gen_id() -> String {
+    use std::fmt::Write;
+    let ts = now_ts();
+    let pid = std::process::id();
+    let mut buf = [0u8; 8];
+    // Simple entropy from SystemTime nanos.
+    if let Ok(nanos) = SystemTime::now().duration_since(UNIX_EPOCH) {
+        let n = nanos.subsec_nanos() as u64;
+        buf.copy_from_slice(&n.to_le_bytes());
+    }
+    let mut s = String::new();
+    let _ = write!(&mut s, "{ts:x}{pid:x}");
+    for b in &buf {
+        let _ = write!(&mut s, "{b:02x}");
+    }
+    s
+}
+
+fn push_line(task_id: &str, line: &str) {
+    let mut tasks = TASKS.lock();
+    if let Some(task) = tasks.get_mut(task_id) {
+        task.lines.push(line.to_string());
+    }
+}
+
+fn set_status(task_id: &str, status: TaskStatus, exit_code: Option<i32>) {
+    let mut tasks = TASKS.lock();
+    if let Some(task) = tasks.get_mut(task_id) {
+        task.status = status;
+        task.exit_code = exit_code;
+    }
+}
+
+/// Remove tasks older than TASK_TTL_SECS.
+fn gc_tasks() {
+    let cutoff = now_ts() - TASK_TTL_SECS;
+    let mut tasks = TASKS.lock();
+    tasks.retain(|_, t| t.created_at > cutoff);
+}
+
 // ---- Query params ----
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstallRequest {
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteRequest {
+    pub packages: Vec<String>,
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PreviewRequest {
+    /// "install" or "delete".
+    pub action: String,
+    pub packages: Vec<String>,
 }
 
 // ---- Helpers ----
@@ -157,6 +281,27 @@ fn validate_name(name: &str) -> ApiResult<()> {
     Ok(())
 }
 
+fn validate_names(names: &[String]) -> ApiResult<()> {
+    if names.is_empty() {
+        return Err(ApiError::BadRequest("no packages specified".into()));
+    }
+    for n in names {
+        validate_name(n)?;
+    }
+    Ok(())
+}
+
+fn validate_search(pattern: &str) -> ApiResult<()> {
+    if pattern.is_empty() || pattern.len() > 256 {
+        return Err(ApiError::BadRequest("invalid search pattern".into()));
+    }
+    // Allow glob metacharacters for rquery.
+    if !RE_SEARCH.is_match(pattern) {
+        return Err(ApiError::BadRequest("invalid search pattern".into()));
+    }
+    Ok(())
+}
+
 fn parse_tsv(line: &str, expected: usize) -> ApiResult<Vec<&str>> {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() != expected {
@@ -168,7 +313,6 @@ fn parse_tsv(line: &str, expected: usize) -> ApiResult<Vec<&str>> {
     Ok(fields)
 }
 
-/// Parse `%rn\t%rv` TSV output into DepInfo list.
 fn parse_dep_list(output: &str) -> Vec<DepInfo> {
     output
         .lines()
@@ -187,7 +331,7 @@ fn parse_dep_list(output: &str) -> Vec<DepInfo> {
         .collect()
 }
 
-// ---- Handlers ----
+// ---- Handlers: read-only ----
 
 /// `GET /api/pkg/packages?filter=all|manual|automatic`
 pub async fn list_packages(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<PackageSummary>>> {
@@ -304,4 +448,328 @@ pub async fn package_files(AxumPath(name): AxumPath<String>) -> ApiResult<Json<V
         });
     }
     Ok(Json(files))
+}
+
+/// `GET /api/pkg/search?q=pattern`
+pub async fn search(Query(q): Query<SearchQuery>) -> ApiResult<Json<Vec<SearchResult>>> {
+    let pattern = q.q.trim();
+    validate_search(pattern)?;
+
+    // Use glob matching with wildcards on both sides for substring search.
+    let glob = format!("*{pattern}*");
+    let fmt = "%n\t%v\t%o\t%c\t%sh";
+    let output = run(&["rquery", "-g", fmt, &glob])?;
+
+    let mut results = Vec::new();
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let f = parse_tsv(line, 5)?;
+        results.push(SearchResult {
+            name: f[0].to_string(),
+            version: f[1].to_string(),
+            origin: f[2].to_string(),
+            comment: f[3].to_string(),
+            size: f[4].to_string(),
+        });
+        if results.len() >= MAX_SEARCH_RESULTS {
+            break;
+        }
+    }
+    Ok(Json(results))
+}
+
+// ---- Handlers: preview (dry-run) ----
+
+#[derive(Debug, Serialize)]
+pub struct PreviewResult {
+    pub install: Vec<String>,
+    pub delete: Vec<String>,
+}
+
+/// `POST /api/pkg/preview`
+/// Runs `pkg install -n` or `pkg delete -nR` in dry-run mode to determine
+/// which packages will be affected. Returns the package names to be installed
+/// or removed.
+pub async fn preview(Json(req): Json<PreviewRequest>) -> ApiResult<Json<PreviewResult>> {
+    validate_names(&req.packages)?;
+
+    let mut args = vec!["-n".to_string()];
+    if req.action == "delete" {
+        args.push("-R".to_string());
+    }
+    for p in &req.packages {
+        args.push(p.clone());
+    }
+
+    let output = Command::new(PKG)
+        .arg(&req.action)
+        .args(&args)
+        .output()?;
+
+    // dry-run may exit non-zero (e.g. "already installed"); parse stdout/stderr
+    // regardless.
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut install = Vec::new();
+    let mut delete = Vec::new();
+    let mut section: Option<&str> = None;
+
+    for line in combined.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("New packages to be INSTALLED") {
+            section = Some("install");
+            continue;
+        }
+        if trimmed.contains("Installed packages to be REMOVED") {
+            section = Some("delete");
+            continue;
+        }
+        if trimmed.starts_with("Number of packages") || trimmed.is_empty() {
+            section = None;
+            continue;
+        }
+        if let Some(s) = section {
+            // Lines like: "\tvim: 9.2.0277 [FreeBSD-ports]"
+            if let Some(name) = trimmed.split(':').next() {
+                let name = name.trim();
+                if !name.is_empty() && !name.starts_with("Number") {
+                    if s == "install" {
+                        install.push(name.to_string());
+                    } else {
+                        delete.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(PreviewResult { install, delete }))
+}
+
+// ---- Handlers: install / delete ----
+
+/// `POST /api/pkg/install`
+pub async fn install(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<InstallRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_names(&req.packages)?;
+
+    gc_tasks();
+
+    let id = gen_id();
+    let task = PkgTask {
+        id: id.clone(),
+        action: "install".to_string(),
+        packages: req.packages.clone(),
+        status: TaskStatus::Running,
+        exit_code: None,
+        lines: Vec::new(),
+        created_at: now_ts(),
+    };
+    TASKS.lock().insert(id.clone(), task);
+
+    let pkgs = req.packages.clone();
+    let tid = id.clone();
+    let username = user.username.clone();
+    tokio::spawn(async move {
+        run_pkg_background(&tid, "install", &pkgs, false).await;
+        let (status, _exit_code) = {
+            let tasks = TASKS.lock();
+            let t = tasks.get(&tid);
+            (t.map(|t| t.status.clone()), t.and_then(|t| t.exit_code))
+        };
+        let ok = status == Some(TaskStatus::Done);
+        audit::record(
+            &state,
+            Some(&username),
+            "POST",
+            "/api/pkg/install",
+            if ok { 200 } else { 500 },
+            Some(format!(
+                "pkg install {}: {}",
+                pkgs.join(", "),
+                if ok { "ok" } else { "failed" }
+            )),
+        );
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": id })))
+}
+
+/// `POST /api/pkg/delete`
+pub async fn delete(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<DeleteRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_names(&req.packages)?;
+
+    gc_tasks();
+
+    let id = gen_id();
+    let task = PkgTask {
+        id: id.clone(),
+        action: "delete".to_string(),
+        packages: req.packages.clone(),
+        status: TaskStatus::Running,
+        exit_code: None,
+        lines: Vec::new(),
+        created_at: now_ts(),
+    };
+    TASKS.lock().insert(id.clone(), task);
+
+    let pkgs = req.packages.clone();
+    let recursive = req.recursive;
+    let tid = id.clone();
+    let username = user.username.clone();
+    tokio::spawn(async move {
+        run_pkg_background(&tid, "delete", &pkgs, recursive).await;
+        let (status, _exit_code) = {
+            let tasks = TASKS.lock();
+            let t = tasks.get(&tid);
+            (t.map(|t| t.status.clone()), t.and_then(|t| t.exit_code))
+        };
+        let ok = status == Some(TaskStatus::Done);
+        audit::record(
+            &state,
+            Some(&username),
+            "POST",
+            "/api/pkg/delete",
+            if ok { 200 } else { 500 },
+            Some(format!(
+                "pkg delete {}: {}",
+                pkgs.join(", "),
+                if ok { "ok" } else { "failed" }
+            )),
+        );
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": id })))
+}
+
+/// `GET /api/pkg/tasks/{id}`
+pub async fn task_status(AxumPath(id): AxumPath<String>) -> ApiResult<Json<PkgTask>> {
+    let tasks = TASKS.lock();
+    let task = tasks
+        .get(&id)
+        .ok_or_else(|| ApiError::NotFound("task not found".into()))?;
+    Ok(Json(task.clone()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StreamParams {
+    token: String,
+}
+
+/// `GET /api/pkg/tasks/{id}/stream` — SSE stream of task output.
+/// Public route (token validated via query param, like WebSocket terminal).
+pub async fn task_stream(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(params): Query<StreamParams>,
+) -> Response {
+    if validate_token(&state, &params.token).await.is_err() {
+        return ApiError::NotAuthenticated.into_response();
+    }
+
+    let stream = stream::unfold(0usize, move |last_len| {
+        let id = id.clone();
+        async move {
+            let task = {
+                let tasks = TASKS.lock();
+                tasks.get(&id).cloned()
+            };
+            let task = match task {
+                None => return None,
+                Some(t) => t,
+            };
+
+            let new_lines = &task.lines[last_len..];
+            let new_len = task.lines.len();
+            let is_done = task.status != TaskStatus::Running;
+
+            let data = serde_json::json!({
+                "status": task.status,
+                "lines": new_lines,
+                "exit_code": task.exit_code,
+                "packages": task.packages,
+            });
+            let event = Event::default().data(data.to_string());
+
+            if is_done {
+                Some((event, new_len))
+            } else {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                Some((event, new_len))
+            }
+        }
+    })
+    .chain(stream::once(async {
+        // Signal completion so the browser EventSource gets a clean close.
+        Event::default().event("done").data("[\"done\"]")
+    }))
+    .map(Ok::<_, Infallible>);
+
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// Run `pkg install -y` or `pkg delete -y` in the background, streaming
+/// stdout/stderr line by line into the shared task store.
+async fn run_pkg_background(task_id: &str, action: &str, packages: &[String], recursive: bool) {
+    let mut cmd = tokio::process::Command::new(PKG);
+    cmd.arg(action).arg("-y");
+    if action == "delete" && recursive {
+        cmd.arg("-R");
+    }
+    for p in packages {
+        cmd.arg(p);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            push_line(task_id, &format!("Failed to spawn pkg: {e}"));
+            set_status(task_id, TaskStatus::Failed, Some(-1));
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let tid_out = task_id.to_string();
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            push_line(&tid_out, &line);
+        }
+    });
+
+    let tid_err = task_id.to_string();
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            push_line(&tid_err, &line);
+        }
+    });
+
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    let exit_code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
+    let status = if exit_code == 0 {
+        TaskStatus::Done
+    } else {
+        TaskStatus::Failed
+    };
+    set_status(task_id, status, Some(exit_code));
 }
