@@ -158,7 +158,7 @@ function actionButtons(name, state) {
 
 window.__fwpJailAction = async (name, action) => {
   _pendingActions.add(`${name}:${action}`);
-  loadJails();
+  await loadJails();
 
   try {
     await api.post(`/api/jails/${encodeURIComponent(name)}/${action}`);
@@ -546,7 +546,7 @@ export async function renderJailBases(app) {
     <div class="toolbar">
       <span id="bases-count" class="text-dim"></span>
       <div class="flex">
-        <button onclick="window.__fwpBaseImport()"><i class="fa-solid fa-download"></i> ${t('jails.importBase')}</button>
+        <button onclick="window.__fwpBaseCreate()"><i class="fa-solid fa-plus"></i> ${t('jails.createBase')}</button>
         <button onclick="window.__fwpBasesReload()"><i class="fa-solid fa-rotate-right"></i> ${t('common.refresh')}</button>
       </div>
     </div>
@@ -586,7 +586,6 @@ async function loadBases() {
         <td class="mono text-dim">${b.snapshots && b.snapshots.length ? b.snapshots.length : '—'}</td>
         <td>
           <div class="btn-group">
-            <button class="btn-secondary btn-sm" onclick="window.__fwpBaseImage('${escAttr(b.name)}')">${t('jails.createImage')}</button>
             ${b.type === 'zfs' ? `<button class="btn-secondary btn-sm" onclick="window.__fwpBaseEdit('${escAttr(b.name)}')">${t('common.edit')}</button>` : ''}
             <button class="btn-secondary btn-sm" onclick="window.__fwpBaseDelete('${escAttr(b.name)}')">${t('common.delete')}</button>
           </div>
@@ -604,10 +603,10 @@ window.__fwpBasesReload = () => {
   loadBases();
 };
 
-window.__fwpBaseImport = async () => {
-  await importBaseModal(async (result) => {
+window.__fwpBaseCreate = async () => {
+  await createBaseModal(async (result) => {
     await api.post('/api/jails/bases', result);
-    toast(t('jails.baseImported'));
+    toast(t('jails.baseCreated'));
     await loadBases();
   });
 };
@@ -702,23 +701,6 @@ function editSnapshotsModal(base, onSubmit) {
   });
 }
 
-window.__fwpBaseImage = async (name) => {
-  let base = null;
-  try {
-    const bases = await api.get('/api/jails/bases');
-    base = bases.find((b) => b.name === name);
-  } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
-    return;
-  }
-  if (!base) return;
-
-  await createImageModal(base, async (result) => {
-    await api.post(`/api/jails/bases/${encodeURIComponent(name)}/image`, result);
-    toast(t('jails.imageCreated'));
-  });
-};
-
 function renderTypeDesc(container, type) {
   if (!type) { container.innerHTML = ''; return; }
   const desc = type === 'zfs' ? t('jails.zfsTypeDesc') : t('jails.sharedfsTypeDesc');
@@ -738,69 +720,153 @@ function renderTypeDesc(container, type) {
     </div>`;
 }
 
-/// Import base system modal — type selector with dynamic fields.
-function importBaseModal(onSubmit) {
+/// Create base system modal — three creation methods with dynamic fields.
+function createBaseModal(onSubmit) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
 
     overlay.innerHTML = `
-      <div class="modal" style="max-width:560px;">
-        <h3>${t('jails.importBase')}</h3>
-        <form id="import-form">
+      <div class="modal" style="max-width:600px;">
+        <h3>${t('jails.createBase')}</h3>
+        <form id="create-base-form">
           <div class="field">
             <label>${t('common.name')} <span style="color:var(--danger)">*</span></label>
-            <input type="text" name="name" required placeholder="freebsd-15.1" />
+            <input type="text" name="name" id="cb-name" required placeholder="freebsd-15.1" />
           </div>
           <div class="field">
+            <label>${t('jails.creationMethod')} <span style="color:var(--danger)">*</span></label>
+            <select name="method" id="cb-method" required>
+              <option value="">${t('common.pleaseSelect')}</option>
+              <option value="import">${t('jails.methodImport')}</option>
+              <option value="from-txz">${t('jails.methodFromTxz')}</option>
+              <option value="download">${t('jails.methodDownload')}</option>
+            </select>
+            <div id="cb-method-desc"></div>
+          </div>
+
+          <!-- from-txz: base.txz path -->
+          <div id="cb-txz-path-field" style="display:none;">
+            <div class="field">
+              <label>${t('jails.baseTxzFile')} <span style="color:var(--danger)">*</span></label>
+              <input type="text" name="txz_path" id="cb-txz-path" placeholder="/path/to/base.txz" />
+            </div>
+          </div>
+
+          <!-- download: mirror + version (quick-fill) → download URL -->
+          <div id="cb-download-fields" style="display:none;">
+            <div style="display:flex;gap:12px;">
+              <div class="field" style="flex:1;">
+                <label>${t('jails.mirror')}</label>
+                <select name="mirror" id="cb-mirror"></select>
+              </div>
+              <div class="field" style="flex:1;">
+                <label>${t('jails.version')}</label>
+                <input type="text" name="version" id="cb-version" list="cb-version-list" placeholder="" />
+                <datalist id="cb-version-list">
+                  <option value="15.0-CURRENT">
+                  <option value="14.2-RELEASE">
+                  <option value="14.1-RELEASE">
+                  <option value="13.4-RELEASE">
+                  <option value="13.3-RELEASE">
+                </datalist>
+              </div>
+            </div>
+            <div class="field">
+              <label>${t('jails.downloadUrl')} <span style="color:var(--danger)">*</span></label>
+              <input type="text" name="download_url" id="cb-download-url" placeholder="${t('jails.downloadUrlPh')}" />
+            </div>
+          </div>
+
+          <div class="field">
             <label>${t('common.type')} <span style="color:var(--danger)">*</span></label>
-            <select name="type" id="import-type" required>
+            <select name="type" id="cb-type" required>
               <option value="">${t('common.pleaseSelect')}</option>
               <option value="zfs">ZFS ${t('jails.dataset')}</option>
               <option value="sharedfs">SharedFS</option>
             </select>
-            <div id="import-type-desc"></div>
+            <div id="cb-type-desc"></div>
           </div>
-          <div id="zfs-import-fields" style="display:none;">
+
+          <!-- import + ZFS fields -->
+          <div id="cb-import-zfs" style="display:none;">
             <div class="field">
               <label>${t('jails.zfsDataset')} <span style="color:var(--danger)">*</span></label>
-              <select name="zfs_dataset" id="import-zfs-dataset">
+              <select name="import_dataset" id="cb-import-dataset">
                 <option value="">${t('common.pleaseSelect')}</option>
               </select>
             </div>
-            <div class="field" id="zfs-snap-field" style="display:none;">
+            <div class="field" id="cb-import-snap-field" style="display:none;">
               <label>${t('jails.selectSnapshots')} <span style="color:var(--danger)">*</span></label>
-              <div id="zfs-snap-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;"></div>
+              <div id="cb-import-snap-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;"></div>
             </div>
           </div>
-          <div id="sharedfs-import-fields" style="display:none;">
+
+          <!-- import + SharedFS fields -->
+          <div id="cb-import-sfs" style="display:none;">
             <div class="field">
               <label>${t('jails.sharedfsDir')} <span style="color:var(--danger)">*</span></label>
-              <input type="text" name="sharedfs_path" placeholder="/usr/jails/sharedfs" />
+              <input type="text" name="import_sharedfs" placeholder="/usr/jails/sharedfs" />
             </div>
             <div class="field">
               <label>${t('jails.templateDir')} <span style="color:var(--danger)">*</span></label>
-              <input type="text" name="template_path" placeholder="/usr/jails/template" />
+              <input type="text" name="import_template" placeholder="/usr/jails/template" />
             </div>
           </div>
+
+          <!-- from-txz / download + ZFS fields -->
+          <div id="cb-txz-zfs" style="display:none;">
+            <div class="field">
+              <label>${t('jails.newDataset')} <span style="color:var(--danger)">*</span></label>
+              <input type="text" name="dataset" id="cb-dataset" placeholder="zroot/jails/bases/freebsd-15.1" />
+            </div>
+            <div class="field">
+              <label>${t('jails.snapshotName')}</label>
+              <input type="text" name="snapshot_name" placeholder="${t('jails.snapshotNamePh')}" />
+            </div>
+          </div>
+
+          <!-- from-txz / download + SharedFS fields -->
+          <div id="cb-txz-sfs" style="display:none;">
+            <div class="field">
+              <label>${t('jails.newSharedfsDir')} <span style="color:var(--danger)">*</span></label>
+              <input type="text" name="new_sharedfs" placeholder="/usr/jails/sharedfs/freebsd-15.1" />
+            </div>
+            <div class="field">
+              <label>${t('jails.newTemplateDir')} <span style="color:var(--danger)">*</span></label>
+              <input type="text" name="new_template" placeholder="/usr/jails/template/freebsd-15.1" />
+            </div>
+          </div>
+
           <div class="modal-actions">
             <button type="button" class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
-            <button type="submit">${t('common.confirm')}</button>
+            <button type="submit" id="cb-submit">${t('common.confirm')}</button>
           </div>
         </form>
       </div>`;
 
     document.body.appendChild(overlay);
 
-    const typeSel = overlay.querySelector('#import-type');
-    const typeDesc = overlay.querySelector('#import-type-desc');
-    const zfsFields = overlay.querySelector('#zfs-import-fields');
-    const sfsFields = overlay.querySelector('#sharedfs-import-fields');
-    const datasetSel = overlay.querySelector('#import-zfs-dataset');
-    const snapField = overlay.querySelector('#zfs-snap-field');
-    const snapList = overlay.querySelector('#zfs-snap-list');
+    const methodSel = overlay.querySelector('#cb-method');
+    const methodDesc = overlay.querySelector('#cb-method-desc');
+    const typeSel = overlay.querySelector('#cb-type');
+    const typeDesc = overlay.querySelector('#cb-type-desc');
+    const importZfs = overlay.querySelector('#cb-import-zfs');
+    const importSfs = overlay.querySelector('#cb-import-sfs');
+    const txzPathField = overlay.querySelector('#cb-txz-path-field');
+    const downloadFields = overlay.querySelector('#cb-download-fields');
+    const txzZfs = overlay.querySelector('#cb-txz-zfs');
+    const txzSfs = overlay.querySelector('#cb-txz-sfs');
+    const datasetSel = overlay.querySelector('#cb-import-dataset');
+    const snapField = overlay.querySelector('#cb-import-snap-field');
+    const snapList = overlay.querySelector('#cb-import-snap-list');
+    const nameInput = overlay.querySelector('#cb-name');
+    const datasetInput = overlay.querySelector('#cb-dataset');
+    const newSfsInput = overlay.querySelector('input[name="new_sharedfs"]');
+    const newTplInput = overlay.querySelector('input[name="new_template"]');
+    const submitBtn = overlay.querySelector('#cb-submit');
 
-    // Load ZFS datasets for the dropdown.
+    // Load ZFS datasets for the import dropdown.
     let _datasets = [];
     api.get('/api/zfs/datasets').then((tree) => {
       _datasets = flattenDatasets(tree);
@@ -808,16 +874,105 @@ function importBaseModal(onSubmit) {
         _datasets.map((d) => `<option value="${escAttr(d)}">${esc(d)}</option>`).join('');
     }).catch(() => {});
 
-    // Type toggle.
-    typeSel.addEventListener('change', () => {
-      const isZfs = typeSel.value === 'zfs';
-      const isSfs = typeSel.value === 'sharedfs';
-      zfsFields.style.display = isZfs ? '' : 'none';
-      sfsFields.style.display = isSfs ? '' : 'none';
-      renderTypeDesc(typeDesc, typeSel.value);
+    // Load mirrors for the download dropdown.
+    const mirrorSel = overlay.querySelector('#cb-mirror');
+    const versionInput = overlay.querySelector('#cb-version');
+    const downloadUrlInput = overlay.querySelector('#cb-download-url');
+    const _systemArch = navigator.userAgent.includes('aarch64') ? 'arm64' : 'amd64';
+
+    // Load mirrors for the quick-fill dropdown.
+    api.get('/api/jails/bases/mirrors').then((mirrors) => {
+      mirrorSel.innerHTML = mirrors.map((m) =>
+        `<option value="${escAttr(m.url)}">${esc(m.name)}</option>`
+      ).join('');
+    }).catch(() => {
+      mirrorSel.innerHTML = '<option value="https://download.freebsd.org">Official</option>';
     });
 
-    // Dataset change → load snapshots.
+    // Pre-fill version with current system version (kern.osrelease).
+    api.get('/api/system/info').then((info) => {
+      const osRel = info.os_release || '';
+      if (osRel) {
+        versionInput.value = osRel;
+        versionInput.placeholder = osRel;
+      }
+      updateDownloadUrl();
+    }).catch(() => {});
+
+    // Auto-compute download URL from mirror + version.
+    function updateDownloadUrl() {
+      const mirror = mirrorSel.value;
+      const version = versionInput.value.trim();
+      if (!mirror || !version) return;
+      const branch = version.includes('RELEASE') ? 'releases' : 'snapshots';
+      downloadUrlInput.value = `${mirror}/${branch}/${_systemArch}/${version}/base.txz`;
+    }
+
+    mirrorSel.addEventListener('change', updateDownloadUrl);
+    versionInput.addEventListener('input', updateDownloadUrl);
+
+    function renderMethodDesc(method) {
+      if (!method) { methodDesc.innerHTML = ''; return; }
+      const descs = {
+        'import': t('jails.methodImportDesc'),
+        'from-txz': t('jails.methodFromTxzDesc'),
+        'download': t('jails.methodDownloadDesc'),
+      };
+      methodDesc.innerHTML = `<div class="type-desc-box"><p class="type-desc-text">${esc(descs[method] || '')}</p></div>`;
+    }
+
+    function updateFields() {
+      const method = methodSel.value;
+      const type = typeSel.value;
+      const isImport = method === 'import';
+      const isFromTxz = method === 'from-txz';
+      const isDownload = method === 'download';
+      const needsTxzPath = isFromTxz;
+      const needsDownload = isDownload;
+      const needsTxzCreate = isFromTxz || isDownload;
+
+      // Show/hide import fields.
+      importZfs.style.display = (isImport && type === 'zfs') ? '' : 'none';
+      importSfs.style.display = (isImport && type === 'sharedfs') ? '' : 'none';
+
+      // Show/hide txz path.
+      txzPathField.style.display = needsTxzPath ? '' : 'none';
+
+      // Show/hide download fields.
+      downloadFields.style.display = needsDownload ? '' : 'none';
+
+      // Show/hide txz-create fields (for from-txz and download).
+      txzZfs.style.display = (needsTxzCreate && type === 'zfs') ? '' : 'none';
+      txzSfs.style.display = (needsTxzCreate && type === 'sharedfs') ? '' : 'none';
+
+      // Update defaults based on name.
+      updateDefaults();
+    }
+
+    function updateDefaults() {
+      const name = nameInput.value.trim();
+      if (datasetInput && !datasetInput.value && name) {
+        datasetInput.placeholder = `zroot/jails/bases/${name}`;
+      }
+      if (newSfsInput && !newSfsInput.value && name) {
+        newSfsInput.placeholder = `/usr/jails/sharedfs/${name}`;
+      }
+      if (newTplInput && !newTplInput.value && name) {
+        newTplInput.placeholder = `/usr/jails/template/${name}`;
+      }
+    }
+
+    methodSel.addEventListener('change', () => {
+      renderMethodDesc(methodSel.value);
+      updateFields();
+    });
+    typeSel.addEventListener('change', () => {
+      renderTypeDesc(typeDesc, typeSel.value);
+      updateFields();
+    });
+    nameInput.addEventListener('input', updateDefaults);
+
+    // Dataset change → load snapshots (import method only).
     datasetSel.addEventListener('change', async () => {
       const ds = datasetSel.value;
       if (!ds) { snapField.style.display = 'none'; return; }
@@ -843,22 +998,52 @@ function importBaseModal(onSubmit) {
       if (e.target.dataset.act === 'cancel') { overlay.remove(); resolve(null); }
     });
 
-    overlay.querySelector('#import-form').addEventListener('submit', (e) => {
+    overlay.querySelector('#create-base-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const method = fd.get('method');
       const type = fd.get('type');
       const name = fd.get('name');
-      let result;
-      if (type === 'zfs') {
-        const dataset = fd.get('zfs_dataset');
-        const snaps = [...snapList.querySelectorAll('input[type=checkbox]:checked')].map((cb) => cb.value);
-        if (!dataset || !snaps.length) return;
-        result = { name, type, source_path: dataset, snapshots: snaps };
-      } else if (type === 'sharedfs') {
-        const sfs = fd.get('sharedfs_path');
-        const tpl = fd.get('template_path');
-        if (!sfs || !tpl) return;
-        result = { name, type: 'sharedfs', source_path: tpl, sharedfs_path: sfs };
+      let result = { name, method, type };
+
+      if (method === 'import') {
+        if (type === 'zfs') {
+          const dataset = fd.get('import_dataset');
+          const snaps = [...snapList.querySelectorAll('input[type=checkbox]:checked')].map((cb) => cb.value);
+          if (!dataset || !snaps.length) return;
+          result.source_path = dataset;
+          result.snapshots = snaps;
+        } else {
+          const sfs = fd.get('import_sharedfs');
+          const tpl = fd.get('import_template');
+          if (!sfs || !tpl) return;
+          result.source_path = tpl;
+          result.sharedfs_path = sfs;
+        }
+      } else if (method === 'from-txz') {
+        result.txz_path = fd.get('txz_path');
+        if (!result.txz_path) return;
+        if (type === 'zfs') {
+          result.dataset = fd.get('dataset');
+          result.snapshot_name = fd.get('snapshot_name') || null;
+          if (!result.dataset) return;
+        } else {
+          result.sharedfs_path = fd.get('new_sharedfs');
+          result.template_path = fd.get('new_template');
+          if (!result.sharedfs_path || !result.template_path) return;
+        }
+      } else if (method === 'download') {
+        result.download_url = fd.get('download_url');
+        if (!result.download_url) return;
+        if (type === 'zfs') {
+          result.dataset = fd.get('dataset');
+          result.snapshot_name = fd.get('snapshot_name') || null;
+          if (!result.dataset) return;
+        } else {
+          result.sharedfs_path = fd.get('new_sharedfs');
+          result.template_path = fd.get('new_template');
+          if (!result.sharedfs_path || !result.template_path) return;
+        }
       }
       if (result) submitModal(overlay, onSubmit, result);
     });
@@ -878,77 +1063,6 @@ function flattenDatasets(tree) {
   }
   walk(tree);
   return result;
-}
-
-/// Create image modal — fields depend on base system type.
-function createImageModal(base, onSubmit) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-
-    const isZfs = base.type === 'zfs';
-
-    const snapOptions = (base.snapshots || []).map((s) => {
-      const shortName = s.includes('@') ? s.split('@').pop() : s;
-      return `<option value="${escAttr(s)}">${esc(shortName)}</option>`;
-    }).join('');
-
-    overlay.innerHTML = `
-      <div class="modal" style="max-width:520px;">
-        <h3>${t('jails.createImage')} — ${esc(base.name)}</h3>
-        <form id="img-form">
-          ${isZfs ? `
-          <div class="field">
-            <label>${t('jails.cloneSnapshot')} <span style="color:var(--danger)">*</span></label>
-            <select name="snapshot" required>
-              <option value="">${t('common.pleaseSelect')}</option>
-              ${snapOptions}
-            </select>
-          </div>
-          <div class="field">
-            <label>${t('jails.targetDataset')} <span style="color:var(--danger)">*</span></label>
-            <input type="text" name="dataset" required placeholder="zroot/jails/web01" />
-          </div>
-          <div class="field">
-            <label>${t('jails.targetLocation')} <span style="color:var(--danger)">*</span></label>
-            <input type="text" name="target" required placeholder="/jails/web01" />
-          </div>
-          ` : `
-          <div class="field">
-            <label>${t('jails.targetLocation')} <span style="color:var(--danger)">*</span></label>
-            <input type="text" name="target" required placeholder="/jails/web01" />
-          </div>
-          `}
-          <input type="hidden" name="method" value="${isZfs ? 'zfs-clone' : 'sharedfs'}" />
-          <div class="modal-actions">
-            <button type="button" class="btn-secondary" data-act="cancel">${t('common.cancel')}</button>
-            <button type="submit">${t('common.confirm')}</button>
-          </div>
-        </form>
-      </div>`;
-
-    document.body.appendChild(overlay);
-
-    overlay.addEventListener('click', (e) => {
-      if (e.target.dataset.act === 'cancel') { overlay.remove(); resolve(null); }
-    });
-
-    overlay.querySelector('#img-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const result = {
-        method: fd.get('method'),
-        target: fd.get('target'),
-      };
-      if (isZfs) {
-        result.snapshot = fd.get('snapshot');
-        result.dataset = fd.get('dataset');
-      }
-      submitModal(overlay, onSubmit, result);
-    });
-
-    setTimeout(() => { const f = overlay.querySelector('input, select'); if (f) f.focus(); }, 50);
-  });
 }
 
 // ===== Shared helpers =====

@@ -2,7 +2,7 @@
 
 ## 概述
 
-Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/全部）、详情查看、创建（从基础系统或目录）、启动/停止/删除，以及基础系统管理（导入/编辑/镜像创建）。运行时查询通过 libjail C API（`jailparam_*`）直接调用，配置管理通过解析/写回 `/etc/jail.conf` 实现。
+Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/全部）、详情查看、创建（从基础系统或目录）、启动/停止/删除，以及基础系统管理（三种创建方式/编辑/镜像创建）。运行时查询通过 libjail C API（`jailparam_*`）直接调用，配置管理通过解析/写回 `/etc/jail.conf` 实现。
 
 当前阶段已实现：
 - libjail FFI 绑定 + RAII 安全封装
@@ -13,7 +13,7 @@ Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/�
 - Jail 删除（从 jail.conf 移除 + 可选删除文件系统）
 - jail.conf 解析器（变量替换、注释处理、全局参数继承）
 - jail.conf 块写入（备份 + 原子替换，智能省略与全局默认相同的参数）
-- 基础系统导入（ZFS 类型选快照、SharedFS 类型选 template + sharedfs）、列表、编辑快照、删除
+- 基础系统创建（三种方式：导入已有目录/数据集、从 base.txz 文件创建、自动下载创建）、列表、编辑快照、删除
 - 镜像创建（ZFS Clone / SharedFS，生成 fstab）
 - 弹窗提交安全（遮罩 + spin，成功才关闭，失败保留弹窗）
 
@@ -188,6 +188,71 @@ struct BaseSystem {
 }
 ```
 
+#### 创建方式（三种）
+
+`base_import()` handler 通过 `method` 字段区分三种创建方式：
+
+**1. `import`（导入已有）**
+
+注册一个已存在的目录或 ZFS 数据集。与重构前的行为完全一致：
+- ZFS：验证 dataset 有效 + 至少一个快照 + mountpoint 有 FreeBSD 结构
+- SharedFS：验证 template 有 `etc/` + `sharedfs/`，sharedfs 目录有 `bin/` 等
+
+**2. `from-txz`（从 base.txz 文件创建）**
+
+从系统上已有的 base.txz 文件创建新的基础系统：
+- ZFS 类型：
+  1. `zfs create <新数据集>`
+  2. `tar -xf <base.txz> -C <mountpoint>` 解压到数据集
+  3. `zfs snapshot <数据集>@<快照名>` 创建快照
+  4. 注册基础系统（source_path = 新数据集，snapshots = [数据集@快照名]）
+  5. 任一步骤失败时自动 `zfs destroy -r` 回滚
+- SharedFS 类型：
+  1. 创建 sharedfs 目录，解压 base.txz 到其中
+  2. 调用 `build_sharedfs_template()` 构建 template 结构
+  3. 注册基础系统
+  4. 失败时自动删除已创建的目录
+
+**3. `download`（自动下载创建）**
+
+从 FreeBSD 官方镜像下载 base.txz，后续流程与 `from-txz` 相同：
+1. 使用 `/usr/bin/fetch` 下载 `{mirror}/{releases|snapshots}/{arch}/{version}/base.txz` 到临时文件
+2. 验证下载文件非空
+3. 走 `from-txz` 流程创建基础系统
+4. 无论成功/失败都删除临时文件
+
+镜像选择：前端提供 6 个预设镜像（官方/中国/日本/台湾/德国/美国 NY），API `GET /api/jails/bases/mirrors` 返回列表。
+
+#### SharedFS 结构构建 `build_sharedfs_template()`
+
+参照 qjail 的目录布局，将完整的 FreeBSD 系统（base.txz 解压后）转换为 SharedFS + Template 结构：
+
+**sharedfs 保留**（共享只读二进制）：
+
+| 层级 | 目录 |
+|---|---|
+| 顶层 | bin, lib, libexec, sbin |
+| 符号链接 | sys → usr/src/sys |
+| usr/ 子目录 | bin, include, lib, lib32, libdata, libexec, ports, sbin, share, src |
+
+**template 构建**（每 Jail 独立）：
+
+| 分类 | 处理方式 | 目录 |
+|---|---|---|
+| 共享二进制（符号链接到 /sharedfs/） | `symlink` | bin, lib, libexec, sbin, sys |
+| 共享 usr 子目录（符号链接到 /sharedfs/usr/） | `symlink` | bin, include, lib, lib32, libdata, libexec, ports, sbin, share, src |
+| 独立配置（从 sharedfs 移入） | `fs::rename` | etc, var, root, tmp |
+| 独立 usr 子目录（从 sharedfs/usr 移入） | `fs::rename` | local, obj, tests |
+| 空目录（标准 FreeBSD 布局） | 新建 | dev, media, mnt, net, proc, sharedfs |
+| 内部符号链接 | `symlink` | home → usr/home |
+| 顶层文件 | `fs::rename` | COPYRIGHT, .profile, .cshrc 等 |
+
+**从 sharedfs 删除**（base.txz 中存在但 qjail 不需要）：
+
+boot, rescue, 以及所有顶层文件和非共享目录。
+
+template 中的符号链接使用 jail 内绝对路径（如 `/sharedfs/bin`），因为 jail 启动时 nullfs 将 sharedfs 目录挂载到 `<jail_path>/sharedfs`。
+
 #### 导入校验
 
 导入时验证源是否为有效的 FreeBSD 结构：
@@ -284,7 +349,15 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 #### 基础系统列表页（`/jails/bases`）
 
 - 表格：名称 / 源路径 / 类型徽章（ZFS/SharedFS）/ 快照数 / 操作按钮
-- "导入"按钮 → 动态弹窗（类型选择器 → ZFS：数据集下拉 + 快照多选；SharedFS：双路径输入）
+- "创建"按钮 → 动态弹窗（三种创建方式）：
+  - 创建方式选择器（导入已有 / 从 base.txz / 自动下载）+ 描述框
+  - 类型选择器（ZFS / SharedFS）+ 描述框
+  - 根据方式×类型组合动态显示/隐藏字段：
+    - 导入 + ZFS：现有数据集下拉 + 快照多选
+    - 导入 + SharedFS：现有 template + sharedfs 路径
+    - 从 base.txz + ZFS：txz 文件路径 + 新数据集 + 快照名
+    - 从 base.txz + SharedFS：txz 文件路径 + 新 sharedfs 目录 + 新 template 目录
+    - 自动下载：镜像下拉 + 版本输入（datalist 常用版本）+ 架构下拉，然后同 from-txz
 - "编辑"按钮（仅 ZFS 类型）→ 快照编辑弹窗
 - "创建镜像"按钮 → 按基础系统类型显示对应字段
 - "删除"按钮 → 确认弹窗
@@ -331,18 +404,29 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
 | GET | `/api/jails/bases` | — | `[{name, type, source_path, snapshots[], sharedfs_path?, created_at}]` |
-| POST | `/api/jails/bases` | `{name, type, source_path, snapshots?, sharedfs_path?}` | `201 {name, type, ...}` |
+| POST | `/api/jails/bases` | `{name, method, type, ...method-specific fields}` | `201 {name, type, ...}` |
+| GET | `/api/jails/bases/mirrors` | — | `[{name, url}]` |
 | PUT | `/api/jails/bases/{name}` | `{snapshots[]}` | `200 {name, type, ...}` |
 | DELETE | `/api/jails/bases/{name}` | — | `204` |
 | GET | `/api/jails/bases/snapshots?name=dataset` | — | `["pool@snap1", "pool@snap2"]` |
 | POST | `/api/jails/bases/{name}/image` | `{method, snapshot?, dataset?, target}` | `201 {method, target, sharedfs_path?, fstab?}` |
 
+POST `/api/jails/bases` 请求体根据 `method` 不同：
+
+- `method: "import"`: `{name, method, type, source_path, snapshots?, sharedfs_path?}`（与重构前兼容）
+- `method: "from-txz"` + ZFS: `{name, method, type, txz_path, dataset, snapshot_name}`
+- `method: "from-txz"` + SharedFS: `{name, method, type, txz_path, sharedfs_path, template_path}`
+- `method: "download"` + ZFS: `{name, method, type, mirror, version, arch?, dataset, snapshot_name}`
+- `method: "download"` + SharedFS: `{name, method, type, mirror, version, arch?, sharedfs_path, template_path}`
+
 ## 外部依赖
 
 - **libjail**（`-ljail`）— 通过 `build.rs` 链接，提供 `jailparam_*` C API
 - **`/usr/sbin/jail`** — jail 启动（`jail -c`）、停止（`jail -r`）
-- **`/sbin/zfs`** — ZFS 数据集检测、快照列举、clone、destroy
+- **`/sbin/zfs`** — ZFS 数据集检测、快照列举、clone、destroy、create、snapshot
 - **`/bin/cp`** — SharedFS 模板拷贝
+- **`/usr/bin/tar`** — base.txz 解压（from-txz / download 方式）
+- **`/usr/bin/fetch`** — base.txz 下载（download 方式，FreeBSD 原生）
 - **`/etc/jail.conf`** — Jail 配置文件（读取 + 备份 + 原子写入）
 - **crate: libc** — FFI 类型（`c_char`, `c_int`, `c_void`, `size_t`）
 - **crate: serde_json** — 基础系统注册表 JSON 读写

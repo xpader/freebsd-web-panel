@@ -5,6 +5,7 @@ import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
 import { formModal } from '../ui/formModal.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t, getLocale } from '../i18n/index.js';
 // ===== Zpool list page =====
 
@@ -139,14 +140,14 @@ export async function renderZfsPoolDetail(app, hashPath) {
       await api.post(`/api/zfs/pools/${name}/scrub`);
       toast(t('zfs.scrubStarted', { name }));
       renderZfsPoolDetail(document.getElementById('app'), hashPath);
-    } catch (e) { toast(e.message || t('common.operationFailed'), 'error'); }
+    } catch (e) { await alertDialog(t('zfs.scrubFailed'), e.message || t('common.operationFailed')); }
   };
   document.getElementById('btn-scrub-stop').onclick = async () => {
     try {
       await api.post(`/api/zfs/pools/${name}/scrub/stop`);
       toast(t('zfs.scrubStopped', { name }));
       renderZfsPoolDetail(document.getElementById('app'), hashPath);
-    } catch (e) { toast(e.message || t('common.operationFailed'), 'error'); }
+    } catch (e) { await alertDialog(t('zfs.scrubFailed'), e.message || t('common.operationFailed')); }
   };
 }
 
@@ -254,7 +255,7 @@ window.__fwpCreateDataset = async () => {
   api.post('/api/zfs/datasets', { name: result.name }).then(() => {
     toast(t('zfs.dsCreated'));
     loadDatasets();
-  }).catch(e => toast(e.message || t('common.operationFailed'), 'error'));
+  }).catch(async e => { await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed')); });
 };
 
 window.__fwpDsSnap = async (name) => {
@@ -264,7 +265,7 @@ window.__fwpDsSnap = async (name) => {
   if (!result) return;
   api.post('/api/zfs/snapshots', { dataset: name, name: result.name }).then(() => {
     toast(t('zfs.snapCreated', { name, snap: result.name }));
-  }).catch(e => toast(e.message || t('zfs.snapCreateFailed'), 'error'));
+  }).catch(async e => { await alertDialog(t('zfs.snapCreateFailed'), e.message || t('zfs.snapCreateFailed')); });
 };
 
 window.__fwpDelDs = async (name) => {
@@ -272,13 +273,13 @@ window.__fwpDelDs = async (name) => {
   api.del(`/api/zfs/dataset/destroy?name=${encodeURIComponent(name)}`).then(() => {
     toast(t('zfs.dsDeleted'));
     loadDatasets();
-  }).catch(e => toast(e.message || t('common.deleteFailed'), 'error'));
+  }).catch(async e => { await alertDialog(t('common.deleteFailed'), e.message || t('common.deleteFailed')); });
 };
 
 window.__fwpDsProps = async (name) => {
   let props;
   try { props = await api.get(`/api/zfs/dataset/properties?name=${encodeURIComponent(name)}`); }
-  catch (e) { toast(e.message || t('zfs.dsPropsFailed'), 'error'); return; }
+  catch (e) { await alertDialog(t('zfs.dsPropsFailed'), e.message || t('zfs.dsPropsFailed')); return; }
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -378,7 +379,7 @@ window.__fwpCreateSnap = async () => {
   if (!result) return;
   api.post('/api/zfs/snapshots', { dataset: result.dataset, name: result.name }).then(() => {
     toast(t('zfs.snapCreatedShort')); loadSnapshots();
-  }).catch(e => toast(e.message || t('zfs.snapCreateFailedShort'), 'error'));
+  }).catch(async e => { await alertDialog(t('zfs.snapCreateFailedShort'), e.message || t('zfs.snapCreateFailedShort')); });
 };
 
 window.__fwpCloneSnap = async (source) => {
@@ -389,7 +390,7 @@ window.__fwpCloneSnap = async (source) => {
   if (!result) return;
   api.post('/api/zfs/snapshot/clone', { source, target: result.target, mountpoint: result.mountpoint || undefined }).then(() => {
     toast(t('zfs.cloneDone', { name: result.target })); loadSnapshots();
-  }).catch(e => toast(e.message || t('zfs.cloneFailed'), 'error'));
+  }).catch(async e => { await alertDialog(t('zfs.cloneFailed'), e.message || t('zfs.cloneFailed')); });
 };
 
 window.__fwpDelSnap = async (full) => {
@@ -400,14 +401,14 @@ window.__fwpDelSnap = async (full) => {
   const qs = `name=${encodeURIComponent(full)}${result.recursive ? '&recursive=true' : ''}`;
   api.del(`/api/zfs/snapshot/destroy?${qs}`).then(() => {
     toast(t('zfs.snapDeleted')); loadSnapshots();
-  }).catch(e => toast(e.message || t('common.deleteFailed'), 'error'));
+  }).catch(async e => { await alertDialog(t('common.deleteFailed'), e.message || t('common.deleteFailed')); });
 };
 
 window.__fwpRollback = async (full) => {
   if (!await confirmDialog(t('zfs.snapRollbackTitle'), t('zfs.snapRollbackConfirm', { name: full }))) return;
   api.post(`/api/zfs/snapshot/rollback?name=${encodeURIComponent(full)}`, { confirm: true }).then(() => {
     toast(t('zfs.snapRollbackDone')); loadSnapshots();
-  }).catch(e => toast(e.message || t('zfs.snapRollbackFailed'), 'error'));
+  }).catch(async e => { await alertDialog(t('zfs.snapRollbackFailed'), e.message || t('zfs.snapRollbackFailed')); });
 };
 
 function fmtBytes(b) {

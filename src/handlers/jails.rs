@@ -20,6 +20,31 @@ use crate::state::AppState;
 
 const ZFS: &str = "/sbin/zfs";
 const CP: &str = "/bin/cp";
+const TAR: &str = "/usr/bin/tar";
+const FETCH: &str = "/usr/bin/fetch";
+
+/// FreeBSD mirror list for base.txz downloads.
+const FREEBSD_MIRRORS: &[(&str, &str)] = &[
+    ("Official (download.freebsd.org)", "https://download.freebsd.org"),
+    ("China (ftp.cn.freebsd.org)", "https://ftp.cn.freebsd.org"),
+    ("Japan (ftp.jp.freebsd.org)", "https://ftp.jp.freebsd.org"),
+    ("Taiwan (ftp.tw.freebsd.org)", "https://ftp.tw.freebsd.org"),
+    ("Germany (ftp.de.freebsd.org)", "https://ftp.de.freebsd.org"),
+    ("USA - NY (ftp.nyi.net)", "https://ftp.nyi.net"),
+];
+
+/// Directories that stay in sharedfs as shared read-only (symlinked from template).
+const SHAREDFS_SHARED_TOP: &[&str] = &["bin", "lib", "libexec", "sbin"];
+const SHAREDFS_SHARED_USR: &[&str] = &[
+    "bin", "include", "lib", "lib32", "libdata", "libexec",
+    "ports", "sbin", "share", "src",
+];
+/// Top-level dirs to move from extracted sharedfs into template (per-jail).
+const TEMPLATE_REAL_TOP: &[&str] = &["etc", "var", "root", "tmp"];
+/// usr/ subdirs to move from extracted sharedfs/usr into template/usr.
+const TEMPLATE_REAL_USR: &[&str] = &["local", "obj", "tests"];
+/// Empty dirs to create in template (standard FreeBSD layout).
+const TEMPLATE_EMPTY_DIRS: &[&str] = &["dev", "media", "mnt", "net", "proc", "sharedfs"];
 
 // ── Running jail list / detail ────────────────────────────────────
 
@@ -327,26 +352,38 @@ pub struct BaseSystemInfo {
 #[derive(Debug, Deserialize)]
 pub struct BaseImportBody {
     pub name: String,
+    /// "import" | "from-txz" | "download". Default: "import".
+    #[serde(default)]
+    pub method: String,
     #[serde(rename = "type")]
     pub type_: String,
-    /// ZFS: dataset name. SharedFS: template directory path.
-    pub source_path: String,
-    /// ZFS: list of snapshot full names to register. SharedFS: absent.
-    pub snapshots: Option<Vec<String>>,
-    /// SharedFS: shared binaries directory path. ZFS: absent.
-    pub sharedfs_path: Option<String>,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct ImageCreateBody {
-    /// "zfs-clone" | "sharedfs"
-    pub method: String,
-    /// Snapshot full name — required for zfs-clone.
-    pub snapshot: Option<String>,
-    /// Target ZFS dataset name — required for zfs-clone.
+    // ── "import" method fields ──
+    /// ZFS: existing dataset name. SharedFS: existing template directory path.
+    pub source_path: Option<String>,
+    /// ZFS: list of snapshot full names to register.
+    pub snapshots: Option<Vec<String>>,
+    /// SharedFS: existing shared binaries directory path.
+    /// Also reused for "from-txz"/"download" SharedFS: new sharedfs dir to create.
+    pub sharedfs_path: Option<String>,
+
+    // ── "from-txz" / "download" common fields ──
+    /// "from-txz": path to existing base.txz file on the system.
+    pub txz_path: Option<String>,
+
+    // ── "from-txz" / "download" ZFS fields ──
+    /// New ZFS dataset to create and extract into.
     pub dataset: Option<String>,
-    /// Target directory path.
-    pub target: String,
+    /// Snapshot name to create after extraction (e.g. "clean").
+    pub snapshot_name: Option<String>,
+
+    // ── "from-txz" / "download" SharedFS fields ──
+    /// New template directory to create.
+    pub template_path: Option<String>,
+
+    // ── "download" fields ──
+    /// Full download URL for base.txz (e.g. "https://download.freebsd.org/releases/amd64/14.2-RELEASE/base.txz").
+    pub download_url: Option<String>,
 }
 
 /// Minimal FreeBSD system structure markers.
@@ -541,7 +578,25 @@ pub async fn base_list(State(state): State<AppState>) -> ApiResult<Json<Vec<Base
     Ok(Json(infos))
 }
 
-/// Register a new base system.
+/// List available FreeBSD mirrors for download.
+pub async fn mirror_list() -> ApiResult<Json<Vec<MirrorInfo>>> {
+    let mirrors = FREEBSD_MIRRORS
+        .iter()
+        .map(|(name, url)| MirrorInfo {
+            name: name.to_string(),
+            url: url.to_string(),
+        })
+        .collect();
+    Ok(Json(mirrors))
+}
+
+#[derive(Debug, Serialize)]
+pub struct MirrorInfo {
+    pub name: String,
+    pub url: String,
+}
+
+/// Register a new base system — supports three creation methods.
 pub async fn base_import(
     State(state): State<AppState>,
     Json(body): Json<BaseImportBody>,
@@ -556,13 +611,51 @@ pub async fn base_import(
         )));
     }
 
-    let base = match body.type_.as_str() {
+    let method = if body.method.is_empty() { "import" } else { body.method.as_str() };
+    let base = match method {
+        "import" => create_base_import(&state, &body)?,
+        "from-txz" => create_base_from_txz(&state, &body, None)?,
+        "download" => {
+            let txz_path = download_base_txz(&body)?;
+            let result = create_base_from_txz(&state, &body, Some(&txz_path));
+            // Clean up the downloaded temp file regardless of success/failure.
+            let _ = fs::remove_file(&txz_path);
+            result?
+        }
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "unknown creation method: \"{other}\""
+            )));
+        }
+    };
+
+    bases.push(base.clone());
+    write_bases(&state, &bases)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        "/api/jails/bases",
+        201,
+        Some(format!("created base system {} ({}, {})", body.name, method, base.type_)),
+    );
+
+    Ok((StatusCode::CREATED, Json(base)))
+}
+
+/// "import" method: register an existing directory or ZFS dataset.
+fn create_base_import(state: &AppState, body: &BaseImportBody) -> ApiResult<BaseSystem> {
+    match body.type_.as_str() {
         "zfs" => {
-            validate_source_path(&body.source_path)?;
-            if !is_zfs_dataset(&body.source_path) {
+            let source_path = body.source_path.as_deref().ok_or_else(|| {
+                ApiError::BadRequest("source_path is required".into())
+            })?;
+            validate_source_path(source_path)?;
+            if !is_zfs_dataset(source_path) {
                 return Err(ApiError::BadRequest(format!(
                     "\"{}\" is not a ZFS dataset",
-                    body.source_path
+                    source_path
                 )));
             }
 
@@ -572,28 +665,29 @@ pub async fn base_import(
                     "at least one snapshot must be selected".into(),
                 ));
             }
-            validate_zfs_snapshots(&body.source_path, snaps)?;
+            validate_zfs_snapshots(source_path, snaps)?;
 
-            // Verify the dataset mountpoint has basic FreeBSD structure.
-            let mp = resolve_fs_path(&body.source_path);
+            let mp = resolve_fs_path(source_path);
             if !check_dirs(&mp, REQUIRED_SYSTEM_DIRS) {
                 return Err(ApiError::BadRequest(format!(
                     "dataset mountpoint \"{mp}\" does not contain a valid FreeBSD system structure"
                 )));
             }
 
-            BaseSystem {
+            Ok(BaseSystem {
                 name: body.name.clone(),
                 type_: "zfs".into(),
-                source_path: body.source_path.clone(),
+                source_path: source_path.to_string(),
                 snapshots: snaps.to_vec(),
                 sharedfs_path: None,
                 created_at: state.now_ts(),
-            }
+            })
         }
 
         "sharedfs" => {
-            let template = &body.source_path;
+            let template = body.source_path.as_deref().ok_or_else(|| {
+                ApiError::BadRequest("source_path (template path) is required".into())
+            })?;
             let sharedfs = body.sharedfs_path.as_deref().ok_or_else(|| {
                 ApiError::BadRequest("sharedfs_path is required for sharedfs type".into())
             })?;
@@ -612,7 +706,6 @@ pub async fn base_import(
                 )));
             }
 
-            // Verify structure.
             if !check_dirs(template, REQUIRED_TEMPLATE_DIRS) {
                 return Err(ApiError::BadRequest(format!(
                     "template directory \"{template}\" does not have a valid structure (missing etc/ or sharedfs/)"
@@ -624,36 +717,378 @@ pub async fn base_import(
                 )));
             }
 
-            BaseSystem {
+            Ok(BaseSystem {
                 name: body.name.clone(),
                 type_: "sharedfs".into(),
-                source_path: body.source_path.clone(),
+                source_path: template.to_string(),
                 snapshots: Vec::new(),
                 sharedfs_path: Some(sharedfs.to_string()),
                 created_at: state.now_ts(),
-            }
+            })
         }
 
-        other => {
-            return Err(ApiError::BadRequest(format!(
-                "unknown base system type: \"{other}\""
-            )));
+        other => Err(ApiError::BadRequest(format!(
+            "unknown base system type: \"{other}\""
+        ))),
+    }
+}
+
+/// "from-txz" / "download" method: create a new base system from a base.txz file.
+/// If `txz_override` is provided (download method), it is used instead of body.txz_path.
+fn create_base_from_txz(
+    state: &AppState,
+    body: &BaseImportBody,
+    txz_override: Option<&str>,
+) -> ApiResult<BaseSystem> {
+    let txz_path = txz_override
+        .map(|s| s.to_string())
+        .or_else(|| body.txz_path.clone())
+        .ok_or_else(|| ApiError::BadRequest("txz_path is required".into()))?;
+
+    // Validate the txz file exists and has .txz extension.
+    let p = std::path::Path::new(&txz_path);
+    if !p.exists() || !p.is_file() {
+        return Err(ApiError::BadRequest(format!(
+            "base.txz file not found: {txz_path}"
+        )));
+    }
+    validate_target_path(&txz_path)?;
+
+    match body.type_.as_str() {
+        "zfs" => create_base_from_txz_zfs(state, body, &txz_path),
+        "sharedfs" => create_base_from_txz_sharedfs(state, body, &txz_path),
+        other => Err(ApiError::BadRequest(format!(
+            "unknown base system type: \"{other}\""
+        ))),
+    }
+}
+
+/// Create a ZFS base system from base.txz:
+/// create dataset → extract → snapshot → register.
+fn create_base_from_txz_zfs(
+    state: &AppState,
+    body: &BaseImportBody,
+    txz_path: &str,
+) -> ApiResult<BaseSystem> {
+    let dataset = body.dataset.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("dataset is required for from-txz ZFS creation".into())
+    })?;
+    validate_zfs_name(dataset)?;
+
+    // Dataset must not already exist.
+    if is_zfs_dataset(dataset) {
+        return Err(ApiError::BadRequest(format!(
+            "dataset \"{dataset}\" already exists"
+        )));
+    }
+
+    let snapshot_name = body.snapshot_name.as_deref().filter(|s| !s.is_empty());
+    if let Some(sn) = snapshot_name {
+        validate_snapshot_name(sn)?;
+    }
+
+    // Create the dataset.
+    run(ZFS, &["create", dataset])?;
+
+    // Get mountpoint.
+    let mountpoint = resolve_fs_path(dataset);
+    if mountpoint.is_empty() || mountpoint == dataset {
+        let _ = run(ZFS, &["destroy", "-r", dataset]);
+        return Err(ApiError::Internal(format!(
+            "could not determine mountpoint for dataset \"{dataset}\""
+        )));
+    }
+
+    // Extract base.txz into the mountpoint.
+    if let Err(e) = run(TAR, &["-xf", txz_path, "-C", &mountpoint]) {
+        let _ = run(ZFS, &["destroy", "-r", dataset]);
+        return Err(e);
+    }
+
+    // Verify structure.
+    if !check_dirs(&mountpoint, REQUIRED_SYSTEM_DIRS) {
+        let _ = run(ZFS, &["destroy", "-r", dataset]);
+        return Err(ApiError::BadRequest(format!(
+            "extracted content at \"{mountpoint}\" does not contain a valid FreeBSD system structure"
+        )));
+    }
+
+    // Create snapshot (optional).
+    let full_snap = if let Some(sn) = snapshot_name {
+        let snap = format!("{dataset}@{sn}");
+        if let Err(e) = run(ZFS, &["snapshot", &snap]) {
+            let _ = run(ZFS, &["destroy", "-r", dataset]);
+            return Err(e);
         }
+        crate::audit::record(
+            state, None, "POST", "/api/jails/bases", 201,
+            Some(format!("created ZFS dataset {dataset} from {txz_path}, snapshot {snap}")),
+        );
+        vec![snap]
+    } else {
+        crate::audit::record(
+            state, None, "POST", "/api/jails/bases", 201,
+            Some(format!("created ZFS dataset {dataset} from {txz_path} (no snapshot)")),
+        );
+        vec![]
     };
 
-    bases.push(base.clone());
-    write_bases(&state, &bases)?;
+    Ok(BaseSystem {
+        name: body.name.clone(),
+        type_: "zfs".into(),
+        source_path: dataset.to_string(),
+        snapshots: full_snap,
+        sharedfs_path: None,
+        created_at: state.now_ts(),
+    })
+}
+
+/// Create a SharedFS base system from base.txz:
+/// extract to sharedfs dir → build template structure → register.
+fn create_base_from_txz_sharedfs(
+    state: &AppState,
+    body: &BaseImportBody,
+    txz_path: &str,
+) -> ApiResult<BaseSystem> {
+    let sharedfs_dir = body.sharedfs_path.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("sharedfs_path is required for from-txz SharedFS creation".into())
+    })?;
+    let template_dir = body.template_path.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("template_path is required for from-txz SharedFS creation".into())
+    })?;
+
+    validate_target_path(sharedfs_dir)?;
+    validate_target_path(template_dir)?;
+
+    // Target directories must not already exist (we are creating new ones).
+    if std::path::Path::new(sharedfs_dir).exists() {
+        return Err(ApiError::BadRequest(format!(
+            "sharedfs directory already exists: {sharedfs_dir}"
+        )));
+    }
+    if std::path::Path::new(template_dir).exists() {
+        return Err(ApiError::BadRequest(format!(
+            "template directory already exists: {template_dir}"
+        )));
+    }
+
+    // Extract base.txz into sharedfs directory.
+    fs::create_dir_all(sharedfs_dir)?;
+    if let Err(e) = run(TAR, &["-xf", txz_path, "-C", sharedfs_dir]) {
+        let _ = fs::remove_dir_all(sharedfs_dir);
+        return Err(e);
+    }
+
+    // Build template structure.
+    if let Err(e) = build_sharedfs_template(sharedfs_dir, template_dir) {
+        let _ = fs::remove_dir_all(template_dir);
+        return Err(e);
+    }
+
+    // Verify structure.
+    if !check_dirs(template_dir, REQUIRED_TEMPLATE_DIRS) {
+        let _ = fs::remove_dir_all(template_dir);
+        return Err(ApiError::BadRequest(format!(
+            "template directory \"{template_dir}\" does not have a valid structure after creation"
+        )));
+    }
+    if !check_dirs(sharedfs_dir, REQUIRED_SHAREDFS_DIRS) {
+        let _ = fs::remove_dir_all(template_dir);
+        return Err(ApiError::BadRequest(format!(
+            "sharedfs directory \"{sharedfs_dir}\" does not have a valid binaries structure after creation"
+        )));
+    }
 
     crate::audit::record(
-        &state,
-        None,
-        "POST",
-        "/api/jails/bases",
-        201,
-        Some(format!("imported base system {} ({})", body.name, base.type_)),
+        state, None, "POST", "/api/jails/bases", 201,
+        Some(format!("created SharedFS base from {txz_path}: sharedfs={sharedfs_dir}, template={template_dir}")),
     );
 
-    Ok((StatusCode::CREATED, Json(base)))
+    Ok(BaseSystem {
+        name: body.name.clone(),
+        type_: "sharedfs".into(),
+        source_path: template_dir.to_string(),
+        snapshots: Vec::new(),
+        sharedfs_path: Some(sharedfs_dir.to_string()),
+        created_at: state.now_ts(),
+    })
+}
+
+/// Transform an extracted full FreeBSD system (in `sharedfs_dir`) into a
+/// SharedFS + Template structure, following the qjail layout:
+///
+/// **sharedfs** keeps only shared read-only binaries (bin, lib, libexec, sbin, usr/...).
+/// **template** gets per-jail dirs (etc, var, root, ...) + symlinks to /sharedfs/* +
+/// empty standard dirs (dev, proc, media, ...) + the sharedfs mount point.
+fn build_sharedfs_template(sharedfs_dir: &str, template_dir: &str) -> ApiResult<()> {
+    use std::os::unix::fs::symlink;
+
+    fs::create_dir_all(template_dir)?;
+    let template_usr = format!("{template_dir}/usr");
+    fs::create_dir_all(&template_usr)?;
+
+    // 1. Move per-jail top-level dirs (etc, var, root, tmp) from sharedfs → template.
+    for dir in TEMPLATE_REAL_TOP {
+        let src = format!("{sharedfs_dir}/{dir}");
+        let dst = format!("{template_dir}/{dir}");
+        if std::path::Path::new(&src).exists() {
+            fs::rename(&src, &dst)?;
+        } else {
+            fs::create_dir_all(&dst)?;
+        }
+    }
+
+    // 2. Move per-jail usr/ subdirs (local, obj, tests) from sharedfs/usr → template/usr.
+    let sharedfs_usr = format!("{sharedfs_dir}/usr");
+    for dir in TEMPLATE_REAL_USR {
+        let src = format!("{sharedfs_usr}/{dir}");
+        let dst = format!("{template_usr}/{dir}");
+        if std::path::Path::new(&src).exists() {
+            fs::rename(&src, &dst)?;
+        } else {
+            fs::create_dir_all(&dst)?;
+        }
+    }
+
+    // 3. Remove dirs from sharedfs that don't belong (boot, rescue, media, mnt, etc.).
+    //    Keep only bin, lib, libexec, sbin, sys, usr.
+    if let Ok(entries) = fs::read_dir(sharedfs_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            let path = entry.path();
+            if path.is_dir() {
+                let is_shared = SHAREDFS_SHARED_TOP.contains(&name_str.as_ref())
+                    || name_str == "usr";
+                let is_moved = TEMPLATE_REAL_TOP.contains(&name_str.as_ref());
+                // sys is a symlink, not a dir, so it won't be caught here.
+                if !is_shared && !is_moved {
+                    let _ = fs::remove_dir_all(&path);
+                }
+            } else if path.is_file() {
+                // Move top-level files (.profile, .cshrc, COPYRIGHT, ...) to template.
+                let dst = format!("{template_dir}/{name_str}");
+                let _ = fs::rename(&path, &dst);
+            }
+        }
+    }
+
+    // 4. Remove non-shared subdirs from sharedfs/usr (keep only the shared set).
+    if let Ok(entries) = fs::read_dir(&sharedfs_usr) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !SHAREDFS_SHARED_USR.contains(&name_str.as_ref()) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
+    // 5. Create symlinks in template → /sharedfs/* for shared top-level dirs.
+    for dir in SHAREDFS_SHARED_TOP {
+        let src_check = format!("{sharedfs_dir}/{dir}");
+        let link = format!("{template_dir}/{dir}");
+        if std::path::Path::new(&src_check).exists() && !std::path::Path::new(&link).exists() {
+            symlink(format!("/sharedfs/{dir}"), &link)?;
+        }
+    }
+
+    // 6. Create symlinks in template/usr → /sharedfs/usr/* for shared usr subdirs.
+    for dir in SHAREDFS_SHARED_USR {
+        let src_check = format!("{sharedfs_usr}/{dir}");
+        let link = format!("{template_usr}/{dir}");
+        if std::path::Path::new(&src_check).exists() && !std::path::Path::new(&link).exists() {
+            symlink(format!("/sharedfs/usr/{dir}"), &link)?;
+        }
+    }
+
+    // 7. Copy the sys symlink if it exists in sharedfs.
+    let sharedfs_sys = format!("{sharedfs_dir}/sys");
+    let template_sys = format!("{template_dir}/sys");
+    if std::path::Path::new(&sharedfs_sys).exists() && !std::path::Path::new(&template_sys).exists()
+    {
+        symlink("/sharedfs/sys", &template_sys)?;
+    }
+
+    // 8. Create empty standard directories in template.
+    for dir in TEMPLATE_EMPTY_DIRS {
+        fs::create_dir_all(format!("{template_dir}/{dir}"))?;
+    }
+
+    // 9. Create home → usr/home symlink (like qjail).
+    let home_link = format!("{template_dir}/home");
+    if !std::path::Path::new(&home_link).exists() {
+        symlink("usr/home", &home_link)?;
+    }
+
+    Ok(())
+}
+
+/// Download base.txz from a user-provided URL.
+/// Returns the path to the downloaded temp file.
+fn download_base_txz(body: &BaseImportBody) -> ApiResult<String> {
+    let url = body.download_url.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("download_url is required for download method".into())
+    })?;
+    validate_url(url)?;
+
+    // Download to a temp file.
+    let tmp_dir = std::env::temp_dir();
+    let tmp_file = tmp_dir.join("fwp-base-download.txz");
+    let tmp_path = tmp_file.to_string_lossy().into_owned();
+
+    tracing::info!("downloading base.txz from {url} to {tmp_path}");
+
+    let output = Command::new(FETCH)
+        .args(["-o", &tmp_path, url])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ApiError::Command(if stderr.is_empty() {
+            format!("failed to download {url}")
+        } else {
+            stderr
+        }));
+    }
+
+    // Verify the file was downloaded and is non-empty.
+    let metadata = fs::metadata(&tmp_path)?;
+    if metadata.len() < 1024 {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ApiError::BadRequest(format!(
+            "downloaded file is too small ({:.0} bytes), may be an error page",
+            metadata.len()
+        )));
+    }
+
+    Ok(tmp_path)
+}
+
+/// Validate a ZFS snapshot name (the short part after @).
+fn validate_snapshot_name(name: &str) -> ApiResult<()> {
+    if name.is_empty() || name.len() > 256 {
+        return Err(ApiError::BadRequest("invalid snapshot name".into()));
+    }
+    let valid = name.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | ' ')
+    });
+    if !valid || name.contains('@') {
+        return Err(ApiError::BadRequest("invalid snapshot name".into()));
+    }
+    Ok(())
+}
+
+/// Validate a download URL — must be https:// or http://, no shell metacharacters.
+fn validate_url(url: &str) -> ApiResult<()> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(ApiError::BadRequest("download URL must start with https:// or http://".into()));
+    }
+    if url.contains('\0') || url.contains('\n') || url.contains(' ') {
+        return Err(ApiError::BadRequest("invalid download URL".into()));
+    }
+    Ok(())
 }
 
 /// Remove a base system registration (does not delete the source files).
@@ -730,138 +1165,6 @@ pub async fn base_update(
     );
 
     Ok(Json(updated))
-}
-
-/// Create a jail image from a base system.
-pub async fn base_create_image(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(body): Json<ImageCreateBody>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
-    let bases = read_bases(&state);
-    let base = bases
-        .iter()
-        .find(|b| b.name == name)
-        .ok_or_else(|| ApiError::NotFound(format!("base system \"{name}\" not found")))?;
-
-    validate_target_path(&body.target)?;
-
-    match body.method.as_str() {
-        "zfs-clone" => {
-            if base.type_ != "zfs" {
-                return Err(ApiError::BadRequest(
-                    "zfs-clone requires a ZFS base system".into(),
-                ));
-            }
-            let snapshot = body
-                .snapshot
-                .as_deref()
-                .ok_or_else(|| ApiError::BadRequest("snapshot is required for zfs-clone".into()))?;
-            let dataset = body
-                .dataset
-                .as_deref()
-                .ok_or_else(|| ApiError::BadRequest("dataset is required for zfs-clone".into()))?;
-
-            validate_zfs_name(dataset)?;
-
-            // Snapshot must be in the registered list.
-            if !base.snapshots.contains(&snapshot.to_string()) {
-                return Err(ApiError::BadRequest(format!(
-                    "snapshot \"{snapshot}\" is not registered for base system \"{name}\""
-                )));
-            }
-
-            // Clone the snapshot to a new dataset.
-            run(ZFS, &["clone", snapshot, dataset])?;
-            // Set the mountpoint to the target path.
-            run(ZFS, &["set", &format!("mountpoint={}", body.target), dataset])?;
-
-            crate::audit::record(
-                &state,
-                None,
-                "POST",
-                &format!("/api/jails/bases/{name}/image"),
-                201,
-                Some(format!(
-                    "zfs clone {snapshot} → {dataset} at {}",
-                    body.target
-                )),
-            );
-        }
-
-        "sharedfs" => {
-            if base.type_ != "sharedfs" {
-                return Err(ApiError::BadRequest(
-                    "sharedfs requires a SharedFS base system".into(),
-                ));
-            }
-            let sharedfs_path = base.sharedfs_path.as_deref().ok_or_else(|| {
-                ApiError::Internal("sharedfs base system missing sharedfs_path".into())
-            })?;
-            let template = &base.source_path;
-            let dst = &body.target;
-
-            // Copy the template skeleton to the target.
-            fs::create_dir_all(dst)?;
-            let cp_status = Command::new(CP)
-                .args(["-R", &format!("{template}/."), dst])
-                .output()?;
-            if !cp_status.status.success() {
-                let stderr = String::from_utf8_lossy(&cp_status.stderr).trim().to_string();
-                return Err(ApiError::Command(if stderr.is_empty() {
-                    "cp failed".into()
-                } else {
-                    stderr
-                }));
-            }
-
-            // Write fstab file for the nullfs ro mount of sharedfs.
-            let fstab_path = image_fstab_path(&state, dst);
-            if let Some(parent) = fstab_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let fstab_content = format!(
-                "{}\t{dst}/sharedfs\tnullfs\tro\t0\t0\n",
-                sharedfs_path
-            );
-            fs::write(&fstab_path, fstab_content)?;
-
-            crate::audit::record(
-                &state,
-                None,
-                "POST",
-                &format!("/api/jails/bases/{name}/image"),
-                201,
-                Some(format!(
-                    "sharedfs image at {} (sharedfs: {}, fstab: {})",
-                    body.target, sharedfs_path, fstab_path.display()
-                )),
-            );
-        }
-
-        other => {
-            return Err(ApiError::BadRequest(format!(
-                "unknown method: \"{other}\""
-            )));
-        }
-    }
-
-    // For sharedfs, include the fstab path in the response.
-    let fstab_path = if body.method == "sharedfs" {
-        Some(image_fstab_path(&state, &body.target).to_string_lossy().into_owned())
-    } else {
-        None
-    };
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "method": body.method,
-            "target": body.target,
-            "sharedfs_path": base.sharedfs_path,
-            "fstab": fstab_path,
-        })),
-    ))
 }
 
 /// Validate a ZFS dataset name (allows '/', '@', '_', '-', '.', ':'  and alphanumerics).

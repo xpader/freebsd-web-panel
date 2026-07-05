@@ -66,9 +66,9 @@ pub fn build(state: AppState) -> Router {
         .route("/api/jails/{name}/start", post(handlers::jails::jail_start))
         .route("/api/jails/{name}/stop", post(handlers::jails::jail_stop))
         .route("/api/jails/bases", get(handlers::jails::base_list).post(handlers::jails::base_import))
+        .route("/api/jails/bases/mirrors", get(handlers::jails::mirror_list))
         .route("/api/jails/bases/snapshots", get(handlers::jails::zfs_snapshot_list))
         .route("/api/jails/bases/{name}", delete(handlers::jails::base_destroy).put(handlers::jails::base_update))
-        .route("/api/jails/bases/{name}/image", post(handlers::jails::base_create_image))
         .route("/api/bhyve", get(handlers::mod_stubs::bhyve))
         // --- ZFS ---
         .route("/api/zfs/pools", get(handlers::zfs::pool_list))

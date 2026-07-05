@@ -114,6 +114,10 @@ rc.d/fwp                  # FreeBSD rc.d 启动脚本
 - **API 调用**：用 `js/api.js` 的 `api.get/post/put/del`（处理 auth header + token + 错误 toast）。token 存 `sessionStorage`。
 - **导航**：hash 路由（`#/dashboard`）。布局 = 顶部栏主标签 + 侧边栏子项。菜单结构在 `js/ui/layout.js`。
 - **定时器清理**：定时器句柄（setInterval）——直接调用 `clearInterval(handle)`，对 null/undefined 是 no-op；不要加真值判断守卫。
+- **消息反馈（强制）**：判断标准是——**用户漏看该消息是否会造成误解或困惑**。
+  - **重要消息用弹窗**：操作失败、错误、校验异常等。用户如果没有到错误及其原因，会误以为操作成功，造成重大误解——必须用模态弹窗（`confirmDialog` 或 `alertDialog`）强制展示，确保用户看到。
+  - **非重要消息用 Toast**：操作成功（创建成功、删除成功、保存成功等）。用户漏看也不会造成误解（操作已经生效）——用 `toast()` 弱提示即可，不打断用户流程。
+  - 简记：成功 → toast，失败 → 弹窗。
 - **i18n 翻译键命名（强制）**：新增或复用 `web/js/i18n/translations.js` 中的翻译键前，**必须先读该文件顶部的命名规范注释**并严格遵守。核心规则：
   1. 同一含义只用一个 key（跨页面同义的词如 name/value/edit/delete 等一律放 `common` 命名空间复用，不按 nav/zfs/rcconf 等场景拆分）
   2. 只有语义确实不同时才建新 key
