@@ -45,8 +45,10 @@ async function loadUsers() {
         <td class="text-dim mono">${fmtTime(u.created_at)}</td>
         <td class="text-dim mono">${u.last_login ? fmtTime(u.last_login) : '—'}</td>
         <td>
+        <div class="btn-group">
           <button class="btn-secondary btn-sm" onclick="window.__fwpEditPwd(${u.id}, '${esc(u.username)}')">${t('users.changePwd')}</button>
           <button class="btn-danger btn-sm" onclick="window.__fwpDelUser(${u.id}, '${esc(u.username)}')">${t('common.delete')}</button>
+        </div>
         </td>
       </tr>`).join('');
   } catch (err) {

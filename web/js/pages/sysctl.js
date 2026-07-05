@@ -135,7 +135,7 @@ function renderPage() {
       <td class="mono"><div class="cell-ellipsis" title="${escAttr(e.value || '')}">${esc(truncate(e.value || '')) || '<span class="text-dim">—</span>'}</div></td>
       <td>${e.type ? `<span class="badge-type">${esc(e.type)}</span>` : '<span class="text-dim">—</span>'}</td>
       <td><div class="cell-wrap text-dim">${esc(e.description || '') || '<span class="text-dim">—</span>'}</div></td>
-      <td>${actions.join(' ')}</td>
+      <td>${actions.length > 1 ? `<div class="btn-group">${actions.join('')}</div>` : actions.join(' ')}</td>
     </tr>`;
   }).join('');
 

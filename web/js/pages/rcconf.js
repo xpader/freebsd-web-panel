@@ -57,8 +57,10 @@ function renderRows(vars, countEl) {
       <td class="mono"><strong>${esc(v.key)}</strong></td>
       <td class="mono"><div class="cell-wrap">${esc(v.value) || '<span class="text-dim">—</span>'}</div></td>
       <td>
-        <button class="btn-secondary btn-sm" onclick="window.__fwpRcEdit('${escAttr(v.key)}')">${t('common.edit')}</button>
-        <button class="btn-danger btn-sm" onclick="window.__fwpRcDel('${escAttr(v.key)}')">${t('common.delete')}</button>
+        <div class="btn-group">
+          <button class="btn-secondary btn-sm" onclick="window.__fwpRcEdit('${escAttr(v.key)}')">${t('common.edit')}</button>
+          <button class="btn-danger btn-sm" onclick="window.__fwpRcDel('${escAttr(v.key)}')">${t('common.delete')}</button>
+        </div>
       </td>
     </tr>`).join('');
 }

@@ -221,9 +221,11 @@ async function loadDatasets() {
           <td class="mono">${esc(ds.mountpoint)}</td>
           <td class="mono">${esc(ds.compression)}</td>
           <td>
+            <div class="btn-group">
             <button class="btn-secondary btn-sm" onclick="window.__fwpDsSnap('${esc(ds.name)}')">${t('zfs.snapshot')}</button>
             <button class="btn-secondary btn-sm" onclick="window.__fwpDsProps('${esc(ds.name)}')">${t('zfs.properties')}</button>
             ${ds.name.includes('/') ? `<button class="btn-danger btn-sm" onclick="window.__fwpDelDs('${esc(ds.name)}')">${t('common.delete')}</button>` : ''}
+            </div>
           </td>
         </tr>`);
       ds.children.forEach(c => walk(c, depth + 1));

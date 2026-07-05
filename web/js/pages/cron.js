@@ -129,9 +129,11 @@ function renderTable(list) {
           <td>${commentHtml}</td>
           <td>${statusBadge}</td>
           <td>
+            <div class="btn-group">
             <button class="btn-secondary btn-sm" onclick="window.__fwpCronEdit('${escAttr(e.source)}', ${e.line})">${t('common.edit')}</button>
             <button class="btn-secondary btn-sm" onclick="window.__fwpCronToggle('${escAttr(e.source)}', ${e.line})">${toggleLabel}</button>
             <button class="btn-danger btn-sm" onclick="window.__fwpCronDel('${escAttr(e.source)}', ${e.line})">${t('common.delete')}</button>
+            </div>
           </td>
         </tr>`;
     }

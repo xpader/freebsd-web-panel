@@ -338,6 +338,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; transition: background-color 0.12s ease; vertical-align: middle; }
+/* Prevent badge/button inner text from wrapping, but allow multiple buttons to wrap */
+.badge { white-space: nowrap; }
+td button { white-space: nowrap; }
+.btn-group { display: flex; flex-wrap: wrap; gap: 4px; }
 .fm-table td, .fm-table th { white-space: nowrap; }
 .fm-table .fm-name-cell { white-space: normal; }
 th { color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }

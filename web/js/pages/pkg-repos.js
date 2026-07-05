@@ -104,9 +104,11 @@ function renderRepoRow(r, file) {
       </td>
       <td class="mono">${esc(r.priority || 0)}</td>
       <td>
-        <button class="btn-secondary btn-sm" onclick="window.__fwpRepoToggle('${escAttr(file.path)}', '${escAttr(r.name)}', ${!r.enabled})">${r.enabled ? t('common.disable') : t('common.enable')}</button>
-        <button class="btn-secondary btn-sm" onclick="window.__fwpRepoEdit('${escAttr(file.path)}', '${escAttr(r.name)}')">${t('common.edit')}</button>
-        ${canDelete ? `<button class="btn-danger btn-sm" onclick="window.__fwpRepoDelete('${escAttr(file.path)}', '${escAttr(r.name)}')">${t('common.delete')}</button>` : ''}
+        <div class="btn-group">
+          <button class="btn-secondary btn-sm" onclick="window.__fwpRepoToggle('${escAttr(file.path)}', '${escAttr(r.name)}', ${!r.enabled})">${r.enabled ? t('common.disable') : t('common.enable')}</button>
+          <button class="btn-secondary btn-sm" onclick="window.__fwpRepoEdit('${escAttr(file.path)}', '${escAttr(r.name)}')">${t('common.edit')}</button>
+          ${canDelete ? `<button class="btn-danger btn-sm" onclick="window.__fwpRepoDelete('${escAttr(file.path)}', '${escAttr(r.name)}')">${t('common.delete')}</button>` : ''}
+        </div>
       </td>
     </tr>
   `;
