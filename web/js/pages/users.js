@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t, getLocale } from '../i18n/index.js';
 
 export async function renderUsers(app) {
@@ -78,7 +79,7 @@ window.__fwpDelUser = async (id, name) => {
     toast(t('users.deleted'));
     loadUsers();
   } catch (err) {
-    toast(err.message || t('common.deleteFailed'), 'error');
+    await alertDialog(t('common.deleteFailed'), err.message || t('common.deleteFailed'));
   }
 };
 
@@ -115,7 +116,7 @@ function showModal(title, defaultName, defaultPwd, onSubmit) {
       await onSubmit(form.username.value, form.password.value);
       overlay.remove();
     } catch (err) {
-      toast(err.message || t('common.operationFailed'), 'error');
+      await alertDialog(t('common.operationFailed'), err.message || t('common.operationFailed'));
     }
   });
 }

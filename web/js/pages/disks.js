@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 export async function renderDisks(app) {
@@ -39,7 +40,7 @@ export async function renderDisks(app) {
         await navigator.clipboard.writeText(uuid);
         toast(t('disks.uuidCopied'));
       } catch {
-        toast(t('disks.copyFailed'), 'error');
+        await alertDialog(t('common.operationFailed'), t('disks.copyFailed'));
       }
     });
   });

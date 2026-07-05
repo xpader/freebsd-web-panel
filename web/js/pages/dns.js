@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 let _cfg = null;
@@ -105,14 +106,14 @@ window.__fwpDnsApply = async () => {
   // Front-end validation: non-empty entries must be valid IPs.
   for (const s of servers) {
     if (s && !isValidIp(s)) {
-      toast(t('dns.invalidIp', { addr: s }), 'error');
+      await alertDialog(t('common.operationFailed'), t('dns.invalidIp', { addr: s }));
       return;
     }
   }
   // Check duplicates.
   const filled = servers.filter(s => s);
   if (new Set(filled).size !== filled.length) {
-    toast(t('dns.duplicate'), 'error');
+    await alertDialog(t('common.operationFailed'), t('dns.duplicate'));
     return;
   }
 
@@ -120,7 +121,7 @@ window.__fwpDnsApply = async () => {
     _cfg = cfg;
     toast(t('common.saved'));
     renderConfig();
-  }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.saveFailed', { msg: '' }), e.message || t('common.saveFailed', { msg: '' })); });
 };
 
 function isValidIp(s) {

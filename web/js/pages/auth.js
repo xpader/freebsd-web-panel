@@ -3,6 +3,7 @@
 import { api, setToken } from '../api.js';
 import { invalidateSetup } from '../router.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 export async function renderLogin(app) {
@@ -40,7 +41,7 @@ export async function renderLogin(app) {
       toast(t('auth.welcome', { name: res.user.username }));
       location.hash = '#/dashboard';
     } catch (err) {
-      toast(err.message || t('auth.loginFailed'), 'error');
+      await alertDialog(t('auth.loginFailed'), err.message || t('auth.loginFailed'));
       btn.disabled = false;
       btn.textContent = t('auth.login');
     }
@@ -75,7 +76,7 @@ export async function renderSetup(app) {
     e.preventDefault();
     const form = e.target;
     if (form.password.value !== form.password2.value) {
-      toast(t('auth.passwordMismatch'), 'error');
+      await alertDialog(t('auth.passwordMismatch'), t('auth.passwordMismatch'));
       return;
     }
     const btn = form.querySelector('button');
@@ -90,7 +91,7 @@ export async function renderSetup(app) {
       toast(t('auth.setupDone', { name: res.username }));
       location.hash = '#/login';
     } catch (err) {
-      toast(err.message || t('auth.setupFailed'), 'error');
+      await alertDialog(t('auth.setupFailed'), err.message || t('auth.setupFailed'));
       btn.disabled = false;
       btn.textContent = t('auth.createAccount');
     }

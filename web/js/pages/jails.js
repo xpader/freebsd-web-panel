@@ -4,10 +4,11 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { confirmDialog } from '../ui/confirm.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 /// Show a loading overlay on top of a modal element, call the async onSubmit,
-/// close on success or show error toast on failure.
+/// close on success or show error dialog on failure.
 async function submitModal(overlay, onSubmit, result) {
   // Add a busy overlay on the modal.
   const modal = overlay.querySelector('.modal');
@@ -23,7 +24,7 @@ async function submitModal(overlay, onSubmit, result) {
     overlay.remove();
   } catch (e) {
     busy.remove();
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 }
 
@@ -164,7 +165,7 @@ window.__fwpJailAction = async (name, action) => {
     await api.post(`/api/jails/${encodeURIComponent(name)}/${action}`);
     toast(t('jails.actionDone', { name, action: t('jails.' + action) }));
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
   } finally {
     _pendingActions.delete(`${name}:${action}`);
     await loadJails();
@@ -184,7 +185,7 @@ window.__fwpJailDelete = async (name) => {
     toast(t('jails.deleted'));
     await loadJails();
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 };
 
@@ -384,7 +385,7 @@ export async function renderJailCreate(app) {
       toast(t('jails.jailCreated'));
       location.hash = '#/jails/running';
     } catch (e) {
-      toast(e.message || t('common.operationFailed'), 'error');
+      await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
       submitBtn.disabled = false;
       submitBtn.classList.remove('btn-loading');
     }
@@ -622,7 +623,7 @@ window.__fwpBaseDelete = async (name) => {
     toast(t('jails.baseDeleted'));
     await loadBases();
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 };
 
@@ -632,7 +633,7 @@ window.__fwpBaseEdit = async (name) => {
     const bases = await api.get('/api/jails/bases');
     base = bases.find((b) => b.name === name);
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
     return;
   }
   if (!base) return;
@@ -693,9 +694,9 @@ function editSnapshotsModal(base, onSubmit) {
       if (e.target.dataset.act === 'cancel') { overlay.remove(); resolve(null); }
     });
 
-    overlay.querySelector('#edit-snap-save').addEventListener('click', () => {
+    overlay.querySelector('#edit-snap-save').addEventListener('click', async () => {
       const snaps = [...snapList.querySelectorAll('input[type=checkbox]:checked')].map((cb) => cb.value);
-      if (!snaps.length) { toast(t('jails.noSnapshotsSelected'), 'error'); return; }
+      if (!snaps.length) { await alertDialog(t('common.operationFailed'), t('jails.noSnapshotsSelected')); return; }
       submitModal(overlay, onSubmit, { snapshots: snaps });
     });
   });

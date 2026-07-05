@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 let _allServices = [];
@@ -109,7 +110,7 @@ window.__fwpSvcAction = async (name, action) => {
     toast(t('svc.actionDone', { name, action: t('svc.' + action) }));
     await loadServices();
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 };
 

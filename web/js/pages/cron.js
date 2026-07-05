@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 const SPECIALS = ['', '@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly'];
@@ -286,7 +287,7 @@ window.__fwpCronAdd = async (preselect) => {
   api.post('/api/crontab', { source, ...entry }).then(() => {
     toast(t('cron.added'));
     load();
-  }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.saveFailed', { msg: '' }), e.message || t('common.saveFailed', { msg: '' })); });
 };
 
 window.__fwpCronEdit = async (source, line) => {
@@ -297,7 +298,7 @@ window.__fwpCronEdit = async (source, line) => {
   api.put('/api/crontab', { source, line, ...result }).then(() => {
     toast(t('cron.saved'));
     load();
-  }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.saveFailed', { msg: '' }), e.message || t('common.saveFailed', { msg: '' })); });
 };
 
 window.__fwpCronToggle = async (source, line) => {
@@ -319,7 +320,7 @@ window.__fwpCronToggle = async (source, line) => {
   api.put('/api/crontab', payload).then(() => {
     toast(entry.disabled ? t('common.enabled') : t('common.disabled'));
     load();
-  }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.saveFailed', { msg: '' }), e.message || t('common.saveFailed', { msg: '' })); });
 };
 
 window.__fwpCronDel = async (source, line) => {
@@ -329,7 +330,7 @@ window.__fwpCronDel = async (source, line) => {
   api.del(`/api/crontab?source=${encodeURIComponent(source)}&line=${line}`).then(() => {
     toast(t('cron.deleted'));
     load();
-  }).catch((e) => toast(e.message || t('common.deleteFailed'), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.deleteFailed'), e.message || t('common.deleteFailed')); });
 };
 
 function esc(s) {

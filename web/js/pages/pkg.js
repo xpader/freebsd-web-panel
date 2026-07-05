@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 let _pkgFilter = 'all';
@@ -291,7 +292,7 @@ async function startPkgTask(action, packages) {
     const res = await api.post(endpoint, body);
     taskId = res.task_id;
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
     return;
   }
 
@@ -328,7 +329,7 @@ function streamTask(taskId, outputEl, closeBtn, titleEl, action, packages, overl
   const url = `/api/pkg/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
   const es = new EventSource(url);
 
-  const finish = (success, pkgNames) => {
+  const finish = async (success, pkgNames) => {
     es.close();
     closeBtn.disabled = false;
     const nameStr = pkgNames || packages.join(', ');
@@ -339,8 +340,10 @@ function streamTask(taskId, outputEl, closeBtn, titleEl, action, packages, overl
     titleEl.innerHTML = `<span style="color:${color}; font-weight:700;">${esc(doneLabel)}</span>`;
     if (success) {
       outputEl.textContent += `\n[${t('common.done')}]\n`;
+      toast(doneLabel);
+    } else {
+      await alertDialog(doneLabel, doneLabel);
     }
-    toast(doneLabel, success ? 'success' : 'error');
     if (document.getElementById('pkg-tbody')) loadPackages();
   };
 

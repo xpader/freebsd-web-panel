@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { confirmDialog } from '../ui/confirm.js';
 import { t } from '../i18n/index.js';
 
@@ -136,7 +137,7 @@ window.__fwpRepoToggle = async (filePath, name, enable) => {
       toast(t('pkg.repoUpdateOk', { name }), 'success');
       loadRepos();
     } catch (e) {
-      toast(e.message || t('common.operationFailed'), 'error');
+      await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
     }
     return;
   }
@@ -149,7 +150,7 @@ window.__fwpRepoDelete = async (filePath, name) => {
   for (const file of _repoFiles) {
     const repo = file.repos.find((r) => r.name === name && file.path === filePath);
     if (repo && repo.is_system_origin) {
-      toast(t('pkg.repoSystemNoDelete'), 'error');
+      await alertDialog(t('pkg.repoSystemNoDelete'), t('pkg.repoSystemNoDelete'));
       return;
     }
   }
@@ -160,7 +161,7 @@ window.__fwpRepoDelete = async (filePath, name) => {
     toast(t('pkg.repoDeleteOk', { name }), 'success');
     loadRepos();
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 };
 
@@ -400,7 +401,7 @@ function showRepoModal(existing, presetFilename) {
     };
 
     if (!repoBody.name || !repoBody.url) {
-      toast(t('common.fillRequired'), 'error');
+      await alertDialog(t('common.fillRequired'), t('common.fillRequired'));
       return;
     }
 
@@ -428,7 +429,7 @@ function showRepoModal(existing, presetFilename) {
           filename = document.getElementById('repo-fld-filename').value.trim();
         }
         if (!filename) {
-          toast(t('pkg.repoFileRequired'), 'error');
+          await alertDialog(t('pkg.repoFileRequired'), t('pkg.repoFileRequired'));
           return;
         }
         await api.post('/api/pkg/repos', { filename, ...repoBody });
@@ -437,7 +438,7 @@ function showRepoModal(existing, presetFilename) {
       overlay.remove();
       loadRepos();
     } catch (e) {
-      toast(e.message || t('common.operationFailed'), 'error');
+      await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
     }
   });
 }
@@ -450,7 +451,7 @@ window.__fwpRepoRefresh = async () => {
     const res = await api.post('/api/pkg/repos/update', {});
     taskId = res.task_id;
   } catch (e) {
-    toast(e.message || t('common.operationFailed'), 'error');
+    await alertDialog(t('common.operationFailed'), e.message || t('common.operationFailed'));
     return;
   }
   showRefreshModal(taskId);
@@ -482,13 +483,17 @@ function showRefreshModal(taskId) {
   const url = `/api/pkg/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
   const es = new EventSource(url);
 
-  const finish = (success) => {
+  const finish = async (success) => {
     es.close();
     closeBtn.disabled = false;
     const label = success ? t('pkg.repoRefreshDone') : t('pkg.repoRefreshFailed');
     const color = success ? 'var(--success)' : 'var(--danger)';
     titleEl.innerHTML = `<span style="color:${color}; font-weight:700;">${esc(label)}</span>`;
-    toast(label, success ? 'success' : 'error');
+    if (success) {
+      toast(label);
+    } else {
+      await alertDialog(t('pkg.repoRefreshFailed'), label);
+    }
   };
 
   es.onmessage = (ev) => {

@@ -5,6 +5,7 @@ import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
 import { formModal } from '../ui/formModal.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 const PAGE_SIZE = 100;
@@ -232,7 +233,7 @@ window.__fwpSysctlEdit = async (idx) => {
   }).then(() => {
     toast(t('sysctl.saved', { name: e.name }));
     loadEntries();
-  }).catch((err) => toast(err.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (err) => { await alertDialog(t('common.saveFailed', { msg: '' }), err.message || t('common.saveFailed', { msg: '' })); });
 };
 
 window.__fwpSysctlReset = async (idx) => {
@@ -246,7 +247,7 @@ window.__fwpSysctlReset = async (idx) => {
   api.del(`/api/sysctl/${encodeURIComponent(e.name)}`).then(() => {
     toast(t('sysctl.resetDone', { name: e.name }));
     loadEntries();
-  }).catch((err) => toast(err.message || t('common.operationFailed'), 'error'));
+  }).catch(async (err) => { await alertDialog(t('common.operationFailed'), err.message || t('common.operationFailed')); });
 };
 
 function esc(s) {

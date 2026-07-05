@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { confirmDialog } from '../ui/confirm.js';
 import { formModal } from '../ui/formModal.js';
 import { t } from '../i18n/index.js';
@@ -83,7 +84,7 @@ window.__fwpRcAdd = async () => {
   api.put('/api/rcconf', { key: result.key.trim(), value: result.value }).then(() => {
     toast(t('rcconf.added'));
     loadVars();
-  }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.saveFailed', { msg: '' }), e.message || t('common.saveFailed', { msg: '' })); });
 };
 
 window.__fwpRcEdit = async (key) => {
@@ -95,7 +96,7 @@ window.__fwpRcEdit = async (key) => {
   api.put('/api/rcconf', { key, value: result.value }).then(() => {
     toast(t('rcconf.saved'));
     loadVars();
-  }).catch((e) => toast(e.message || t('common.saveFailed', { msg: '' }), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.saveFailed', { msg: '' }), e.message || t('common.saveFailed', { msg: '' })); });
 };
 
 window.__fwpRcDel = async (key) => {
@@ -103,7 +104,7 @@ window.__fwpRcDel = async (key) => {
   api.del(`/api/rcconf?key=${encodeURIComponent(key)}`).then(() => {
     toast(t('rcconf.deleted'));
     loadVars();
-  }).catch((e) => toast(e.message || t('common.deleteFailed'), 'error'));
+  }).catch(async (e) => { await alertDialog(t('common.deleteFailed'), e.message || t('common.deleteFailed')); });
 };
 
 function esc(s) {

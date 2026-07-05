@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { renderLayout } from '../ui/layout.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/confirm.js';
+import { alertDialog } from '../ui/alertDialog.js';
 import { t } from '../i18n/index.js';
 
 const START_DIR = '/root';
@@ -312,7 +313,7 @@ async function onUploadPicked(ev) {
       await uploadFile(currentDir, file);
       toast(t('fm.uploaded', { name: file.name }));
     } catch (err) {
-      toast(t('fm.uploadFailed', { name: file.name, msg: err.message || '' }), 'error');
+      await alertDialog(t('fm.uploadFailed', { name: file.name, msg: '' }), t('fm.uploadFailed', { name: file.name, msg: err.message || '' }));
     }
   }
   await loadListing(currentDir);
@@ -358,7 +359,7 @@ async function downloadFile(path) {
     URL.revokeObjectURL(url);
     toast(t('fm.downloadStarted'));
   } catch (err) {
-    toast(t('fm.downloadFailed', { msg: err.message || '' }), 'error');
+    await alertDialog(t('fm.downloadFailed', { msg: '' }), t('fm.downloadFailed', { msg: err.message || '' }));
   }
 }
 
@@ -373,7 +374,7 @@ async function onMkdir() {
     await refreshTree();
     await loadListing(currentDir);
   } catch (err) {
-    toast(t('fm.mkdirFailed', { msg: err.message || '' }), 'error');
+    await alertDialog(t('fm.mkdirFailed', { msg: '' }), t('fm.mkdirFailed', { msg: err.message || '' }));
   }
 }
 
@@ -390,7 +391,7 @@ async function onRename(path) {
     await refreshTree();
     await loadListing(currentDir);
   } catch (err) {
-    toast(t('fm.renameFailed', { msg: err.message || '' }), 'error');
+    await alertDialog(t('fm.renameFailed', { msg: '' }), t('fm.renameFailed', { msg: err.message || '' }));
   }
 }
 
@@ -408,7 +409,7 @@ async function onDelete(path, isDir) {
     await refreshTree();
     await loadListing(currentDir);
   } catch (err) {
-    toast(t('fm.deleteFailed', { msg: err.message || '' }), 'error');
+    await alertDialog(t('fm.deleteFailed', { msg: '' }), t('fm.deleteFailed', { msg: err.message || '' }));
   }
 }
 
@@ -417,7 +418,7 @@ async function onStat(path) {
   try {
     info = await api.get(`/api/files/stat?path=${encodeURIComponent(path)}`);
   } catch (err) {
-    toast(t('fm.statReadFailed', { msg: err.message || '' }), 'error');
+    await alertDialog(t('fm.statReadFailed', { msg: '' }), t('fm.statReadFailed', { msg: err.message || '' }));
     return;
   }
   showStatModal(info);
@@ -536,7 +537,7 @@ async function editPermissions(info) {
           toast(t('fm.permSaved'));
           await loadListing(currentDir);
         } catch (err) {
-          toast(t('fm.saveFailed', { msg: err.message || '' }), 'error');
+          await alertDialog(t('common.saveFailed', { msg: '' }), t('fm.saveFailed', { msg: err.message || '' }));
         }
         resolve();
       }
@@ -575,7 +576,7 @@ async function editOwner(info) {
   try {
     accts = await api.get('/api/files/accounts');
   } catch (err) {
-    toast(t('fm.saveFailed', { msg: err.message || '' }), 'error');
+    await alertDialog(t('common.saveFailed', { msg: '' }), t('fm.saveFailed', { msg: err.message || '' }));
     return;
   }
   const overlay = document.createElement('div');
@@ -621,7 +622,7 @@ async function editOwner(info) {
           finish();
           await loadListing(currentDir);
         } catch (err) {
-          toast(t('fm.saveFailed', { msg: err.message || '' }), 'error');
+          await alertDialog(t('common.saveFailed', { msg: '' }), t('fm.saveFailed', { msg: err.message || '' }));
         }
         resolve();
       }
