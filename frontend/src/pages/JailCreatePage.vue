@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import FilePicker from '../components/ui/FilePicker.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -21,6 +22,19 @@ const form = ref({
 
 const selectedBase = computed(() => bases.value.find((b) => b.name === form.value.base_name));
 const isZfsBase = computed(() => selectedBase.value?.type === 'zfs');
+
+// File picker
+const pickerTarget = ref(null);
+const pickerConfig = ref({ mode: 'dir', accept: [] });
+
+function openPicker(target, mode = 'dir', accept = []) {
+  pickerTarget.value = target;
+  pickerConfig.value = { mode, accept };
+}
+function onPickerSelect(path) {
+  if (pickerTarget.value) form.value[pickerTarget.value] = path;
+  pickerTarget.value = null;
+}
 
 function updateDefaults() {
   const name = form.value.name.trim();
@@ -102,7 +116,10 @@ onMounted(async () => {
       <div v-if="form.location_type === 'directory'" id="cj-dir-fields">
         <div class="form-row">
           <label>{{ t('jails.path') }} <span style="color:var(--danger)">*</span></label>
-          <input type="text" v-model="form.dir_path" :placeholder="form.name ? `/jails/${form.name}` : '/jails/web01'" />
+          <div class="input-with-btn">
+            <input type="text" v-model="form.dir_path" :placeholder="form.name ? `/jails/${form.name}` : '/jails/web01'" />
+            <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('dir_path')"><i class="fa-solid fa-folder-open"></i></button>
+          </div>
         </div>
       </div>
 
@@ -129,14 +146,20 @@ onMounted(async () => {
           </div>
           <div class="form-row">
             <label>{{ t('jails.mountPoint') }}</label>
-            <input type="text" v-model="form.base_path" :placeholder="form.name ? `/jails/${form.name}` : '/jails/web01'" />
+            <div class="input-with-btn">
+              <input type="text" v-model="form.base_path" :placeholder="form.name ? `/jails/${form.name}` : '/jails/web01'" />
+              <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('base_path')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
           </div>
         </div>
 
         <div v-if="selectedBase && !isZfsBase">
           <div class="form-row">
             <label>{{ t('jails.targetLocation') }}</label>
-            <input type="text" v-model="form.sfs_path" :placeholder="form.name ? `/jails/${form.name}` : '/jails/web01'" />
+            <div class="input-with-btn">
+              <input type="text" v-model="form.sfs_path" :placeholder="form.name ? `/jails/${form.name}` : '/jails/web01'" />
+              <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('sfs_path')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
           </div>
         </div>
       </div>
@@ -163,4 +186,13 @@ onMounted(async () => {
       <button type="submit" :disabled="submitting">{{ t('common.confirm') }}</button>
     </div>
   </form>
+
+  <FilePicker
+    v-if="pickerTarget"
+    :mode="pickerConfig.mode"
+    :accept="pickerConfig.accept"
+    :initial-path="form[pickerTarget] || '/'"
+    @select="onPickerSelect"
+    @close="pickerTarget = null"
+  />
 </template>

@@ -3,6 +3,7 @@ import { ref, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
+import FilePicker from '../components/ui/FilePicker.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -41,6 +42,19 @@ const showEditSnap = ref(false);
 const editBase = ref(null);
 const allSnaps = ref([]);
 const editSnapChecked = ref(new Set());
+
+// File picker
+const pickerTarget = ref(null);
+const pickerConfig = ref({ mode: 'dir', accept: [] });
+
+function openPicker(target, mode = 'dir', accept = []) {
+  pickerTarget.value = target;
+  pickerConfig.value = { mode, accept };
+}
+function onPickerSelect(path) {
+  if (pickerTarget.value) form[pickerTarget.value] = path;
+  pickerTarget.value = null;
+}
 
 async function load() {
   if (!bases.value.length) loading.value = true;
@@ -273,7 +287,10 @@ onMounted(load);
         <!-- from-txz: txz path -->
         <div v-if="form.method === 'from-txz'" class="field">
           <label>{{ t('jails.baseTxzFile') }} <span style="color:var(--danger)">*</span></label>
-          <input type="text" v-model="form.txz_path" placeholder="/path/to/base.txz" />
+          <div class="input-with-btn">
+            <input type="text" v-model="form.txz_path" placeholder="/path/to/base.txz" />
+            <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('txz_path', 'file', ['.txz'])"><i class="fa-solid fa-folder-open"></i></button>
+          </div>
         </div>
 
         <!-- download: mirror + version + url -->
@@ -329,11 +346,17 @@ onMounted(load);
         <template v-if="form.method === 'import' && form.type === 'sharedfs'">
           <div class="field">
             <label>{{ t('jails.sharedfsDir') }} <span style="color:var(--danger)">*</span></label>
-            <input type="text" v-model="form.import_sharedfs" placeholder="/usr/jails/sharedfs" />
+            <div class="input-with-btn">
+              <input type="text" v-model="form.import_sharedfs" placeholder="/usr/jails/sharedfs" />
+              <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('import_sharedfs')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
           </div>
           <div class="field">
             <label>{{ t('jails.templateDir') }} <span style="color:var(--danger)">*</span></label>
-            <input type="text" v-model="form.import_template" placeholder="/usr/jails/template" />
+            <div class="input-with-btn">
+              <input type="text" v-model="form.import_template" placeholder="/usr/jails/template" />
+              <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('import_template')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
           </div>
         </template>
 
@@ -353,11 +376,17 @@ onMounted(load);
         <template v-if="(form.method === 'from-txz' || form.method === 'download') && form.type === 'sharedfs'">
           <div class="field">
             <label>{{ t('jails.newSharedfsDir') }} <span style="color:var(--danger)">*</span></label>
-            <input type="text" v-model="form.new_sharedfs" :placeholder="`/usr/jails/sharedfs/${form.name || 'name'}`" />
+            <div class="input-with-btn">
+              <input type="text" v-model="form.new_sharedfs" :placeholder="`/usr/jails/sharedfs/${form.name || 'name'}`" />
+              <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('new_sharedfs')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
           </div>
           <div class="field">
             <label>{{ t('jails.newTemplateDir') }} <span style="color:var(--danger)">*</span></label>
-            <input type="text" v-model="form.new_template" :placeholder="`/usr/jails/template/${form.name || 'name'}`" />
+            <div class="input-with-btn">
+              <input type="text" v-model="form.new_template" :placeholder="`/usr/jails/template/${form.name || 'name'}`" />
+              <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker('new_template')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
           </div>
         </template>
 
@@ -390,4 +419,13 @@ onMounted(load);
       </div>
     </div>
   </div>
+
+  <FilePicker
+    v-if="pickerTarget"
+    :mode="pickerConfig.mode"
+    :accept="pickerConfig.accept"
+    :initial-path="form[pickerTarget] || '/'"
+    @select="onPickerSelect"
+    @close="pickerTarget = null"
+  />
 </template>

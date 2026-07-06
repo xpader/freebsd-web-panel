@@ -523,6 +523,12 @@ export const en = {
     ownerSaved: 'Owner updated',
     saveFailed: 'Save failed: {{msg}}',
   },
+  fp: {
+    selectDir: 'Select Directory',
+    selectFile: 'Select File',
+    empty: 'Nothing to show',
+    browse: 'Browse…',
+  },
   zfs: {
     poolsSubtitle: 'ZFS storage pool status — click a pool name for details',
     noPools: 'No ZFS storage pools',
@@ -1301,6 +1307,12 @@ export const zh = {
     permSaved: '权限已更新',
     ownerSaved: '所有者已更新',
     saveFailed: '保存失败：{{msg}}',
+  },
+  fp: {
+    selectDir: '选择目录',
+    selectFile: '选择文件',
+    empty: '无内容',
+    browse: '浏览…',
   },
   zfs: {
     poolsSubtitle: 'ZFS 存储池状态，点击池名查看详情',

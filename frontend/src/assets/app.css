@@ -564,6 +564,11 @@ tr.row-dim { opacity: 0.55; }
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---- File picker trigger ---- */
+.input-with-btn { display: flex; gap: 6px; align-items: stretch; }
+.input-with-btn input { flex: 1; }
+.fp-trigger { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+
 /* ---- File manager ---- */
 .fm-wrap { display: flex; gap: 16px; height: calc(100vh - 170px); min-height: 420px; }
 .fm-tree {
