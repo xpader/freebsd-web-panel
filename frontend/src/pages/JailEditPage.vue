@@ -316,6 +316,7 @@ onMounted(async () => {
 
     <FilePicker
       v-if="pickerTarget"
+      :mode="pickerTarget === 'mount.fstab' ? 'file' : 'dir'"
       :initial-path="pickerTarget === '__fstab' ? (fstabEditing?.fs_spec || '/') : (form[pickerTarget] || '/')"
       @select="onPickerSelect"
       @close="pickerTarget = null"

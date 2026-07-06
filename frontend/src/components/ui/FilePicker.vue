@@ -1,7 +1,8 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, provide, readonly } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../../lib/api.js';
+import FileTreeNode from './FileTreeNode.vue';
 
 const props = defineProps({
   mode: { type: String, default: 'dir' }, // 'dir' | 'file'
@@ -44,7 +45,7 @@ function extMatch(name) {
 
 function isSelectable(e) {
   if (isDirMode.value) return e.is_dir;
-  return !e.is_dir && extMatch(e.name);
+  return !e.is_dir;
 }
 
 function pathDepth(path) {
@@ -76,14 +77,14 @@ async function toggleExpand(path) {
   else expanded.add(path);
 }
 
-function rowClick(e) {
-  if (!isSelectable(e)) return;
-  selected.value = e.path;
+function selectEntry(entry) {
+  if (!isSelectable(entry)) return;
+  selected.value = entry.path;
 }
 
-function rowDblClick(e) {
-  if (!isDirMode.value && !e.is_dir && extMatch(e.name)) {
-    selected.value = e.path;
+function rowDblClickFile(entry) {
+  if (!isDirMode.value && !entry.is_dir) {
+    selected.value = entry.path;
     doSelect();
   }
 }
@@ -104,7 +105,8 @@ async function ensureAncestors(path) {
 function canConfirm() {
   if (!selected.value) return false;
   if (isDirMode.value) return true;
-  return extMatch(basename(selected.value));
+  const base = basename(selected.value);
+  return extMatch(base);
 }
 
 function doSelect() {
@@ -115,6 +117,15 @@ function doSelect() {
 function onOverlayClick(e) {
   if (e.target === e.currentTarget) emit('close');
 }
+
+// Provide functions for recursive FileTreeNode
+provide('fpExpanded', expanded);
+provide('fpSelected', readonly(selected));
+provide('fpToggleExpand', toggleExpand);
+provide('fpFilteredChildren', filteredChildren);
+provide('fpIsSelectable', isSelectable);
+provide('fpSelectEntry', selectEntry);
+provide('fpFileIcon', fileIcon);
 
 onMounted(async () => {
   loading.value = true;
@@ -146,7 +157,7 @@ onMounted(async () => {
             <div
               :class="['fp-tree-row', { 'fp-active': selected === ROOT, 'fp-selectable': isDirMode }]"
               style="padding-left:6px"
-              @click="isDirMode ? (selected = ROOT) : null"
+              @click="isDirMode ? (selected = ROOT) : toggleExpand(ROOT)"
             >
               <span class="fp-tree-arrow" @click.stop="toggleExpand(ROOT)">
                 <i :class="expanded.has(ROOT) ? 'fa-solid fa-caret-down' : 'fa-solid fa-caret-right'"></i>
@@ -156,87 +167,12 @@ onMounted(async () => {
               </span>
             </div>
             <div v-if="expanded.has(ROOT)" class="fp-tree-children">
-              <template v-for="d in filteredChildren(ROOT)" :key="d.path">
-                <div class="fp-tree-node">
-                  <div
-                    :class="['fp-tree-row', { 'fp-active': selected === d.path, 'fp-selectable': isSelectable(d) }]"
-                    :style="{ paddingLeft: pathDepth(d.path) * 14 + 6 + 'px' }"
-                    @click="rowClick(d)"
-                    @dblclick="rowDblClick(d)"
-                  >
-                    <span class="fp-tree-arrow" @click.stop="toggleExpand(d.path)">
-                      <i v-if="expanded.has(d.path)" class="fa-solid fa-caret-down"></i>
-                      <i v-else class="fa-solid fa-caret-right"></i>
-                    </span>
-                    <span class="fp-tree-name">
-                      <span class="fp-tree-ico"><i :class="fileIcon(d)"></i></span>{{ d.name }}
-                    </span>
-                  </div>
-                  <div v-if="expanded.has(d.path) && treeChildren.has(d.path)" class="fp-tree-children">
-                    <template v-for="c in filteredChildren(d.path)" :key="c.path">
-                      <div class="fp-tree-node">
-                        <div
-                          :class="['fp-tree-row', { 'fp-active': selected === c.path, 'fp-selectable': isSelectable(c) }]"
-                          :style="{ paddingLeft: pathDepth(c.path) * 14 + 6 + 'px' }"
-                          @click="rowClick(c)"
-                          @dblclick="rowDblClick(c)"
-                        >
-                          <span v-if="c.is_dir" class="fp-tree-arrow" @click.stop="toggleExpand(c.path)">
-                            <i v-if="expanded.has(c.path)" class="fa-solid fa-caret-down"></i>
-                            <i v-else class="fa-solid fa-caret-right"></i>
-                          </span>
-                          <span v-else class="fp-tree-arrow fp-tree-arrow-none"></span>
-                          <span class="fp-tree-name">
-                            <span class="fp-tree-ico"><i :class="fileIcon(c)"></i></span>{{ c.name }}
-                          </span>
-                        </div>
-                        <div v-if="c.is_dir && expanded.has(c.path) && treeChildren.has(c.path)" class="fp-tree-children">
-                          <template v-for="gc in filteredChildren(c.path)" :key="gc.path">
-                            <div class="fp-tree-node">
-                              <div
-                                :class="['fp-tree-row', { 'fp-active': selected === gc.path, 'fp-selectable': isSelectable(gc) }]"
-                                :style="{ paddingLeft: pathDepth(gc.path) * 14 + 6 + 'px' }"
-                                @click="rowClick(gc)"
-                                @dblclick="rowDblClick(gc)"
-                              >
-                                <span v-if="gc.is_dir" class="fp-tree-arrow" @click.stop="toggleExpand(gc.path)">
-                                  <i v-if="expanded.has(gc.path)" class="fa-solid fa-caret-down"></i>
-                                  <i v-else class="fa-solid fa-caret-right"></i>
-                                </span>
-                                <span v-else class="fp-tree-arrow fp-tree-arrow-none"></span>
-                                <span class="fp-tree-name">
-                                  <span class="fp-tree-ico"><i :class="fileIcon(gc)"></i></span>{{ gc.name }}
-                                </span>
-                              </div>
-                              <div v-if="gc.is_dir && expanded.has(gc.path) && treeChildren.has(gc.path)" class="fp-tree-children">
-                                <template v-for="ggc in filteredChildren(gc.path)" :key="ggc.path">
-                                  <div class="fp-tree-node">
-                                    <div
-                                      :class="['fp-tree-row', { 'fp-active': selected === ggc.path, 'fp-selectable': isSelectable(ggc) }]"
-                                      :style="{ paddingLeft: pathDepth(ggc.path) * 14 + 6 + 'px' }"
-                                      @click="rowClick(ggc)"
-                                      @dblclick="rowDblClick(ggc)"
-                                    >
-                                      <span v-if="ggc.is_dir" class="fp-tree-arrow" @click.stop="toggleExpand(ggc.path)">
-                                        <i v-if="expanded.has(ggc.path)" class="fa-solid fa-caret-down"></i>
-                                        <i v-else class="fa-solid fa-caret-right"></i>
-                                      </span>
-                                      <span v-else class="fp-tree-arrow fp-tree-arrow-none"></span>
-                                      <span class="fp-tree-name">
-                                        <span class="fp-tree-ico"><i :class="fileIcon(ggc)"></i></span>{{ ggc.name }}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </template>
-                              </div>
-                            </div>
-                          </template>
-                        </div>
-                      </div>
-                    </template>
-                  </div>
-                </div>
-              </template>
+              <FileTreeNode
+                v-for="child in filteredChildren(ROOT)"
+                :key="child.path"
+                :entry="child"
+                :depth="1"
+              />
             </div>
           </div>
         </div>
@@ -259,17 +195,29 @@ onMounted(async () => {
   z-index: 60;
 }
 .fp-modal {
-  max-width: 560px;
   display: flex;
   flex-direction: column;
   max-height: 80vh;
+  min-width: 500px;
+  max-width: 700px;
 }
-.fp-header { margin-bottom: 12px; }
+.fp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
 .fp-selected-path {
-  font-size: 11px;
-  color: var(--accent);
-  margin-top: 4px;
-  word-break: break-all;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  padding: 4px 8px;
+  border-radius: 4px;
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .fp-tree {
   flex: 1;
@@ -277,55 +225,62 @@ onMounted(async () => {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  min-height: 240px;
-  max-height: calc(80vh - 200px);
+  min-height: 200px;
+  max-height: 50vh;
 }
-.fp-tree-body { padding: 6px 0; }
-.fp-tree-node {}
-.fp-tree-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  cursor: default;
+.fp-tree-body {
+  padding: 4px;
 }
-.fp-tree-row:hover { background: var(--bg-elev2); }
-.fp-tree-row.fp-selectable { cursor: pointer; }
-.fp-tree-arrow {
-  width: 14px;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 10px;
-  user-select: none;
-  flex-shrink: 0;
-  cursor: pointer;
+.fp-tree-children {
+  /* no extra indentation; padding is computed per-row */
 }
-.fp-tree-arrow:hover { color: var(--text); }
-.fp-tree-arrow-none { cursor: default; }
-.fp-tree-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-dim);
-  padding: 3px 6px;
-  min-width: 0;
-  flex: 1;
-}
-.fp-tree-row:hover .fp-tree-name { color: var(--text); }
-.fp-tree-row.fp-active .fp-tree-name {
-  color: var(--accent);
-  font-weight: 600;
-}
-.fp-tree-ico { font-size: 13px; opacity: 0.8; }
-.fp-tree-ico i { font-size: 13px; }
-.fp-tree-arrow i { font-size: 11px; }
-
-.fp-filter-hint {
-  font-size: 11px;
-  color: var(--text-dim);
-  padding: 6px 0;
+:deep(.fp-tree-row) {
   display: flex;
   align-items: center;
   gap: 4px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: default;
+  white-space: nowrap;
+  font-size: 13px;
+  transition: background 0.08s;
+}
+:deep(.fp-tree-row:hover) {
+  background: var(--bg-elev);
+}
+:deep(.fp-tree-row.fp-selectable) {
+  cursor: pointer;
+}
+:deep(.fp-tree-row.fp-active) {
+  background: var(--accent);
+  color: #fff;
+}
+:deep(.fp-tree-arrow) {
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+:deep(.fp-tree-arrow-none) {
+  visibility: hidden;
+}
+:deep(.fp-tree-name) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+:deep(.fp-tree-ico) {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.fp-filter-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 </style>
