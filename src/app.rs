@@ -62,7 +62,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/pf", get(handlers::mod_stubs::pf))
         .route("/api/jails", get(handlers::jails::list))
         .route("/api/jails/create", post(handlers::jails::jail_create))
-        .route("/api/jails/{name}", get(handlers::jails::detail).delete(handlers::jails::jail_delete))
+        .route("/api/jails/{name}", get(handlers::jails::detail).delete(handlers::jails::jail_delete).put(handlers::jails::jail_update))
         .route("/api/jails/{name}/start", post(handlers::jails::jail_start))
         .route("/api/jails/{name}/stop", post(handlers::jails::jail_stop))
         .route("/api/jails/bases", get(handlers::jails::base_list).post(handlers::jails::base_import))

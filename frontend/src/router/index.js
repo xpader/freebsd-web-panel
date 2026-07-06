@@ -29,6 +29,7 @@ import BhyvePage from '../pages/BhyvePage.vue';
 import JailsListPage from '../pages/JailsListPage.vue';
 import JailCreatePage from '../pages/JailCreatePage.vue';
 import JailDetailPage from '../pages/JailDetailPage.vue';
+import JailEditPage from '../pages/JailEditPage.vue';
 import JailBasesPage from '../pages/JailBasesPage.vue';
 import ZfsPoolsPage from '../pages/ZfsPoolsPage.vue';
 import ZfsPoolDetailPage from '../pages/ZfsPoolDetailPage.vue';
@@ -71,6 +72,7 @@ const routes = [
       { path: 'jails/running', name: 'jails-list', component: JailsListPage },
       { path: 'jails/create', name: 'jail-create', component: JailCreatePage },
       { path: 'jails/detail/:name', name: 'jail-detail', component: JailDetailPage },
+      { path: 'jails/edit/:name', name: 'jail-edit', component: JailEditPage },
       { path: 'jails/bases', name: 'jail-bases', component: JailBasesPage },
       { path: 'zfs/pools', name: 'zfs-pools', component: ZfsPoolsPage },
       { path: 'zfs/pools/:name', name: 'zfs-pool-detail', component: ZfsPoolDetailPage },

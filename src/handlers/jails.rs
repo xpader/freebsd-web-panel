@@ -48,6 +48,18 @@ const TEMPLATE_EMPTY_DIRS: &[&str] = &["dev", "media", "mnt", "net", "proc", "sh
 
 // ── Running jail list / detail ────────────────────────────────────
 
+/// Read the jail_list from rc.conf (via sysrc) and return as a HashSet of jail names.
+fn read_jail_list() -> std::collections::HashSet<String> {
+    Command::new("/usr/sbin/sysrc")
+        .args(["-n", "jail_list"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().split_whitespace().map(|n| n.to_string()).collect())
+        .unwrap_or_default()
+}
+
 /// Unified jail info struct. Used in all list and detail responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JailInfo {
@@ -60,6 +72,9 @@ pub struct JailInfo {
     pub path: String,
     pub ip4_addr: String,
     pub ip6_addr: String,
+    /// Whether the jail is in rc.conf jail_list (auto-start on boot).
+    #[serde(default)]
+    pub auto_start: bool,
     // ── detail-only fields ──
     /// Config params from jail.conf (merged with globals, variable-substituted).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,13 +108,16 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
 
     if only_running {
         // Fast path: query libjail directly.
+        let auto = read_jail_list();
         let jails: Vec<JailInfo> = jail::list_jails()
             .map_err(ApiError::Internal)?
             .iter()
             .filter_map(|p| {
                 let jid: i32 = p.get("jid")?.parse().ok()?;
+                let name = p.get("name")?.clone();
                 Some(JailInfo {
-                    name: p.get("name")?.clone(),
+                    auto_start: auto.contains(&name),
+                    name,
                     jid,
                     hostname: p.get("host.hostname").cloned().unwrap_or_default(),
                     path: p.get("path").cloned().unwrap_or_default(),
@@ -115,6 +133,7 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
 
     // Default: all jails from jail.conf + running status from libjail.
     let entries = parse_jail_conf()?;
+    let auto = read_jail_list();
 
     let running: HashMap<String, i32> = jail::list_jails()
         .map_err(ApiError::Internal)?
@@ -131,6 +150,7 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
         .map(|pj| {
             let jid = running.get(&pj.name).copied().unwrap_or(0);
             JailInfo {
+                auto_start: auto.contains(&pj.name),
                 hostname: pj.params.get("host.hostname").cloned().unwrap_or_else(|| pj.name.clone()),
                 path: pj.params.get("path").cloned().unwrap_or_default(),
                 ip4_addr: pj.params.get("ip4.addr").cloned().unwrap_or_else(|| pj.params.get("ip4").cloned().unwrap_or_default()),
@@ -288,6 +308,7 @@ pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
 
     // Runtime from libjail (if running).
     let rt_params = jail::get_jail(&name).map_err(ApiError::Internal)?;
+    let auto = read_jail_list();
     let mut runtime = None;
     let mut jid = 0;
 
@@ -306,6 +327,7 @@ pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
     }
 
     Ok(Json(JailInfo {
+        auto_start: auto.contains(&name),
         hostname: pj.params.get("host.hostname").cloned().unwrap_or_else(|| pj.name.clone()),
         path: pj.params.get("path").cloned().unwrap_or_default(),
         ip4_addr: pj.params.get("ip4.addr").cloned().unwrap_or_else(|| pj.params.get("ip4").cloned().unwrap_or_default()),
@@ -1599,6 +1621,197 @@ pub async fn jail_delete(
     );
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Jail editing ──────────────────────────────────────────────────
+
+/// Boolean jail.conf parameters (emitted as `key;` not `key = "value";`).
+const JAIL_BOOL_PARAMS: &[&str] = &[
+    "persist",
+    "mount.devfs",
+    "mount.fdescfs",
+    "mount.procfs",
+    "exec.clean",
+    "vnet",
+];
+
+/// Read-only parameters that cannot be set in jail.conf (filtered out on save).
+const JAIL_READONLY_PARAMS: &[&str] = &[
+    "jid",
+    "dying",
+    "lastjid",
+    "children.cur",
+    "osrelease",
+    "osreldate",
+    "cpuset.id",
+    "ip4.saddrsel",
+    "ip6.saddrsel",
+];
+
+#[derive(Debug, Deserialize)]
+pub struct JailUpdateBody {
+    /// Full parameter map for the jail (key → value).
+    /// Boolean params use "true"/"false".
+    pub params: HashMap<String, String>,
+    /// Whether to add/remove this jail from rc.conf jail_list (auto-start).
+    #[serde(default)]
+    pub auto_start: Option<bool>,
+}
+
+/// Parse only the global parameters (before any jail block) from jail.conf.
+fn parse_global_params() -> HashMap<String, String> {
+    let content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
+    let mut globals: Vec<(String, String)> = Vec::new();
+    let mut in_block_comment = false;
+    let mut in_jail_block = false;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if in_block_comment {
+            if line.contains("*/") { in_block_comment = false; }
+            continue;
+        }
+        if line.starts_with("/*") {
+            if !line.contains("*/") { in_block_comment = true; }
+            continue;
+        }
+        let line = if let Some(pos) = line.find('#') { &line[..pos] } else { line };
+        let line = line.trim();
+        if line.is_empty() { continue; }
+
+        // Once we enter a jail block, stop collecting globals.
+        if line.ends_with('{') {
+            in_jail_block = true;
+            continue;
+        }
+        if line.starts_with('}') {
+            in_jail_block = false;
+            continue;
+        }
+        if in_jail_block { continue; }
+
+        if let Some((k, v)) = parse_param(line) {
+            globals.push((k, v));
+        }
+    }
+
+    // Apply variable substitution with a dummy name for ${name} resolution.
+    let mut map: HashMap<String, String> = globals.into_iter().collect();
+    substitute_vars(&mut map, "");
+    map
+}
+
+/// Generate a jail.conf block from a parameter map.
+/// Parameters whose value matches the global default are skipped.
+fn generate_jail_block_from_params(
+    name: &str,
+    params: &HashMap<String, String>,
+    globals: &HashMap<String, String>,
+) -> String {
+    let mut lines = vec![format!("{name} {{")];
+
+    let mut keys: Vec<&String> = params.keys().collect();
+    keys.sort();
+
+    for key in keys {
+        if JAIL_READONLY_PARAMS.contains(&key.as_str()) {
+            continue;
+        }
+
+        let value = params[key].trim();
+
+        if JAIL_BOOL_PARAMS.contains(&key.as_str()) || key.starts_with("allow.") {
+            // Boolean: skip if global default is also enabled.
+            if value == "true" || value == "1" {
+                let global_val = globals.get(key.as_str());
+                if global_val.map(|v| v == "true" || v == "1").unwrap_or(false) {
+                    continue;
+                }
+                lines.push(format!("    {key};"));
+            }
+            continue;
+        }
+
+        if value.is_empty() {
+            continue;
+        }
+
+        // Skip if value matches the global default.
+        if let Some(global_val) = globals.get(key.as_str()) {
+            if global_val.trim() == value {
+                continue;
+            }
+        }
+
+        lines.push(format!("    {key} = \"{value}\";"));
+    }
+
+    lines.push("}".into());
+    lines.join("\n")
+}
+
+/// Update a jail's configuration in jail.conf.
+pub async fn jail_update(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<JailUpdateBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_jail_name(&name)?;
+
+    let entries = parse_jail_conf().unwrap_or_default();
+    if !entries.iter().any(|e| e.name == name) {
+        return Err(ApiError::NotFound(format!("jail \"{name}\" not found")));
+    }
+
+    backup_jail_conf(&state)?;
+
+    let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
+    let without_old = remove_jail_block(&conf_content, &name);
+    let globals = parse_global_params();
+    let new_block = generate_jail_block_from_params(&name, &body.params, &globals);
+
+    let new_content = if without_old.is_empty() {
+        format!("{new_block}\n")
+    } else {
+        let separator = if without_old.ends_with('\n') { "" } else { "\n" };
+        format!("{without_old}{separator}\n{new_block}\n")
+    };
+
+    write_jail_conf_atomic(&new_content)?;
+
+    // Update rc.conf jail_list if auto_start was provided.
+    if let Some(want_auto) = body.auto_start {
+        let mut list = read_jail_list();
+        let was_in = list.contains(&name);
+        if want_auto && !was_in {
+            list.insert(name.clone());
+            let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
+            let _ = Command::new("/usr/sbin/sysrc")
+                .args([&format!("jail_list={val}")])
+                .output();
+            crate::audit::record(
+                &state, None, "PUT", &format!("/api/jails/{name}"), 200,
+                Some(format!("added {name} to jail_list (auto-start)")),
+            );
+        } else if !want_auto && was_in {
+            list.remove(&name);
+            let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
+            let _ = Command::new("/usr/sbin/sysrc")
+                .args([&format!("jail_list={val}")])
+                .output();
+            crate::audit::record(
+                &state, None, "PUT", &format!("/api/jails/{name}"), 200,
+                Some(format!("removed {name} from jail_list (auto-start)")),
+            );
+        }
+    }
+
+    crate::audit::record(
+        &state, None, "PUT", &format!("/api/jails/{name}"), 200,
+        Some(format!("updated jail {name} configuration")),
+    );
+
+    Ok(Json(serde_json::json!({"name": name})))
 }
 
 /// Parse jail.conf from a string (for backup file parsing).
