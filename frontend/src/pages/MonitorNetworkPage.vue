@@ -13,6 +13,14 @@ const ranges = [
   { val: 604800, label: 'monitor.range7d' },
   { val: 2592000, label: 'monitor.range30d' },
 ];
+const rateBuckets = [
+  { val: 0, label: 'monitor.rawData' },
+  { val: 300, label: '5m' },
+  { val: 600, label: '10m' },
+  { val: 1800, label: '30m' },
+  { val: 3600, label: '1h' },
+  { val: 86400, label: '1d' },
+];
 const buckets = [
   { val: 300, label: '5m' },
   { val: 600, label: '10m' },
@@ -20,12 +28,17 @@ const buckets = [
   { val: 3600, label: '1h' },
   { val: 86400, label: '1d' },
 ];
+const aggMethods = [
+  { val: 'min', label: 'monitor.aggMin' },
+  { val: 'avg', label: 'monitor.aggAvg' },
+  { val: 'max', label: 'monitor.aggMax' },
+];
 
 const msg = ref('');
 const ifaces = ref([]);
 const charts = {};
-// Per-card state: { [chartId]: { range, bucket } }
-const cardState = ref({});
+const rateState = ref({ range: 86400, bucket: 300, agg: 'avg' });
+const trafficState = ref({ range: 86400, bucket: 300 });
 
 const RX_COLOR = '#3b82f6';
 const TX_COLOR = '#f59e0b';
@@ -72,8 +85,7 @@ function ifaceOptions(aggregated) {
   };
 }
 
-async function drawNetCard(iface, chartId, isTraffic) {
-  const state = cardState.value[chartId];
+async function drawNetCard(iface, chartId, isTraffic, state) {
   if (!state) return;
   const now = Math.floor(Date.now() / 1000);
   const from = now - state.range;
@@ -82,7 +94,9 @@ async function drawNetCard(iface, chartId, isTraffic) {
     for (const [dir, color] of [['rx', RX_COLOR], ['tx', TX_COLOR]]) {
       const url = isTraffic
         ? `/api/monitor/aggregate?category=net&name=${iface}.${dir}&from=${from}&to=${now}&bucket=${state.bucket}`
-        : `/api/monitor/series?category=net&name=${iface}.${dir}&from=${from}&to=${now}`;
+        : state.bucket > 0
+          ? `/api/monitor/grouped?category=net&name=${iface}.${dir}&from=${from}&to=${now}&bucket=${state.bucket}&agg=${state.agg}`
+          : `/api/monitor/series?category=net&name=${iface}.${dir}&from=${from}&to=${now}`;
       const res = await api.get(url);
       datasets.push({
         label: dir.toUpperCase(),
@@ -106,16 +120,41 @@ async function drawNetCard(iface, chartId, isTraffic) {
   charts[chartId] = new Chart(canvas, { type: 'line', data: { datasets }, options: ifaceOptions(isTraffic) });
 }
 
-function setRange(chartId, r) {
-  cardState.value[chartId].range = r;
-  const iface = chartId.replace('chart-rate-', '').replace('chart-traffic-', '');
-  drawNetCard(iface, chartId, chartId.includes('traffic'));
+async function drawAllRate() {
+  for (const iface of ifaces.value) {
+    await drawNetCard(iface, `chart-rate-${iface}`, false, rateState.value);
+  }
 }
 
-function setBucket(chartId, b) {
-  cardState.value[chartId].bucket = b;
-  const iface = chartId.replace('chart-traffic-', '');
-  drawNetCard(iface, chartId, true);
+async function drawAllTraffic() {
+  for (const iface of ifaces.value) {
+    await drawNetCard(iface, `chart-traffic-${iface}`, true, trafficState.value);
+  }
+}
+
+function setRateRange(r) {
+  rateState.value.range = r;
+  drawAllRate();
+}
+
+function setRateBucket(b) {
+  rateState.value.bucket = b;
+  drawAllRate();
+}
+
+function setRateAgg(a) {
+  rateState.value.agg = a;
+  if (rateState.value.bucket > 0) drawAllRate();
+}
+
+function setTrafficRange(r) {
+  trafficState.value.range = r;
+  drawAllTraffic();
+}
+
+function setTrafficBucket(b) {
+  trafficState.value.bucket = b;
+  drawAllTraffic();
 }
 
 onMounted(async () => {
@@ -124,18 +163,9 @@ onMounted(async () => {
     msg.value = t('monitor.noNetData');
     return;
   }
-  for (const iface of ifaces.value) {
-    const rateId = `chart-rate-${iface}`;
-    const trafficId = `chart-traffic-${iface}`;
-    cardState.value[rateId] = { range: 86400 };
-    cardState.value[trafficId] = { range: 86400, bucket: 1800 };
-  }
-  // Wait for DOM to render canvas elements, then draw.
   await new Promise((r) => requestAnimationFrame(r));
-  for (const iface of ifaces.value) {
-    drawNetCard(iface, `chart-rate-${iface}`, false);
-    drawNetCard(iface, `chart-traffic-${iface}`, true);
-  }
+  drawAllRate();
+  drawAllTraffic();
 });
 
 onUnmounted(() => {
@@ -153,36 +183,50 @@ onUnmounted(() => {
 
   <template v-else>
     <h3 class="net-section-title">{{ t('monitor.viewRate') }}</h3>
-    <div v-for="iface in ifaces" :key="'rate-'+iface" class="card">
-      <div class="card-title">{{ iface }} — {{ t('monitor.viewRate') }}</div>
-      <div class="toolbar">
-        <div class="time-range">
-          <button v-for="r in ranges" :key="r.val"
-            :class="['btn-secondary', 'btn-sm', { 'active-range': cardState['chart-rate-'+iface]?.range === r.val }]"
-            @click="setRange('chart-rate-'+iface, r.val)"
-          >{{ t(r.label) }}</button>
+    <div class="toolbar">
+      <div class="time-range">
+        <button v-for="r in ranges" :key="r.val"
+          :class="['btn-secondary', 'btn-sm', { 'active-range': rateState.range === r.val }]"
+          @click="setRateRange(r.val)"
+        >{{ t(r.label) }}</button>
+      </div>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <div class="filter-group">
+          <button v-for="b in rateBuckets" :key="b.val"
+            :class="['filter-btn', { active: rateState.bucket === b.val }]"
+            @click="setRateBucket(b.val)"
+          >{{ b.label.includes('.') ? t(b.label) : b.label }}</button>
+        </div>
+        <div class="filter-group" v-if="rateState.bucket > 0">
+          <button v-for="a in aggMethods" :key="a.val"
+            :class="['filter-btn', { active: rateState.agg === a.val }]"
+            @click="setRateAgg(a.val)"
+          >{{ t(a.label) }}</button>
         </div>
       </div>
+    </div>
+    <div v-for="iface in ifaces" :key="'rate-'+iface" class="card">
+      <div class="card-title">{{ iface }} — {{ t('monitor.viewRate') }}</div>
       <canvas :id="'chart-rate-'+iface" height="120"></canvas>
     </div>
 
     <h3 class="net-section-title">{{ t('monitor.viewTraffic') }}</h3>
+    <div class="toolbar">
+      <div class="time-range">
+        <button v-for="r in ranges" :key="r.val"
+          :class="['btn-secondary', 'btn-sm', { 'active-range': trafficState.range === r.val }]"
+          @click="setTrafficRange(r.val)"
+        >{{ t(r.label) }}</button>
+      </div>
+      <div class="filter-group" style="margin-left:auto;">
+        <button v-for="b in buckets" :key="b.val"
+          :class="['filter-btn', { active: trafficState.bucket === b.val }]"
+          @click="setTrafficBucket(b.val)"
+        >{{ b.label }}</button>
+      </div>
+    </div>
     <div v-for="iface in ifaces" :key="'traffic-'+iface" class="card">
       <div class="card-title">{{ iface }} — {{ t('monitor.viewTraffic') }}</div>
-      <div class="toolbar">
-        <div class="time-range">
-          <button v-for="r in ranges" :key="r.val"
-            :class="['btn-secondary', 'btn-sm', { 'active-range': cardState['chart-traffic-'+iface]?.range === r.val }]"
-            @click="setRange('chart-traffic-'+iface, r.val)"
-          >{{ t(r.label) }}</button>
-        </div>
-        <div class="time-range" style="margin-left:auto;">
-          <button v-for="b in buckets" :key="b.val"
-            :class="['btn-secondary', 'btn-sm', { 'active-bucket': cardState['chart-traffic-'+iface]?.bucket === b.val }]"
-            @click="setBucket('chart-traffic-'+iface, b.val)"
-          >{{ b.label }}</button>
-        </div>
-      </div>
       <canvas :id="'chart-traffic-'+iface" height="120"></canvas>
     </div>
   </template>

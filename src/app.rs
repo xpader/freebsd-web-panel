@@ -96,6 +96,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/files/chmod", put(handlers::files::chmod))
         .route("/api/files/chown", put(handlers::files::chown))
         .route("/api/monitor/series", get(crate::monitor::series))
+        .route("/api/monitor/grouped", get(crate::monitor::grouped))
         .route("/api/monitor/aggregate", get(crate::monitor::aggregate))
         .route("/api/monitor/latest", get(crate::monitor::latest))
         // --- pkg (package management) ---

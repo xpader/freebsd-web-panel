@@ -12,7 +12,22 @@ const ranges = [
   { val: 604800, label: 'monitor.range7d' },
   { val: 2592000, label: 'monitor.range30d' },
 ];
+const buckets = [
+  { val: 0, label: 'monitor.rawData' },
+  { val: 300, label: '5m' },
+  { val: 600, label: '10m' },
+  { val: 1800, label: '30m' },
+  { val: 3600, label: '1h' },
+  { val: 86400, label: '1d' },
+];
+const aggMethods = [
+  { val: 'min', label: 'monitor.aggMin' },
+  { val: 'avg', label: 'monitor.aggAvg' },
+  { val: 'max', label: 'monitor.aggMax' },
+];
 const selectedRange = ref(86400);
+const selectedBucket = ref(300);
+const selectedAgg = ref('avg');
 const msg = ref('');
 const charts = {};
 let usageCanvas, bytesCanvas;
@@ -24,7 +39,10 @@ async function drawSeries(canvas, category, nameOrNames, from, to, opts) {
   for (let i = 0; i < names.length; i++) {
     let res;
     try {
-      res = await api.get(`/api/monitor/series?category=${category}&name=${names[i]}&from=${from}&to=${to}`);
+      const url = selectedBucket.value > 0
+        ? `/api/monitor/grouped?category=${category}&name=${names[i]}&from=${from}&to=${to}&bucket=${selectedBucket.value}&agg=${selectedAgg.value}`
+        : `/api/monitor/series?category=${category}&name=${names[i]}&from=${from}&to=${to}`;
+      res = await api.get(url);
     } catch (e) {
       msg.value = t('monitor.queryFailed', { msg: e.message || '' });
       return;
@@ -70,6 +88,16 @@ function setRange(r) {
   drawAll();
 }
 
+function setBucket(b) {
+  selectedBucket.value = b;
+  drawAll();
+}
+
+function setAgg(a) {
+  selectedAgg.value = a;
+  if (selectedBucket.value > 0) drawAll();
+}
+
 onMounted(async () => {
   usageCanvas = document.getElementById('chart-mem-usage');
   bytesCanvas = document.getElementById('chart-mem-bytes');
@@ -92,6 +120,20 @@ onUnmounted(() => {
         :class="['btn-secondary', 'btn-sm', { 'active-range': selectedRange === r.val }]"
         @click="setRange(r.val)"
       >{{ t(r.label) }}</button>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <div class="filter-group">
+        <button v-for="b in buckets" :key="b.val"
+          :class="['filter-btn', { active: selectedBucket === b.val }]"
+          @click="setBucket(b.val)"
+        >{{ b.label.includes('.') ? t(b.label) : b.label }}</button>
+      </div>
+      <div class="filter-group" v-if="selectedBucket > 0">
+        <button v-for="a in aggMethods" :key="a.val"
+          :class="['filter-btn', { active: selectedAgg === a.val }]"
+          @click="setAgg(a.val)"
+        >{{ t(a.label) }}</button>
+      </div>
     </div>
   </div>
   <div class="card">

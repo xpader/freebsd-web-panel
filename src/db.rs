@@ -339,6 +339,40 @@ pub fn query_counter_aggregate(
     Ok(rows)
 }
 
+/// Query instantaneous-value data aggregated into time buckets by the
+/// specified SQL aggregate function (MIN, AVG, or MAX).  Used for
+/// downsampling CPU/memory/net-rate series when the raw point count is
+/// too high for smooth rendering.
+pub fn query_series_grouped(
+    conn: &Connection,
+    category: &str,
+    name: &str,
+    from_ts: i64,
+    to_ts: i64,
+    bucket_sec: i64,
+    agg: &str,
+) -> ApiResult<Vec<(i64, f64)>> {
+    let sql_func = match agg {
+        "min" => "MIN",
+        "max" => "MAX",
+        _ => "AVG",
+    };
+    let sql = format!(
+        "SELECT (ts / ?5) * ?5 AS bucket_ts, {sql_func}(value) \
+         FROM metric_samples \
+         WHERE category = ?1 AND name = ?2 AND ts >= ?3 AND ts <= ?4 \
+         GROUP BY bucket_ts \
+         ORDER BY bucket_ts ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![category, name, from_ts, to_ts, bucket_sec], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Get the most recent sample for each (category, name) in a category.
 pub fn latest_in_category(conn: &Connection, category: &str) -> ApiResult<Vec<MetricSample>> {
     let mut stmt = conn.prepare(

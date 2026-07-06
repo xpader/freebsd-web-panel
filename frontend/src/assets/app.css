@@ -339,6 +339,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .time-range { display: flex; gap: 6px; }
 .active-range, .active-bucket { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
 .card canvas { max-height: 260px; }
+.net-section-title { margin: 24px 0 12px; font-size: 15px; color: var(--text-dim); }
 
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; }

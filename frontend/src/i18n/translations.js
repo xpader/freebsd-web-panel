@@ -282,6 +282,10 @@ export const en = {
     viewRate: 'Rate',
     viewTraffic: 'Traffic',
     noNetData: 'No network data yet, waiting for collector…',
+    rawData: 'Raw',
+    aggMin: 'Min',
+    aggAvg: 'Avg',
+    aggMax: 'Max',
   },
   accounts: {
     usersTitle: 'Users',
@@ -1115,6 +1119,10 @@ export const zh = {
     viewRate: '速率',
     viewTraffic: '流量',
     noNetData: '暂无网络数据，等待采集器运行…',
+    rawData: '原始',
+    aggMin: '最小',
+    aggAvg: '平均',
+    aggMax: '最大',
   },
   accounts: {
     usersTitle: '用户',

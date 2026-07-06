@@ -284,6 +284,40 @@ pub async fn aggregate(
     }))
 }
 
+/// Grouped (downsampled) series for instantaneous-value metrics (CPU,
+/// memory, net-rate).  Aggregates raw samples into fixed-size time
+/// buckets using MIN / AVG / MAX.
+#[derive(Debug, Deserialize)]
+pub struct GroupedQuery {
+    pub category: String,
+    pub name: String,
+    pub from: i64,
+    pub to: i64,
+    pub bucket: i64,  // bucket size in seconds
+    pub agg: String,  // "min", "avg", or "max"
+}
+
+pub async fn grouped(
+    State(state): State<AppState>,
+    Query(q): Query<GroupedQuery>,
+) -> ApiResult<Json<SeriesResponse>> {
+    let conn = state.db.lock().await;
+    let points = db::query_series_grouped(
+        &conn,
+        &q.category,
+        &q.name,
+        q.from,
+        q.to,
+        q.bucket,
+        &q.agg,
+    )?;
+    Ok(Json(SeriesResponse {
+        category: q.category,
+        name: q.name,
+        points,
+    }))
+}
+
 #[derive(Debug, Serialize)]
 pub struct LatestResponse {
     pub cpu: Vec<MetricSample>,

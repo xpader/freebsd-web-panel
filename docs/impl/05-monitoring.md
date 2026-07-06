@@ -32,6 +32,7 @@
 | **load** | `1` / `5` / `15` | load average | `getloadavg(3)` |
 | **temp** | `cpu0..cpuN` | 温度 °C | `dev.cpu.N.temperature`（`CtlValue::Temperature`） |
 | **net** | `{iface}.rx` / `{iface}.tx` | 收发速率 bytes/sec | `netstat` 计数器 delta（见下） |
+| **net_bytes** | `{iface}.rx` / `{iface}.tx` | 每区间收发字节数 | 同上 delta 的原始字节差值（用于流量 SUM 聚合） |
 
 CPU delta 使用 `MONITOR_CPU`（独立的 `LazyLock<Mutex<Option<CpuState>>>`），与仪表盘的 `LAST_CP_TIMES` 隔离。
 
@@ -54,37 +55,13 @@ CPU delta 使用 `MONITOR_CPU`（独立的 `LazyLock<Mutex<Option<CpuState>>>`�
 
 `db::insert_samples(conn, &samples)` — 单事务批量 `INSERT OR REPLACE`，幂等（相同 ts+category+name 覆盖）。
 
-### 查询 API
 
-`GET /api/monitor/series?category=&name=&from=&to=`
-- 返回 `[{ts, value}, ...]` 按时间升序
-- 利用索引 `idx_samples_query (category, name, ts)` 快速范围扫描
 
-`GET /api/monitor/latest`
-- 每个分类返回各 name 的最新采样值
-- 子查询 `SELECT name, MAX(ts) ... GROUP BY name` 再 JOIN
-- 返回 `cpu` / `memory` / `load` / `temp` / `net` 五个分类
 
-### 前端图表 `web/js/pages/monitor.js`
-
-三个页面：
-- **CPU & 负载**（`/monitor`）：CPU 总体使用率 + load average（1/5/15 三线）
-- **内存**（`/monitor/memory`）：使用率 % + 用量字节（used/wired）
-- **温度**（`/monitor/temp`）：各核心温度（多色线，名称从 `/api/monitor/latest` 动态发现）
-- **网络**（`/monitor/network`）：各接口下载速率（RX）+ 上传速率（TX）两张图。接口名从 `latest.net` 动态发现（`*.rx` 后缀剔除后为接口名），多色线区分接口，Y 轴/tooltip 用 `byteRateFormat` 格式化（KB/s·MB/s·GB/s）
-
-**Chart.js 加载**：`loadChartJs()` 动态插入 `<script>` 标签加载 UMD 全局（Chart.js + date-fns 适配器），加载后缓存 Promise。
-
-**时间范围**：按钮组（1h/6h/24h/7d/30d），点击后计算 `from = now - range`，重新查询并重绘。Chart 实例存 `CHARTS` map，切换时 `destroy()` 旧实例。
-
-**图表选项**：时间 X 轴（`type: 'time'`）、深色主题配色、tooltip 回调（字节/速率格式化）、`interaction: { mode: 'nearest', axis: 'x', intersect: false }`（按 X 值最近点贴合，鼠标在图表任意位置都显示 tooltip）。`chartOptions` 根据 `byteFormat` / `byteRateFormat` 选择 tick 与 tooltip 格式化器。
 
 ## API
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/monitor/series?category=&name=&from=&to=` | 时序查询 |
-| GET | `/api/monitor/latest` | 各分类最新值 |
+
 
 ## 配置项
 
@@ -103,6 +80,6 @@ retention_days = 30     # 数据保留天数
 ## 已知限制
 
 - 未采集磁盘 I/O（后续扩展）
-- 无降采样（长期数据 30s 粒度，7 天约 2 万点，前端通过 `pointRadius: 0` 处理密集数据）
+- 降采样为实时 SQL 聚合，无预聚合表（长时间范围 + 大桶时查询仍需扫描全部原始行，但返回点数大幅减少，前端渲染流畅）
 - 无告警规则和通知（设计已完成，待实现）
-- 网络流量仅记录速率（bytes/sec），不存储累计字节；接口增减时历史曲线会断缺
+- 网络流量仅记录每区间字节数（`net_bytes`），接口增减时历史曲线会断缺
