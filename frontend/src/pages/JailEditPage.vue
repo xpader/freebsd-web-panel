@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
 import FilePicker from '../components/ui/FilePicker.vue';
-import Tabs from '../components/ui/Tabs.vue';
+import SectionCard from '../components/ui/SectionCard.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -26,8 +26,59 @@ function openPicker(target) {
   pickerTarget.value = target;
 }
 function onPickerSelect(path) {
-  form.value[pickerTarget.value] = path;
+  if (pickerTarget.value === '__fstab') {
+    fstabEditing.value.fs_spec = path;
+  } else {
+    form.value[pickerTarget.value] = path;
+  }
   pickerTarget.value = null;
+}
+
+// ── Fstab management ──
+const fstabEntries = ref([]);
+const fstabEditing = ref(null);
+const fstabEditingIdx = ref(null);
+const showFstabModal = ref(false);
+const FSTAB_TYPES = ['nullfs', 'tmpfs', 'unionfs'];
+
+async function loadFstab() {
+  try {
+    fstabEntries.value = await api.get(`/api/jails/${encodeURIComponent(name)}/fstab`);
+  } catch {
+    fstabEntries.value = [];
+  }
+}
+
+function fstabAdd() {
+  fstabEditing.value = { fs_spec: '', fs_file: '', fs_vfstype: 'nullfs', fs_mntops: 'rw', fs_freq: '0', fs_passno: '0' };
+  fstabEditingIdx.value = null;
+}
+function fstabEdit(idx) {
+  fstabEditing.value = { ...fstabEntries.value[idx] };
+  fstabEditingIdx.value = idx;
+}
+function fstabDelete(idx) {
+  fstabEntries.value.splice(idx, 1);
+  saveFstab();
+}
+function fstabSaveEntry() {
+  const e = fstabEditing.value;
+  if (!e || !e.fs_spec || !e.fs_file) return;
+  if (fstabEditingIdx.value !== null) {
+    fstabEntries.value[fstabEditingIdx.value] = { ...e };
+  } else {
+    fstabEntries.value.push({ ...e });
+  }
+  fstabEditing.value = null;
+  fstabEditingIdx.value = null;
+  saveFstab();
+}
+async function saveFstab() {
+  try {
+    await api.put(`/api/jails/${encodeURIComponent(name)}/fstab`, { entries: fstabEntries.value });
+  } catch (e) {
+    toast.toast(e.message || t('common.operationFailed'), 'error');
+  }
 }
 
 const JAIL_READONLY = new Set([
@@ -42,7 +93,6 @@ const TABS = [
   { key: 'exec', titleKey: 'jails.editExec' },
   { key: 'mount', titleKey: 'jails.editMount' },
   { key: 'security', titleKey: 'jails.security' },
-  { key: 'permissions', titleKey: 'jails.permissions' },
   { key: 'misc', titleKey: 'jails.editMisc' },
 ];
 const tabItems = computed(() => TABS.map(tab => ({ key: tab.key, label: t(tab.titleKey) })));
@@ -53,6 +103,7 @@ const PARAM_GROUPS = {
     { key: 'host.hostname', type: 'text' },
     { key: 'host.domainname', type: 'text' },
     { key: 'host.hostuuid', type: 'text', descKey: 'jails.descHostuuid' },
+    { key: 'allow.set_hostname', type: 'bool', descKey: 'jails.descAllowSetHostname' },
     { key: '__autoStart', type: 'bool', descKey: 'jails.descAutoStart' },
   ],
   network: [
@@ -70,6 +121,9 @@ const PARAM_GROUPS = {
     ]},
     { key: 'ip6.addr', type: 'text', lockWhenRunning: true, ph: '2001:db8::1' },
     { key: 'vnet', type: 'bool', descKey: 'jails.descVnet', lockWhenRunning: true },
+    { key: 'allow.raw_sockets', type: 'bool', descKey: 'jails.descAllowRawSockets' },
+    { key: 'allow.socket_af', type: 'bool', descKey: 'jails.descAllowSocketAf' },
+    { key: 'allow.reserved_ports', type: 'bool' },
   ],
   exec: [
     { key: 'exec.start', type: 'text', descKey: 'jails.descExecStart', lockWhenRunning: true },
@@ -87,6 +141,13 @@ const PARAM_GROUPS = {
     { key: 'mount.devfs', type: 'bool', descKey: 'jails.descMountDevfs', lockWhenRunning: true },
     { key: 'mount.fdescfs', type: 'bool', lockWhenRunning: true },
     { key: 'mount.procfs', type: 'bool', lockWhenRunning: true },
+    { key: 'allow.mount', type: 'bool' },
+    { key: 'allow.mount.devfs', type: 'bool' },
+    { key: 'allow.mount.fdescfs', type: 'bool' },
+    { key: 'allow.mount.procfs', type: 'bool' },
+    { key: 'allow.mount.nullfs', type: 'bool' },
+    { key: 'allow.mount.zfs', type: 'bool' },
+    { key: 'allow.quotas', type: 'bool' },
   ],
   security: [
     { key: 'securelevel', type: 'text', descKey: 'jails.descSecurelevel', lockWhenRunning: true },
@@ -98,29 +159,16 @@ const PARAM_GROUPS = {
     ]},
     { key: 'devfs_ruleset', type: 'text', descKey: 'jails.descDevfsRuleset', lockWhenRunning: true },
     { key: 'children.max', type: 'text', descKey: 'jails.descChildrenMax', lockWhenRunning: true },
-  ],
-  permissions: [
-    { key: 'allow.set_hostname', type: 'bool', descKey: 'jails.descAllowSetHostname' },
-    { key: 'allow.sysvipc', type: 'bool', descKey: 'jails.descAllowSysvipc' },
-    { key: 'allow.raw_sockets', type: 'bool', descKey: 'jails.descAllowRawSockets' },
-    { key: 'allow.chflags', type: 'bool', descKey: 'jails.descAllowChflags' },
-    { key: 'allow.socket_af', type: 'bool', descKey: 'jails.descAllowSocketAf' },
-    { key: 'allow.mount', type: 'bool' },
-    { key: 'allow.mount.devfs', type: 'bool' },
-    { key: 'allow.mount.fdescfs', type: 'bool' },
-    { key: 'allow.mount.procfs', type: 'bool' },
-    { key: 'allow.mount.nullfs', type: 'bool' },
-    { key: 'allow.mount.zfs', type: 'bool' },
-    { key: 'allow.quotas', type: 'bool' },
-    { key: 'allow.read_conf', type: 'bool' },
-    { key: 'allow.write_conf', type: 'bool' },
     { key: 'allow.suser', type: 'bool', descKey: 'jails.descAllowSuser' },
-    { key: 'allow.reserved_ports', type: 'bool' },
+    { key: 'allow.chflags', type: 'bool', descKey: 'jails.descAllowChflags' },
+    { key: 'allow.sysvipc', type: 'bool', descKey: 'jails.descAllowSysvipc' },
     { key: 'allow.unprivileged_proc_debug', type: 'bool' },
   ],
   misc: [
     { key: 'persist', type: 'bool', descKey: 'jails.descPersist', lockWhenRunning: true },
     { key: 'parent', type: 'text', descKey: 'jails.descParent', lockWhenRunning: true },
+    { key: 'allow.read_conf', type: 'bool' },
+    { key: 'allow.write_conf', type: 'bool' },
   ],
 };
 
@@ -171,6 +219,7 @@ onMounted(async () => {
     jail.value = await api.get(`/api/jails/${encodeURIComponent(name)}`);
     form.value = { ...(jail.value.params || {}) };
     autoStart.value = !!jail.value.auto_start;
+    await loadFstab();
   } catch (err) {
     error.value = err.message || '';
   }
@@ -195,9 +244,12 @@ onMounted(async () => {
     </div>
 
     <form @submit.prevent="onSubmit">
-      <Tabs v-model="activeTab" :tabs="tabItems">
-        <div v-for="p in PARAM_GROUPS[activeTab]" :key="p.key" class="form-row">
-          <label>
+      <SectionCard v-model="activeTab" :tabs="tabItems">
+        <template #default="{ active }">
+        <template v-for="tab in TABS" :key="tab.key">
+        <div v-if="active === tab.key">
+        <div v-for="p in PARAM_GROUPS[tab.key]" :key="p.key" class="form-row">
+          <label class="form-row-label">
             <span class="mono">{{ p.key === '__autoStart' ? t('jails.autoStart') : p.key }}</span>
           </label>
 
@@ -215,26 +267,34 @@ onMounted(async () => {
                 :disabled="isLocked(p)"
                 @change="form[p.key] = $event.target.checked ? 'true' : ''"
               />
-              <span v-if="p.key !== '__autoStart'"></span>
+              <span class="param-desc-inline" v-if="p.descKey">{{ t(p.descKey) }}</span>
             </label>
 
-            <select v-else-if="p.type === 'select'" v-model="form[p.key]" :disabled="isLocked(p)">
-              <option v-for="opt in p.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
+            <div v-else>
+              <select v-if="p.type === 'select'" v-model="form[p.key]" :disabled="isLocked(p)">
+                <option v-for="opt in p.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              </select>
 
-            <div v-else-if="p.picker" class="input-with-btn">
-              <input type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" />
-              <button type="button" class="btn-secondary btn-sm" :disabled="isLocked(p)" @click="openPicker(p.key)">
-                <i class="fa-solid fa-folder-open"></i>
-              </button>
+              <div v-else-if="p.picker" class="input-with-btn">
+                <input type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" />
+                <button type="button" class="btn-secondary btn-sm" :disabled="isLocked(p)" @click="openPicker(p.key)">
+                  <i class="fa-solid fa-folder-open"></i>
+                </button>
+                <button v-if="p.key === 'mount.fstab'" type="button" class="btn-secondary btn-sm" @click="showFstabModal = true">
+                  <i class="fa-solid fa-list"></i> {{ t('jails.fstabManage') }}
+                </button>
+              </div>
+
+              <input v-else type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" />
+
+              <p v-if="p.descKey" class="param-desc">{{ t(p.descKey) }}</p>
             </div>
-
-            <input v-else type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" />
-
-            <p v-if="p.descKey" class="param-desc">{{ t(p.descKey) }}</p>
           </div>
         </div>
-      </Tabs>
+        </div>
+        </template>
+        </template>
+      </SectionCard>
 
       <!-- Extra params not in any group -->
       <div v-if="extraParams.length" class="card">
@@ -255,24 +315,95 @@ onMounted(async () => {
 
     <FilePicker
       v-if="pickerTarget"
-      :initial-path="form[pickerTarget] || '/'"
+      :initial-path="pickerTarget === '__fstab' ? (fstabEditing?.fs_spec || '/') : (form[pickerTarget] || '/')"
       @select="onPickerSelect"
       @close="pickerTarget = null"
     />
+
+    <!-- Fstab management modal -->
+    <div v-if="showFstabModal" class="modal-overlay" @click.self="showFstabModal = false">
+      <div class="modal" style="max-width:640px;">
+        <h3>{{ t('jails.fstabManage') }}</h3>
+        <div v-if="!fstabEntries.length && !fstabEditing" class="text-dim" style="margin-bottom:12px;">{{ t('jails.fstabEmpty') }}</div>
+        <table v-if="fstabEntries.length && !fstabEditing" class="fstab-table" style="margin-bottom:12px;">
+          <thead><tr>
+            <th>{{ t('jails.fstabSource') }}</th>
+            <th>{{ t('jails.fstabTarget') }}</th>
+            <th>{{ t('jails.fstabType') }}</th>
+            <th>{{ t('jails.fstabMode') }}</th>
+            <th>{{ t('common.actions') }}</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="(e, idx) in fstabEntries" :key="idx">
+              <td class="mono">{{ e.fs_spec }}</td>
+              <td class="mono">{{ e.fs_file }}</td>
+              <td class="mono">{{ e.fs_vfstype }}</td>
+              <td class="mono">{{ e.fs_mntops === 'rw' ? t('jails.fstabReadWrite') : t('jails.fstabReadOnly') }}</td>
+              <td>
+                <div class="btn-group">
+                  <button type="button" class="btn-secondary btn-sm" @click="fstabEdit(idx)">{{ t('common.edit') }}</button>
+                  <button type="button" class="btn-danger btn-sm" @click="fstabDelete(idx)">{{ t('common.delete') }}</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Entry editor form (inline within modal) -->
+        <template v-if="fstabEditing">
+          <div class="field">
+            <label>{{ t('jails.fstabSource') }} <span style="color:var(--danger)">*</span></label>
+            <div class="input-with-btn">
+              <input type="text" v-model="fstabEditing.fs_spec" placeholder="/usr/jails/sharedfs" />
+              <button type="button" class="btn-secondary btn-sm" @click="openPicker('__fstab')"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
+          </div>
+          <div class="field">
+            <label>{{ t('jails.fstabTarget') }} <span style="color:var(--danger)">*</span></label>
+            <input type="text" v-model="fstabEditing.fs_file" placeholder="/sharedfs" />
+          </div>
+          <div class="field">
+            <label class="checkbox-label">
+              <input type="checkbox" :checked="fstabEditing.fs_mntops === 'ro'" @change="fstabEditing.fs_mntops = $event.target.checked ? 'ro' : 'rw'" />
+              <span>{{ t('jails.fstabReadOnly') }}</span>
+            </label>
+          </div>
+        </template>
+
+        <div class="modal-actions">
+          <template v-if="fstabEditing">
+            <button type="button" class="btn-secondary" @click="fstabEditing = null">{{ t('common.cancel') }}</button>
+            <button type="button" @click="fstabSaveEntry">{{ t('common.save') }}</button>
+          </template>
+          <template v-else>
+            <button type="button" class="btn-secondary" @click="showFstabModal = false">{{ t('common.close') }}</button>
+            <button type="button" @click="fstabAdd"><i class="fa-solid fa-plus"></i> {{ t('jails.fstabAdd') }}</button>
+          </template>
+        </div>
+      </div>
+    </div>
   </template>
 </template>
 
 <style scoped>
+.form-row-label {
+  padding-top: 8px;
+}
 .param-desc {
   font-size: 12px;
   color: var(--text-dim);
   margin: 4px 0 0 0;
+}
+.param-desc-inline {
+  font-size: 12px;
+  color: var(--text-dim);
 }
 .checkbox-label {
   display: flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
+  padding-top: 8px;
 }
 .lock-disabled {
   opacity: 0.4;
@@ -281,5 +412,24 @@ onMounted(async () => {
 input:disabled, select:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.fstab-section {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+.fstab-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.fstab-table th, .fstab-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  text-align: left;
+}
+.fstab-table th {
+  color: var(--text-dim);
+  font-weight: normal;
 }
 </style>

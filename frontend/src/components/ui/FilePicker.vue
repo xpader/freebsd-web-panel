@@ -131,7 +131,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="modal-overlay" @click="onOverlayClick">
+  <div class="modal-overlay fp-overlay" @click="onOverlayClick">
     <div class="modal fp-modal">
       <div class="fp-header">
         <h3>{{ isDirMode ? t('fp.selectDir') : t('fp.selectFile') }}</h3>
@@ -255,6 +255,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.fp-overlay {
+  z-index: 60;
+}
 .fp-modal {
   max-width: 560px;
   display: flex;

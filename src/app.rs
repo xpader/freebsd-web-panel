@@ -65,6 +65,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/jails/{name}", get(handlers::jails::detail).delete(handlers::jails::jail_delete).put(handlers::jails::jail_update))
         .route("/api/jails/{name}/start", post(handlers::jails::jail_start))
         .route("/api/jails/{name}/stop", post(handlers::jails::jail_stop))
+        .route("/api/jails/{name}/fstab", get(handlers::jails::fstab_list).put(handlers::jails::fstab_update))
         .route("/api/jails/bases", get(handlers::jails::base_list).post(handlers::jails::base_import))
         .route("/api/jails/bases/mirrors", get(handlers::jails::mirror_list))
         .route("/api/jails/bases/snapshots", get(handlers::jails::zfs_snapshot_list))

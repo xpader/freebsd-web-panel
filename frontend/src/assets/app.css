@@ -291,7 +291,7 @@ input[type="checkbox"], input[type="radio"] {
 .form-row {
   display: grid;
   grid-template-columns: 180px 1fr;
-  align-items: center;
+  align-items: start;
   gap: 16px;
   margin-bottom: 16px;
 }

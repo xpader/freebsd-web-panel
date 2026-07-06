@@ -17,7 +17,7 @@ const props = defineProps({
       >{{ tab.label }}</button>
     </div>
     <div class="tab-content">
-      <slot />
+      <slot :active="model" />
     </div>
   </div>
 </template>

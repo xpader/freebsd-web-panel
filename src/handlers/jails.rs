@@ -1221,6 +1221,9 @@ pub struct JailCreateBody {
     pub interface: Option<String>,
     pub ip4: Option<String>,
     pub ip6: Option<String>,
+    /// Add to rc.conf jail_list for auto-start.
+    #[serde(default)]
+    pub auto_start: Option<bool>,
 }
 
 const JAIL_CONF: &str = "/etc/jail.conf";
@@ -1476,6 +1479,16 @@ pub async fn jail_create(
 
     write_jail_conf_atomic(&new_content)?;
 
+    // Add to rc.conf jail_list if auto_start is requested.
+    if body.auto_start.unwrap_or(false) {
+        let mut list = read_jail_list();
+        list.insert(body.name.clone());
+        let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
+        let _ = Command::new("/usr/sbin/sysrc")
+            .args([&format!("jail_list={val}")])
+            .output();
+    }
+
     crate::audit::record(
         &state, None, "POST", "/api/jails/create", 201,
         Some(format!("created jail {} at {}", body.name, jail_path)),
@@ -1492,6 +1505,95 @@ pub async fn jail_create(
 }
 
 // ── Jail lifecycle control (start/stop/delete) ────────────────────
+
+// ── Jail fstab management ─────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FstabEntry {
+    pub fs_spec: String,
+    pub fs_file: String,
+    pub fs_vfstype: String,
+    pub fs_mntops: String,
+    pub fs_freq: String,
+    pub fs_passno: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FstabUpdateBody {
+    pub entries: Vec<FstabEntry>,
+}
+
+/// Resolve the fstab file path for a jail from its jail.conf params.
+fn resolve_fstab_path(_state: &AppState, name: &str) -> ApiResult<Option<PathBuf>> {
+    let entries = parse_jail_conf().unwrap_or_default();
+    let jail_entry = entries.iter().find(|e| e.name == name);
+    let fstab_param = jail_entry.and_then(|e| e.params.get("mount.fstab")).cloned();
+    Ok(fstab_param.map(PathBuf::from))
+}
+
+/// GET /api/jails/{name}/fstab — list fstab entries.
+pub async fn fstab_list(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Vec<FstabEntry>>> {
+    validate_jail_name(&name)?;
+    let fstab_path = resolve_fstab_path(&state, &name)?;
+    let entries = match fstab_path {
+        Some(path) if path.exists() => parse_fstab(&fs::read_to_string(&path)?),
+        _ => Vec::new(),
+    };
+    Ok(Json(entries))
+}
+
+/// PUT /api/jails/{name}/fstab — replace all fstab entries.
+pub async fn fstab_update(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<FstabUpdateBody>,
+) -> ApiResult<Json<Vec<FstabEntry>>> {
+    validate_jail_name(&name)?;
+    let fstab_path = resolve_fstab_path(&state, &name)?
+        .ok_or_else(|| ApiError::BadRequest("jail has no mount.fstab configured".into()))?;
+
+    if let Some(parent) = fstab_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let content = body.entries.iter()
+        .map(|e| format!("{}\t{}\t{}\t{}\t{}\t{}", e.fs_spec, e.fs_file, e.fs_vfstype, e.fs_mntops, e.fs_freq, e.fs_passno))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.is_empty() { String::new() } else { format!("{content}\n") };
+
+    fs::write(&fstab_path, &content)?;
+
+    crate::audit::record(
+        &state, None, "PUT", &format!("/api/jails/{name}/fstab"), 200,
+        Some(format!("updated fstab for jail {name} ({} entries)", body.entries.len())),
+    );
+
+    Ok(Json(body.entries))
+}
+
+/// Parse an fstab file content into structured entries.
+fn parse_fstab(content: &str) -> Vec<FstabEntry> {
+    content.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 4 { return None; }
+            Some(FstabEntry {
+                fs_spec: parts[0].to_string(),
+                fs_file: parts[1].to_string(),
+                fs_vfstype: parts[2].to_string(),
+                fs_mntops: parts[3].to_string(),
+                fs_freq: parts.get(4).unwrap_or(&"0").to_string(),
+                fs_passno: parts.get(5).unwrap_or(&"0").to_string(),
+            })
+        })
+        .collect()
+}
 
 /// Start a jail.
 pub async fn jail_start(

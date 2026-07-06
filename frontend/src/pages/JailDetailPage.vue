@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import Tabs from '../components/ui/Tabs.vue';
+import SectionCard from '../components/ui/SectionCard.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -43,7 +43,7 @@ const tabItems = computed(() => {
     { key: 'network', label: t('common.network') },
     { key: 'exec', label: t('jails.editExec') },
     { key: 'security', label: t('jails.security') },
-    { key: 'permissions', label: t('jails.permissions') },
+    { key: 'permissions', label: t('common.permissions') },
     { key: 'all', label: t('jails.allParams') },
   ];
   if (rt.value) tabs.splice(4, 0, { key: 'runtime', label: t('jails.runtimeInfo') });
@@ -93,9 +93,10 @@ onMounted(async () => {
       </div>
     </div>
 
-    <Tabs v-model="activeTab" :tabs="tabItems">
+    <SectionCard v-model="activeTab" :tabs="tabItems">
+      <template #default="{ active }">
       <!-- Overview -->
-      <table v-if="activeTab === 'overview'" class="kv-table">
+      <table v-if="active === 'overview'" class="kv-table">
         <tbody>
         <tr><td class="mono text-dim">{{ t('jails.autoStart') }}</td><td>
           <i v-if="d.auto_start" class="fa-solid fa-check" style="color: var(--success);"></i>
@@ -114,7 +115,7 @@ onMounted(async () => {
       </table>
 
       <!-- Network -->
-      <table v-else-if="activeTab === 'network'" class="kv-table">
+      <table v-else-if="active === 'network'" class="kv-table">
         <tbody>
         <tr><td class="mono text-dim">interface</td><td class="mono">{{ merged.interface || '—' }}</td></tr>
         <tr><td class="mono text-dim">ip4</td><td class="mono">{{ merged.ip4 || '—' }}</td></tr>
@@ -126,7 +127,7 @@ onMounted(async () => {
       </table>
 
       <!-- Execution -->
-      <table v-else-if="activeTab === 'exec'" class="kv-table">
+      <table v-else-if="active === 'exec'" class="kv-table">
         <tbody>
         <tr><td class="mono text-dim">exec.start</td><td class="mono">{{ merged['exec.start'] || '—' }}</td></tr>
         <tr><td class="mono text-dim">exec.stop</td><td class="mono">{{ merged['exec.stop'] || '—' }}</td></tr>
@@ -141,7 +142,7 @@ onMounted(async () => {
       </table>
 
       <!-- Security -->
-      <table v-else-if="activeTab === 'security'" class="kv-table">
+      <table v-else-if="active === 'security'" class="kv-table">
         <tbody>
         <tr><td class="mono text-dim">securelevel</td><td class="mono">{{ merged.securelevel || '—' }}</td></tr>
         <tr><td class="mono text-dim">enforce_statfs</td><td class="mono">{{ merged.enforce_statfs || '—' }}</td></tr>
@@ -152,7 +153,7 @@ onMounted(async () => {
       </table>
 
       <!-- Runtime -->
-      <table v-else-if="activeTab === 'runtime'" class="kv-table">
+      <table v-else-if="active === 'runtime'" class="kv-table">
         <tbody>
         <tr><td class="mono text-dim">jid</td><td class="mono">{{ d.jid }}</td></tr>
         <tr><td class="mono text-dim">osrelease</td><td class="mono">{{ merged.osrelease || '—' }}</td></tr>
@@ -165,18 +166,19 @@ onMounted(async () => {
       </table>
 
       <!-- Permissions -->
-      <div v-else-if="activeTab === 'permissions'" class="perm-grid">
+      <div v-else-if="active === 'permissions'" class="perm-grid">
         <span v-for="[k, v] in allowEntries" :key="k" :class="['badge', (v === 'true' || v === '1') ? 'badge-success' : 'badge-dim']">{{ k.replace(/^allow\./, '') }}</span>
       </div>
 
       <!-- All params -->
-      <table v-else-if="activeTab === 'all'" class="kv-table">
+      <table v-else-if="active === 'all'" class="kv-table">
         <tbody>
         <tr v-for="[k, v] in otherEntries" :key="k">
           <td class="mono text-dim">{{ k }}</td><td class="mono">{{ v || '—' }}</td>
         </tr>
         </tbody>
       </table>
-    </Tabs>
+      </template>
+    </SectionCard>
   </template>
 </template>
