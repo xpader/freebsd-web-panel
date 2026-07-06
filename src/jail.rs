@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
+use std::process::{Command, Stdio};
 
 use libc::{c_char, c_int, c_uint, size_t};
 
@@ -235,35 +236,36 @@ pub fn get_jail(name: &str) -> Result<Option<HashMap<String, String>>, String> {
 /// `jail(8)` command. libjail's `jailparam_set` requires assembling all
 /// parameters manually, but `jail -c` handles fstab, exec.start, mount.devfs,
 /// and global defaults automatically.
+///
+/// Uses `status()` (not `output()`) to avoid pipe FD inheritance: `jail -c`
+/// runs `exec.start` which may spawn long-running children (e.g. ElasticSearch)
+/// that would inherit and keep open stdout/stderr pipes, causing `output()`
+/// to block forever waiting for EOF.
 pub fn start_jail(name: &str) -> Result<(), String> {
-    let output = std::process::Command::new("/usr/sbin/jail")
+    let status = Command::new("/usr/sbin/jail")
         .args(["-q", "-c", name])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
         .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            errmsg()
-        } else {
-            stderr
-        });
+    if !status.success() {
+        return Err(format!("jail -c {name} failed (exit status {})", status));
     }
     Ok(())
 }
 
 /// Stop a running jail using `jail -r`.
 pub fn stop_jail(name: &str) -> Result<(), String> {
-    let output = std::process::Command::new("/usr/sbin/jail")
+    let status = Command::new("/usr/sbin/jail")
         .args(["-q", "-r", name])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
         .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            errmsg()
-        } else {
-            stderr
-        });
+    if !status.success() {
+        return Err(format!("jail -r {name} failed (exit status {})", status));
     }
     Ok(())
 }
