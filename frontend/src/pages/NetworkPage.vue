@@ -120,6 +120,10 @@ onMounted(load);
               <span v-if="!iface.ipv4.length" class="text-dim">—</span>
             </span></div>
             <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">{{ iface.mac || '—' }}</span></div>
+            <div v-if="iface.groups.length" class="kv"><span class="kv-key">{{ t('net.groups') }}</span><span class="kv-val"><span v-for="g in iface.groups" :key="g" class="badge badge-dim">{{ g }}</span></span></div>
+          </div>
+          <div class="net-iface-footer">
+            <button class="btn-secondary btn-sm" @click="showDetail(iface)">{{ t('net.detail') }}</button>
           </div>
         </div>
       </div>
@@ -174,7 +178,7 @@ onMounted(load);
 
   <!-- Detail modal -->
   <div v-if="detailIface" class="modal-overlay">
-    <div class="modal" style="max-width:600px;">
+    <div class="modal" style="max-width:760px;">
       <h3>{{ detailIface.name }} — {{ t('net.interfaceInfo') }}</h3>
       <div class="kv-grid">
         <div class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val">{{ detailIface.is_up ? t('net.linkUp') : t('net.linkDown') }} ({{ detailIface.link_state }})</span></div>
@@ -182,6 +186,7 @@ onMounted(load);
         <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">{{ detailIface.mac || '—' }}</span></div>
         <div class="kv"><span class="kv-key">MTU</span><span class="kv-val">{{ detailIface.mtu }}</span></div>
         <div class="kv"><span class="kv-key">Metric</span><span class="kv-val">{{ detailIface.metric }}</span></div>
+        <div v-if="detailIface.groups.length" class="kv"><span class="kv-key">{{ t('net.groups') }}</span><span class="kv-val"><span v-for="g in detailIface.groups" :key="g" class="badge badge-dim">{{ g }}</span></span></div>
       </div>
       <div v-if="detailIface.ipv4.length" style="margin-top:1rem;">
         <h4>IPv4</h4>

@@ -1076,7 +1076,7 @@ mod tests {
         // At least one interface should have groups.
         assert!(
             ifaces.iter().any(|i| !i.groups.is_empty()),
-            "at least one interface should have groups"
+            "at least one interface should have groups, got: {ifaces:?}"
         );
     }
 

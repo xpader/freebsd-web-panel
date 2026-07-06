@@ -120,10 +120,10 @@ export function groupOfPath(path) {
 
 function pathBelongsToGroup(path, items) {
   for (const item of items) {
-    if (path === item.path) return true;
+    if (path === item.path || path.startsWith(item.path + '/')) return true;
     if (item.children) {
       for (const child of item.children) {
-        if (path === child.path) return true;
+        if (path === child.path || path.startsWith(child.path + '/')) return true;
       }
     }
   }

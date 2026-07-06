@@ -455,6 +455,7 @@ tr.row-clickable { cursor: pointer; }
 .badge-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
 .badge-warn { background: rgba(245, 158, 11, 0.15); color: var(--warn); }
 .badge-dim { background: var(--bg-elev2); color: var(--text-dim); }
+.kv-val .badge + .badge { margin-left: 6px; }
 
 /* ---- UUID tooltip ---- */
 .uuid-tip { position: relative; cursor: pointer; border-bottom: 1px dashed var(--text-dim); user-select: none; }
