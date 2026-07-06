@@ -131,6 +131,7 @@ onMounted(load);
                 <button class="btn-secondary btn-sm" :disabled="jailState(j.name, j.jid > 0) === 'running'" @click="jailAction(j.name, 'start')">{{ t('jails.start') }}</button>
                 <button class="btn-secondary btn-sm" :disabled="jailState(j.name, j.jid > 0) !== 'running'" @click="jailAction(j.name, 'stop')">{{ t('jails.stop') }}</button>
               </template>
+              <a v-if="j.jid > 0" :href="`#/jails/terminal/${j.name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('term.openTerminal') }}</a>
               <button class="btn-danger btn-sm" @click="jailDelete(j.name)">{{ t('common.delete') }}</button>
             </div>
           </td>

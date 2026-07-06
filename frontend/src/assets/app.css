@@ -312,7 +312,7 @@ input[type="checkbox"], input[type="radio"] {
 }
 .btn-loading { pointer-events: none; opacity: 0.6; }
 
-button, .btn {
+button, .btn, .btn-secondary, .btn-danger {
   display: inline-flex;
   align-items: center;
   gap: 6px;

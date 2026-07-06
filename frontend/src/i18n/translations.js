@@ -240,6 +240,8 @@ export const en = {
   },
   term: {
     title: 'Shell',
+    jailTitle: 'Jail Terminal',
+    openTerminal: 'Terminal',
     reconnect: 'Reconnect',
     connected: 'Connected',
     disconnected: 'Disconnected',
@@ -1071,6 +1073,8 @@ export const zh = {
   },
   term: {
     title: '终端',
+    jailTitle: '容器终端',
+    openTerminal: '终端',
     reconnect: '重新连接',
     connected: '已连接',
     disconnected: '已断开',

@@ -72,7 +72,10 @@ onMounted(async () => {
       <h1>{{ name }}</h1>
     </div>
     <div class="flex">
-      <a :href="`#/jails/edit/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-pen-to-square"></i> {{ t('common.edit') }}</a>
+      <div class="btn-group">
+        <a v-if="running" :href="`#/jails/terminal/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('term.openTerminal') }}</a>
+        <a :href="`#/jails/edit/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-pen-to-square"></i> {{ t('common.edit') }}</a>
+      </div>
     </div>
   </div>
 

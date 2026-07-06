@@ -17,15 +17,25 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use crate::auth::{AuthUser, validate_token};
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
+/// What process the terminal session runs.
+enum SpawnTarget {
+    /// A login shell on the host.
+    Host,
+    /// `jexec <name> login -f root` — a root login inside a running jail.
+    Jail { name: String },
+}
+
 #[derive(Deserialize)]
 pub struct TermParams {
     token: String,
+    #[serde(default)]
+    jail: Option<String>,
 }
 
 /// WebSocket upgrade handler. Validates the query-param token, records an audit
@@ -36,15 +46,42 @@ pub async fn ws_handler(
     Query(params): Query<TermParams>,
 ) -> ApiResult<impl IntoResponse> {
     let user = authenticate(&state, &params.token).await?;
-    crate::audit::record(
-        &state,
-        Some(&user.username),
-        "GET",
-        "/api/term/ws",
-        200,
-        Some("terminal session opened".to_string()),
-    );
-    Ok(ws.on_upgrade(move |socket| run_session(socket, user)))
+    let target = match params.jail.as_deref() {
+        Some(name) => {
+            if !valid_jail_name(name) {
+                return Err(ApiError::BadRequest("invalid jail name".into()));
+            }
+            if !crate::jail::is_jail_running(name) {
+                return Err(ApiError::BadRequest(format!(
+                    "jail {name} is not running"
+                )));
+            }
+            let msg = format!("terminal session opened for jail {name}");
+            crate::audit::record(
+                &state,
+                Some(&user.username),
+                "GET",
+                "/api/term/ws",
+                200,
+                Some(msg),
+            );
+            SpawnTarget::Jail {
+                name: name.to_string(),
+            }
+        }
+        None => {
+            crate::audit::record(
+                &state,
+                Some(&user.username),
+                "GET",
+                "/api/term/ws",
+                200,
+                Some("terminal session opened".to_string()),
+            );
+            SpawnTarget::Host
+        }
+    };
+    Ok(ws.on_upgrade(move |socket| run_session(socket, user, target)))
 }
 
 async fn authenticate(state: &AppState, token: &str) -> ApiResult<AuthUser> {
@@ -53,8 +90,8 @@ async fn authenticate(state: &AppState, token: &str) -> ApiResult<AuthUser> {
 
 /// Drive one terminal session: spawn the PTY shell, then pump bytes between the
 /// WebSocket and the PTY master until either side closes.
-async fn run_session(mut socket: WebSocket, user: AuthUser) {
-    let (master, _slave_path, shell) = match setup_pty_shell() {
+async fn run_session(mut socket: WebSocket, user: AuthUser, target: SpawnTarget) {
+    let (master, _slave_path, shell) = match setup_pty(&target) {
         Ok(v) => v,
         Err(e) => {
             send_text(&mut socket, "error", &e).await;
@@ -185,26 +222,48 @@ struct Shell {
     _shell: CString, // kept to avoid early drop of the path string
 }
 
-/// Allocate a PTY, fork+exec a login shell, and return the master fd + child pid.
-fn setup_pty_shell() -> Result<(libc::c_int, CString, Shell), String> {
+/// Allocate a PTY, fork+exec the shell/login process, and return the master fd + child pid.
+fn setup_pty(target: &SpawnTarget) -> Result<(libc::c_int, CString, Shell), String> {
     let (master, slave_path) = open_pty().map_err(|e| format!("openpty: {e}"))?;
-    let user_info = current_user_info();
-    let shell_cstr = user_info.shell.clone();
-    let home_cstr = user_info.home.clone();
-    let basename = shell_cstr
-        .to_str()
-        .unwrap_or("/bin/sh")
-        .rsplit('/')
-        .next()
-        .unwrap_or("sh");
-    // argv[0] with a leading '-' requests login-shell behaviour.
-    let argv0 = CString::new(format!("-{basename}")).unwrap();
-    let envp = build_env(&user_info);
+    let (exec_path, argv, cwd, envp) = match target {
+        SpawnTarget::Host => {
+            let user_info = current_user_info();
+            let shell_cstr = user_info.shell.clone();
+            let home_cstr = user_info.home.clone();
+            let basename = shell_cstr
+                .to_str()
+                .unwrap_or("/bin/sh")
+                .rsplit('/')
+                .next()
+                .unwrap_or("sh");
+            // argv[0] with a leading '-' requests login-shell behaviour.
+            let argv0 = CString::new(format!("-{basename}")).unwrap();
+            let envp = build_env(&user_info);
+            (shell_cstr, vec![argv0], home_cstr, envp)
+        }
+        SpawnTarget::Jail { name } => {
+            // exec /usr/sbin/jexec <name> login -f root
+            let exec_path = CString::new("/usr/sbin/jexec").unwrap();
+            let argv = vec![
+                CString::new("jexec").unwrap(),
+                CString::new(name.as_str()).unwrap(),
+                CString::new("login").unwrap(),
+                CString::new("-f").unwrap(),
+                CString::new("root").unwrap(),
+            ];
+            let cwd = CString::new("/").unwrap();
+            let envp = build_jail_env();
+            (exec_path, argv, cwd, envp)
+        }
+    };
 
-    let pid = spawn_shell(master, &slave_path, &shell_cstr, &home_cstr, &argv0, &envp)
+    let pid = spawn_shell(master, &slave_path, &cwd, &exec_path, &argv, &envp)
         .map_err(|e| format!("spawn: {e}"))?;
 
-    let shell = Shell { pid, _shell: shell_cstr };
+    let shell = Shell {
+        pid,
+        _shell: exec_path,
+    };
     Ok((master, slave_path, shell))
 }
 
@@ -237,18 +296,19 @@ fn open_pty() -> std::io::Result<(libc::c_int, CString)> {
 }
 
 /// fork+exec: the child becomes a session leader, opens the slave as its
-/// controlling tty, wires stdio to it, then execs the shell. The parent returns
+/// controlling tty, wires stdio to it, then execs the process. The parent returns
 /// the child pid. Only async-signal-safe calls happen between fork and exec.
 fn spawn_shell(
     master: libc::c_int,
     slave_path: &CStr,
-    shell: &CStr,
-    home: &CStr,
-    argv0: &CStr,
+    cwd: &CStr,
+    exec_path: &CStr,
+    argv: &[CString],
     envp: &[CString],
 ) -> std::io::Result<libc::pid_t> {
     // Pre-build the NULL-terminated argv/envp pointer arrays before forking.
-    let argv: [*const libc::c_char; 2] = [argv0.as_ptr(), std::ptr::null()];
+    let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|s| s.as_ptr()).collect();
+    argv_ptrs.push(std::ptr::null());
     let mut env_ptrs: Vec<*const libc::c_char> = envp.iter().map(|s| s.as_ptr()).collect();
     env_ptrs.push(std::ptr::null());
 
@@ -273,9 +333,8 @@ fn spawn_shell(
                 libc::close(slave);
             }
             libc::close(master);
-            // Start in the user's home directory, like an ssh login.
-            libc::chdir(home.as_ptr());
-            libc::execve(shell.as_ptr(), argv.as_ptr(), env_ptrs.as_ptr());
+            libc::chdir(cwd.as_ptr());
+            libc::execve(exec_path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
             // exec failed
             libc::_exit(127);
         }
@@ -364,6 +423,23 @@ fn build_env(user: &UserInfo) -> Vec<CString> {
         }
     }
     out
+}
+
+/// Minimal environment for a jail login session — `login -f root` inside the
+/// jail sets up HOME/USER/PATH from the jail's passwd database; we only need to
+/// pass TERM so full-screen programs know the terminal type.
+fn build_jail_env() -> Vec<CString> {
+    vec![CString::new("TERM=xterm-256color").unwrap()]
+}
+
+/// Validate a jail name before it is used as a jexec argument. Same rules as the
+/// jail handlers: ASCII alphanumeric plus `_`, `.`, `-`.
+fn valid_jail_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 256
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
 }
 
 /// Update the PTY window size; the kernel forwards SIGWINCH to the shell.
