@@ -33,7 +33,7 @@ export function fmtUptime(s) {
 export function fmtTime(ts) {
   if (!ts) return '—';
   const locale = i18n.global.locale.value === 'zh' ? 'zh-CN' : 'en-US';
-  return new Date(ts * 1000).toLocaleString(locale);
+  return new Date(ts * 1000).toLocaleString(locale, { hour12: false });
 }
 
 export function fmtDate(ts) {
