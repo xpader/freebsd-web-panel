@@ -11,16 +11,23 @@ AI 编码代理在 FreeBSD Web Panel（`fwp`）项目上工作时的指引。
 ## 技术栈
 
 - **后端**：Rust 2021 edition（MSRV 1.74）、Axum 0.8、tokio、rusqlite（bundled SQLite）、argon2（密码哈希）、rust-embed（通过 `embed-web` 默认 feature 将 Web 资源嵌入二进制）。
-- **前端**：原生 JS ES Modules，手写深色主题 CSS。**无构建步骤、无框架**（刻意为之——保持简单，便于单二进制部署）。
+- **前端**：Vue 3（Composition API + `<script setup>`）+ Vite 构建。Vue Router（hash 路由）、Pinia（状态管理）、vue-i18n（国际化）。手写深色主题 CSS 保持不变。Vite 构建输出到 `web/`，由 rust-embed 内嵌。
 - **配置**：TOML 格式，位于 `/usr/local/etc/fwp.toml`（首次运行自动生成默认配置）。数据位于 `/var/db/fwp/`。
 
 ## 构建与运行
 
 ```sh
+# 前端构建（首次或前端改动后）
+cd frontend && npm install && npm run build   # 输出到 ../web/
+
+# 后端构建
 cargo build                  # debug 构建
 cargo build --release        # release 构建（LTO、strip）
 cargo run -- --config /path/to/fwp.toml   # 用指定配置运行
 cargo run -- --config fwp.toml            # 开发配置（见下）
+
+# 前端开发模式（热更新，代理 /api 到后端）
+cd frontend && npm run dev   # Vite dev server on :5173
 ```
 
 ### 开发配置（本地测试用）
@@ -39,15 +46,15 @@ audit = "/tmp/fwp-test/audit.log"
 session_ttl = 28800
 ```
 
-服务器解析静态资源时先尝试磁盘 `web_root`，再回退到内嵌资源。开发时把 `web_root` 设为仓库的 `web/` 目录，这样改前端无需重新编译。生产环境内嵌资源可从任意工作目录运行。
+服务器解析静态资源时先尝试磁盘 `web_root`，再回退到内嵌资源。开发时可用 `npm run dev` 启动 Vite 开发服务器（热更新），或构建后用 `web_root` 指向 `web/`。生产环境内嵌资源可从任意工作目录运行。
 
-### JS 检查
+### 前端检查
 
 ```sh
-node --check web/js/main.js              # 语法检查前端模块
+cd frontend && npm run build   # Vite 构建（含类型检查 + 打包）
 ```
 
-未配置 linter/构建工具——保持 JS 为可通过 `node --check` 的合法 ES module。
+前端源码在 `frontend/src/`，使用 Vue 3 SFC（`.vue` 文件）。详见 `docs/impl/06-frontend.md`。
 
 ## 代码结构
 
@@ -71,25 +78,24 @@ src/
     ├── audit.rs      # 审计日志读取
     └── mod_stubs.rs  # 未实现模块的占位 handler（返回 "planned"）
 
-web/
-├── index.html        # SPA 入口
-├── css/app.css       # 全部样式（深色主题、顶部栏+侧边栏布局、指标进度条）
-└── js/
-    ├── main.js       # 应用入口、路由注册、登出 handler
-    ├── router.js     # 基于 hash 的路由
-    ├── api.js        # fetch 封装（auth header + token + 错误处理）
-    ├── ui/
-    │   ├── layout.js     # 两级导航：顶部栏（主菜单）+ 侧边栏（子菜单）
-    │   ├── confirm.js    # 基于 Promise 的确认对话框
-    │   └── toast.js      # 通知
-    └── pages/
-        ├── audit.js      # 审计日志查看
-        ├── monitor.js    # 监控图表（Chart.js 折线图 + 时间范围）
-        └── planned.js    # 模块占位页工厂
+frontend/                   # Vue 3 + Vite 前端源码
+├── src/
+│   ├── main.js           # Vue 应用启动（Pinia + Router + i18n）
+│   ├── App.vue           # 根组件
+│   ├── assets/app.css    # 全部样式（深色主题，迁移自原项目）
+│   ├── lib/              # API 客户端、格式化工具、菜单配置、Chart.js 工具
+│   ├── i18n/             # vue-i18n 初始化 + 翻译资源
+│   ├── router/           # Vue Router 配置 + 认证守卫
+│   ├── stores/           # Pinia stores（auth、ui dialogs）
+│   ├── composables/      # useToast/useConfirm/useAlert/useFormModal
+│   ├── components/       # 布局组件（TopBar、SideBar）+ UI 组件（Toast、Dialog）
+│   └── pages/            # 各功能页面（35 个 .vue 组件）
+├── public/               # 静态资源（img、fontawesome）
+└── vite.config.js        # Vite 配置（outDir=../web）
 
-vendor/                   # 第三方库本地副本
-├── chart.umd.min.js              # Chart.js 4.4.7
-└── chartjs-adapter-date-fns.bundle.min.js  # Chart.js 时间轴适配器
+web/                       # Vite 构建输出（rust-embed 内嵌目标）
+├── index.html            # 自动生成
+├── assets/               # 打包后的 JS/CSS
 
 docs/plan/                # 设计计划文档（功能要做什么）
 docs/impl/                # 实现文档（功能怎么做的，开发/变更时必须维护）
@@ -109,16 +115,20 @@ rc.d/fwp                  # FreeBSD rc.d 启动脚本
 
 ### 前端
 
-- **无框架、无构建**：纯 ES module，`<script type="module">`。不要加 import map、bundler、转译器。
-- **资源服务**：默认内嵌（rust-embed）；开发时磁盘覆盖。
-- **API 调用**：用 `js/api.js` 的 `api.get/post/put/del`（处理 auth header + token + 错误 toast）。token 存 `sessionStorage`。
-- **导航**：hash 路由（`#/dashboard`）。布局 = 顶部栏主标签 + 侧边栏子项。菜单结构在 `js/ui/layout.js`。
-- **定时器清理**：定时器句柄（setInterval）——直接调用 `clearInterval(handle)`，对 null/undefined 是 no-op；不要加真值判断守卫。
+- **Vue 3 + Vite**：使用 Composition API + `<script setup>` 语法。源码在 `frontend/src/`，Vite 构建输出到 `web/`。
+- **资源服务**：默认内嵌（rust-embed）；开发时可用 `npm run dev`（热更新）或磁盘覆盖。
+- **API 调用**：用 `lib/api.js` 的 `api.get/post/put/del`（处理 auth header + token + 401 重定向）。token 存 `sessionStorage`。
+- **导航**：Vue Router hash 路由（`#/dashboard`）。布局 = 顶部栏主标签 + 侧边栏子项。菜单结构在 `lib/menu.js`。
+- **状态管理**：Pinia stores——`stores/auth.js`（认证）、`stores/ui.js`（Toast + 对话框）。
+- **命令式对话框**：通过 composables（`useConfirm`/`useAlert`/`useFormModal`/`useToast`）调用，返回 Promise。底层由 `stores/ui.js` + `DialogHost.vue` 驱动。
+- **定时器清理**：在 `onUnmounted` 中 `clearInterval`/`clearTimeout`。
+- **Chart.js**：npm 包，在 `lib/chart.js` 中注册。页面组件在 `onUnmounted` 中销毁 Chart 实例。
+- **xterm.js**：npm 包（`@xterm/xterm` + `@xterm/addon-fit`），在 `onUnmounted` 中 dispose + close WebSocket。
 - **消息反馈（强制）**：判断标准是——**用户漏看该消息是否会造成误解或困惑**。
-  - **重要消息用弹窗**：操作失败、错误、校验异常等。用户如果没有到错误及其原因，会误以为操作成功，造成重大误解——必须用模态弹窗（`confirmDialog` 或 `alertDialog`）强制展示，确保用户看到。
-  - **非重要消息用 Toast**：操作成功（创建成功、删除成功、保存成功等）。用户漏看也不会造成误解（操作已经生效）——用 `toast()` 弱提示即可，不打断用户流程。
+  - **重要消息用弹窗**：操作失败、错误、校验异常等。用户如果没有到错误及其原因，会误以为操作成功，造成重大误解——必须用模态弹窗（`useConfirm()` 或 `useAlert()`）强制展示，确保用户看到。
+  - **非重要消息用 Toast**：操作成功（创建成功、删除成功、保存成功等）。用户漏看也不会造成误解（操作已经生效）——用 `useToast().toast()` 弱提示即可，不打断用户流程。
   - 简记：成功 → toast，失败 → 弹窗。
-- **i18n 翻译键命名（强制）**：新增或复用 `web/js/i18n/translations.js` 中的翻译键前，**必须先读该文件顶部的命名规范注释**并严格遵守。核心规则：
+- **i18n 翻译键命名（强制）**：新增或复用 `frontend/src/i18n/translations.js` 中的翻译键前，**必须先读该文件顶部的命名规范注释**并严格遵守。核心规则：
   1. 同一含义只用一个 key（跨页面同义的词如 name/value/edit/delete 等一律放 `common` 命名空间复用，不按 nav/zfs/rcconf 等场景拆分）
   2. 只有语义确实不同时才建新 key
   3. **如果一个词在各语言中完全相同**（如 MAC/MTU/Metric/IPv4），**不要建 key**，直接在模板中写原文，避免无意义的 key 膨胀

@@ -1,0 +1,131 @@
+// Navigation menu configuration — top-level groups + sidebar items.
+
+export const MENU = [
+  {
+    key: 'overview',
+    labelKey: 'nav.overview',
+    icon: 'fa-solid fa-gauge-high',
+    default: '/dashboard',
+    items: [
+      { path: '/dashboard', labelKey: 'nav.dashboard', icon: 'fa-solid fa-gauge-high' },
+      { path: '/shell', labelKey: 'nav.shell', icon: 'fa-solid fa-terminal' },
+    ],
+  },
+  {
+    key: 'config',
+    labelKey: 'nav.config',
+    icon: 'fa-solid fa-sliders',
+    default: '/sysctl',
+    items: [
+      { path: '/sysctl', labelKey: 'nav.sysctl', icon: 'fa-solid fa-microchip' },
+      { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
+      { path: '/cron', labelKey: 'nav.cron', icon: 'fa-solid fa-clock-rotate-left' },
+      { path: '/services', labelKey: 'nav.services', icon: 'fa-solid fa-play' },
+      {
+        path: '/pkg',
+        labelKey: 'nav.packages',
+        icon: 'fa-solid fa-box',
+        children: [
+          { path: '/pkg', labelKey: 'nav.pkgList', icon: 'fa-solid fa-list' },
+          { path: '/pkg/repos', labelKey: 'nav.pkgRepos', icon: 'fa-solid fa-server' },
+        ],
+      },
+      {
+        path: '/accounts/users',
+        labelKey: 'nav.accounts',
+        icon: 'fa-solid fa-users',
+        children: [
+          { path: '/accounts/users', labelKey: 'nav.sysUsers', icon: 'fa-solid fa-user' },
+          { path: '/accounts/groups', labelKey: 'nav.sysGroups', icon: 'fa-solid fa-users-rectangle' },
+        ],
+      },
+    ],
+  },
+  {
+    key: 'network',
+    labelKey: 'common.network',
+    icon: 'fa-solid fa-network-wired',
+    default: '/network',
+    items: [
+      { path: '/network', labelKey: 'nav.networkIf', icon: 'fa-solid fa-ethernet' },
+      { path: '/network/dns', labelKey: 'nav.networkDns', icon: 'fa-solid fa-server' },
+      { path: '/pf', labelKey: 'nav.pf', icon: 'fa-solid fa-shield-halved' },
+    ],
+  },
+  {
+    key: 'filesystem',
+    labelKey: 'nav.filesystem',
+    icon: 'fa-solid fa-hard-drive',
+    default: '/filesystem',
+    items: [
+      { path: '/filesystem', labelKey: 'nav.fsOverview', icon: 'fa-solid fa-chart-pie' },
+      { path: '/filesystem/disks', labelKey: 'nav.disks', icon: 'fa-solid fa-hard-drive' },
+      { path: '/filesystem/files', labelKey: 'nav.fileManager', icon: 'fa-solid fa-folder-open' },
+      {
+        path: '/zfs',
+        labelKey: 'nav.zfs',
+        icon: 'fa-solid fa-database',
+        children: [
+          { path: '/zfs/pools', labelKey: 'nav.zpool', icon: 'fa-solid fa-circle-nodes' },
+          { path: '/zfs/datasets', labelKey: 'nav.datasets', icon: 'fa-solid fa-layer-group' },
+          { path: '/zfs/snapshots', labelKey: 'nav.snapshots', icon: 'fa-solid fa-camera' },
+        ],
+      },
+    ],
+  },
+  {
+    key: 'virtualization',
+    labelKey: 'nav.virtualization',
+    icon: 'fa-solid fa-cubes',
+    default: '/jails/running',
+    items: [
+      {
+        path: '/jails',
+        labelKey: 'nav.jails',
+        icon: 'fa-solid fa-cube',
+        children: [
+          { path: '/jails/running', labelKey: 'nav.jailList', icon: 'fa-solid fa-list' },
+          { path: '/jails/bases', labelKey: 'nav.jailBases', icon: 'fa-solid fa-layer-group' },
+        ],
+      },
+      { path: '/bhyve', labelKey: 'nav.bhyve', icon: 'fa-regular fa-square' },
+    ],
+  },
+  {
+    key: 'monitor',
+    labelKey: 'nav.monitor',
+    icon: 'fa-solid fa-chart-line',
+    default: '/monitor',
+    items: [
+      { path: '/monitor', labelKey: 'nav.monitorCpu', icon: 'fa-solid fa-chart-line' },
+      { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: 'fa-solid fa-memory' },
+      { path: '/monitor/network', labelKey: 'common.network', icon: 'fa-solid fa-network-wired' },
+    ],
+  },
+];
+
+export const SETTINGS = [
+  { path: '/users', labelKey: 'topbar.panelUsers', icon: 'fa-solid fa-user-gear' },
+  { path: '/audit', labelKey: 'topbar.auditLog', icon: 'fa-solid fa-list-ul' },
+];
+
+// Determine which top-level group a path belongs to.
+export function groupOfPath(path) {
+  for (const g of MENU) {
+    if (pathBelongsToGroup(path, g.items)) return g.key;
+  }
+  if (pathBelongsToGroup(path, SETTINGS)) return 'settings';
+  return 'overview';
+}
+
+function pathBelongsToGroup(path, items) {
+  for (const item of items) {
+    if (path === item.path) return true;
+    if (item.children) {
+      for (const child of item.children) {
+        if (path === child.path) return true;
+      }
+    }
+  }
+  return false;
+}
