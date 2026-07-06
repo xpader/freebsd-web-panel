@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import SectionCard from '../components/ui/SectionCard.vue';
+import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -68,7 +69,7 @@ onMounted(async () => {
 <template>
   <div class="page-header">
     <div class="flex">
-      <a href="#/jails/running" class="btn-secondary btn-sm">{{ t('common.navBack') }}</a>
+      <BackButton href="#/jails/running" />
       <h1>{{ name }}</h1>
     </div>
     <div class="flex">

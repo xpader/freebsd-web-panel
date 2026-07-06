@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -128,7 +129,7 @@ onUnmounted(() => {
 <template>
   <div class="page-header">
     <div class="flex">
-      <a :href="`#/jails/detail/${name}`" class="btn-secondary btn-sm">{{ t('common.navBack') }}</a>
+      <BackButton :href="`#/jails/detail/${name}`" />
       <h1>{{ t('term.jailTitle') }}: {{ name }}</h1>
     </div>
   </div>

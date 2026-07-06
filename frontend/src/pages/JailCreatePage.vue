@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
+import BackButton from '../components/ui/BackButton.vue';
 import { useToast, useAlert } from '../composables/useDialog.js';
 import FilePicker from '../components/ui/FilePicker.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
@@ -87,7 +88,7 @@ onMounted(async () => {
 <template>
   <div class="page-header">
     <div class="flex">
-      <a href="#/jails/running" class="btn-secondary btn-sm">{{ t('common.navBack') }}</a>
+      <BackButton href="#/jails/running" />
       <h1>{{ t('jails.createTitle') }}</h1>
     </div>
   </div>

@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtBytes } from '../lib/format.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -59,7 +60,7 @@ onMounted(load);
 <template>
   <div class="page-header">
     <div class="flex">
-      <a href="#/zfs/pools" class="btn-secondary btn-sm">{{ t('common.navBack') }}</a>
+      <BackButton href="#/zfs/pools" />
       <h1>{{ t('zfs.poolTitle', { name }) }}</h1>
     </div>
     <p>{{ t('zfs.poolDetailSubtitle') }}</p>

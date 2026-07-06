@@ -6,6 +6,7 @@ import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
 import FilePicker from '../components/ui/FilePicker.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
+import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -229,7 +230,7 @@ onMounted(async () => {
 <template>
   <div class="page-header">
     <div class="flex">
-      <a :href="`#/jails/detail/${name}`" class="btn-secondary btn-sm">{{ t('common.navBack') }}</a>
+      <BackButton :href="`#/jails/detail/${name}`" />
       <h1>{{ t('jails.editTitle') }} — {{ name }}</h1>
     </div>
   </div>

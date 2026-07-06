@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtBytes, fmtDate } from '../lib/format.js';
+import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -38,7 +39,7 @@ onMounted(async () => {
 <template>
   <div class="page-header">
     <div class="flex">
-      <a href="#/pkg" class="btn-secondary btn-sm">{{ t('common.navBack') }}</a>
+      <BackButton href="#/pkg" />
       <h1>{{ info ? `${info.name}-${info.version}` : name }}</h1>
     </div>
     <p>{{ t('pkg.detailSubtitle') }}</p>
