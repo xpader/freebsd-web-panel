@@ -6,6 +6,8 @@
 
 > 目标平台：**FreeBSD 15.x amd64**。以 root 运行。
 
+![截图](screenshot.png)
+
 ## 功能特性
 
 | 模块 | 能力 |

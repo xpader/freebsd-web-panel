@@ -6,6 +6,8 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 
 > Target platform: **FreeBSD 15.x amd64**. Runs as root.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 | Module | Capabilities |
