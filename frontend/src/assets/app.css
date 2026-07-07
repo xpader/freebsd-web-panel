@@ -219,7 +219,7 @@ a:hover { color: var(--accent-hover); }
 .pool-card:hover { border-color: var(--accent); background: var(--bg-elev2); }
 .main { flex: 1; padding: 24px 32px; min-width: 0; }
 
-.page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.page-header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
 .page-header h1 { font-size: 22px; font-weight: 600; white-space: nowrap; }
 .page-header p { color: var(--text-dim); font-size: 13px; margin-top: 0; }
 .section-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
