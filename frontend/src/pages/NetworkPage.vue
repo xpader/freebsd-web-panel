@@ -77,6 +77,7 @@ onMounted(load);
             <span class="badge">{{ linkLabel(iface) }}</span>
           </div>
           <div class="net-iface-body">
+            <div v-if="iface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ iface.description }}</span></div>
             <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">
               <div v-for="ip in iface.ipv4" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
                 {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
@@ -94,6 +95,8 @@ onMounted(load);
             <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">{{ iface.mac || '—' }}</span></div>
             <div v-if="iface.is_physical && iface.baudrate" class="kv"><span class="kv-key">{{ t('net.speed') }}</span><span class="kv-val">{{ fmtSpeed(iface.baudrate) }}</span></div>
             <div v-if="iface.groups.length" class="kv"><span class="kv-key">{{ t('net.groups') }}</span><span class="kv-val"><span v-for="g in iface.groups" :key="g" class="badge badge-dim">{{ g }}</span></span></div>
+            <div v-if="iface.members.length" class="kv"><span class="kv-key">{{ t('net.members') }}</span><span class="kv-val">{{ iface.members.length }}</span></div>
+            <div v-if="iface.status" class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val" style="white-space:pre-line;">{{ iface.status }}</span></div>
           </div>
           <div class="net-iface-footer">
             <button class="btn-secondary btn-sm" @click="showDetail(iface)">{{ t('net.detail') }}</button>
@@ -113,6 +116,7 @@ onMounted(load);
             <span class="badge">{{ linkLabel(iface) }}</span>
           </div>
           <div class="net-iface-body">
+            <div v-if="iface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ iface.description }}</span></div>
             <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">
               <div v-for="ip in iface.ipv4" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
                 {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
@@ -121,6 +125,8 @@ onMounted(load);
             </span></div>
             <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">{{ iface.mac || '—' }}</span></div>
             <div v-if="iface.groups.length" class="kv"><span class="kv-key">{{ t('net.groups') }}</span><span class="kv-val"><span v-for="g in iface.groups" :key="g" class="badge badge-dim">{{ g }}</span></span></div>
+            <div v-if="iface.members.length" class="kv"><span class="kv-key">{{ t('net.members') }}</span><span class="kv-val">{{ iface.members.length }}</span></div>
+            <div v-if="iface.status" class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val" style="white-space:pre-line;">{{ iface.status }}</span></div>
           </div>
           <div class="net-iface-footer">
             <button class="btn-secondary btn-sm" @click="showDetail(iface)">{{ t('net.detail') }}</button>
@@ -181,12 +187,25 @@ onMounted(load);
     <div class="modal" style="max-width:760px;">
       <h3>{{ detailIface.name }} — {{ t('net.interfaceInfo') }}</h3>
       <div class="kv-grid">
+        <div v-if="detailIface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ detailIface.description }}</span></div>
         <div class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val">{{ detailIface.is_up ? t('net.linkUp') : t('net.linkDown') }} ({{ detailIface.link_state }})</span></div>
         <div class="kv"><span class="kv-key">{{ t('net.flags') }}</span><span class="kv-val mono">{{ detailIface.flags.join(', ') }}</span></div>
         <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">{{ detailIface.mac || '—' }}</span></div>
         <div class="kv"><span class="kv-key">MTU</span><span class="kv-val">{{ detailIface.mtu }}</span></div>
         <div class="kv"><span class="kv-key">Metric</span><span class="kv-val">{{ detailIface.metric }}</span></div>
         <div v-if="detailIface.groups.length" class="kv"><span class="kv-key">{{ t('net.groups') }}</span><span class="kv-val"><span v-for="g in detailIface.groups" :key="g" class="badge badge-dim">{{ g }}</span></span></div>
+        <div v-if="detailIface.status" class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val" style="white-space:pre-line;">{{ detailIface.status }}</span></div>
+      </div>
+      <div v-if="detailIface.members.length" style="margin-top:1rem;">
+        <h4>{{ t('net.members') }}</h4>
+        <table>
+          <tbody>
+            <tr v-for="m in detailIface.members" :key="m.name">
+              <td class="mono">{{ m.name }}</td>
+              <td class="text-dim">{{ m.info }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
       <div v-if="detailIface.ipv4.length" style="margin-top:1rem;">
         <h4>IPv4</h4>

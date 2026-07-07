@@ -107,7 +107,93 @@ struct IfgReq {
     group: [libc::c_char; libc::IFNAMSIZ as usize],
 }
 
+// ─── Constants/structs for SIOCGIFDESCR (interface description) ───────────
+
+/// `SIOCGIFDESCR` — get interface description. From `<sys/sockio.h>`.
+/// `_IOWR('i', 42, struct ifreq)` = 0xc020692a (sizeof=32 on amd64).
+const SIOCGIFDESCR: libc::c_ulong = 0xc020692a;
+
+/// `struct ifreq` for SIOCGIFDESCR — name[16] + ifru_buffer{length, buffer}.
+/// Matches the `ifru_buffer` member of `struct ifreq`.
+#[repr(C)]
+struct IfDescrReq {
+    name: [libc::c_char; libc::IFNAMSIZ as usize],
+    buf_length: usize,
+    buf_ptr: *mut libc::c_void,
+}
+
+// ─── Constants/structs for SIOCGIFSTATUS (interface status text) ───────────
+
+/// `SIOCGIFSTATUS` — get interface status text. From `<sys/sockio.h>`.
+/// `_IOWR('i', 59, struct ifstat)` = 0xc331693b (sizeof=817 on amd64).
+const SIOCGIFSTATUS: libc::c_ulong = 0xc331693b;
+
+/// `IFSTATMAX` from `<net/if.h>`.
+const IFSTATMAX: usize = 800;
+
+/// `struct ifstat` — from `<net/if.h>`.
+/// Layout: ifs_name[16] + ascii[801].
+#[repr(C)]
+struct IfStat {
+    ifs_name: [libc::c_char; libc::IFNAMSIZ as usize],
+    ascii: [libc::c_char; IFSTATMAX + 1],
+}
+
+// ─── Constants/structs for SIOCGDRVSPEC (bridge members) ──────────────────
+
+/// `SIOCGDRVSPEC` — get driver-specific parameters. From `<sys/sockio.h>`.
+/// `_IOWR('i', 123, struct ifdrv)` = 0xc028697b (sizeof=40 on amd64).
+const SIOCGDRVSPEC: libc::c_ulong = 0xc028697b;
+
+/// `BRDGGIFS` — get bridge member list. From `<net/if_bridgevar.h>`.
+const BRDGGIFS: libc::c_ulong = 6;
+
+/// `struct ifdrv` — from `<net/if.h>`. 40 bytes on amd64.
+#[repr(C)]
+struct IfDrv {
+    ifd_name: [libc::c_char; libc::IFNAMSIZ as usize],
+    ifd_cmd: libc::c_ulong,
+    ifd_len: usize,
+    ifd_data: *mut libc::c_void,
+}
+
+/// `struct ifbifconf` — bridge interface list. From `<net/if_bridgevar.h>`.
+/// 16 bytes on amd64.
+#[repr(C)]
+struct IfBifConf {
+    ifbic_len: u32,
+    ifbic_buf: *mut libc::c_void,
+}
+
+/// `struct ifbreq` — bridge member request. From `<net/if_bridgevar.h>`.
+/// 80 bytes on amd64.
+#[repr(C)]
+struct IfBreq {
+    ifbr_ifsname: [libc::c_char; libc::IFNAMSIZ as usize],
+    ifbr_ifsflags: u32,
+    ifbr_stpflags: u32,
+    ifbr_path_cost: u32,
+    ifbr_portno: u8,
+    ifbr_priority: u8,
+    ifbr_proto: u8,
+    ifbr_role: u8,
+    ifbr_state: u8,
+    _pad1: [u8; 3],
+    ifbr_addrcnt: u32,
+    ifbr_addrmax: u32,
+    ifbr_addrexceeded: u32,
+    ifbr_pvid: u16,
+    ifbr_vlanproto: u16,
+    _pad2: [u8; 28],
+}
+
 // ─── Public data structures ────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct BridgeMember {
+    pub name: String,
+    pub info: String,
+}
 
 #[derive(Debug, Serialize)]
 pub struct IpConfig {
@@ -121,6 +207,8 @@ pub struct IpConfig {
 #[derive(Debug, Serialize)]
 pub struct NetworkInterface {
     pub name: String,
+    pub description: Option<String>,
+    pub status: Option<String>,
     pub flags: Vec<String>,
     pub is_up: bool,
     pub is_loopback: bool,
@@ -131,6 +219,7 @@ pub struct NetworkInterface {
     pub link_state: String,
     pub baudrate: u64,
     pub groups: Vec<String>,
+    pub members: Vec<BridgeMember>,
     pub ipv4: Vec<IpConfig>,
     pub ipv6: Vec<IpConfig>,
 }
@@ -187,6 +276,8 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
 
         let entry = map.entry(name.clone()).or_insert_with(|| NetworkInterface {
             name: name.clone(),
+            description: None,
+            status: None,
             flags: flags_to_strings(ifa.ifa_flags as libc::c_int),
             is_up: ifa.ifa_flags & (libc::IFF_UP as u32) != 0,
             is_loopback: ifa.ifa_flags & (libc::IFF_LOOPBACK as u32) != 0,
@@ -197,6 +288,7 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
             link_state: String::from("unknown"),
             baudrate: 0,
             groups: Vec::new(),
+            members: Vec::new(),
             ipv4: Vec::new(),
             ipv6: Vec::new(),
         });
@@ -282,13 +374,11 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
 
     unsafe { libc::freeifaddrs(ifap) };
 
-    // Populate groups via SIOCGIFGROUP ioctl for each interface.
+    // Populate groups, descriptions, status, and bridge members via ioctl.
     let fd = unsafe { libc::socket(libc::AF_LOCAL, libc::SOCK_DGRAM, 0) };
     if fd >= 0 {
         for iface in map.values_mut() {
-            if let Some(groups) = read_if_groups(fd, &iface.name) {
-                iface.groups = groups;
-            }
+            fill_iface_ioctl(fd, iface);
         }
         unsafe { libc::close(fd); };
     }
@@ -301,64 +391,153 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
     Ok(result)
 }
 
-/// Read interface group membership via `SIOCGIFGROUP` ioctl.
-fn read_if_groups(fd: libc::c_int, name: &str) -> Option<Vec<String>> {
-    let cname = std::ffi::CString::new(name).ok()?;
+/// Populate groups, description, status, and bridge members for a single
+/// interface via four ioctls on the same socket fd.
+fn fill_iface_ioctl(fd: libc::c_int, iface: &mut NetworkInterface) {
+    let cname = match std::ffi::CString::new(iface.name.as_str()) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
     let name_bytes = cname.as_bytes_with_nul();
     if name_bytes.len() > libc::IFNAMSIZ as usize {
-        return None;
+        return;
     }
 
-    let mut req = IfGroupReq {
-        name: [0; libc::IFNAMSIZ as usize],
-        len: 0,
-        _pad: 0,
-        groups_ptr: [0u8; 16],
-    };
-    for (i, &b) in name_bytes.iter().enumerate() {
-        req.name[i] = b as libc::c_char;
-    }
-
-    // First call: get the needed buffer length.
-    let rc = unsafe { libc::ioctl(fd, SIOCGIFGROUP as libc::c_ulong, &mut req) };
-    if rc != 0 || req.len == 0 {
-        return Some(Vec::new());
-    }
-
-    let len = req.len as usize;
-    let entry_size = std::mem::size_of::<IfgReq>();
-    if len % entry_size != 0 || len / entry_size > 64 {
-        return Some(Vec::new());
-    }
-
-    let mut buf = vec![0u8; len];
-    req.len = len as libc::c_uint;
-    // Write pointer into the union at offset 24 (name[16] + len[4] + pad[4]).
-    let buf_ptr = buf.as_mut_ptr() as *mut libc::c_void;
-    unsafe {
-        std::ptr::write(
-            (&mut req as *mut IfGroupReq).cast::<u8>().add(24) as *mut *mut libc::c_void,
-            buf_ptr,
-        );
-    }
-
-    let rc = unsafe { libc::ioctl(fd, SIOCGIFGROUP as libc::c_ulong, &mut req) };
-    if rc != 0 {
-        return Some(Vec::new());
-    }
-
-    let count = len / entry_size;
-    let mut groups = Vec::with_capacity(count);
-    for i in 0..count {
-        let entry = unsafe { &*(buf.as_ptr().add(i * entry_size) as *const IfgReq) };
-        let group = unsafe { CStr::from_ptr(entry.group.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        if !group.is_empty() && group != "all" {
-            groups.push(group);
+    // ── SIOCGIFGROUP: interface groups ──
+    {
+        let mut req = IfGroupReq {
+            name: [0; libc::IFNAMSIZ as usize],
+            len: 0,
+            _pad: 0,
+            groups_ptr: [0u8; 16],
+        };
+        for (i, &b) in name_bytes.iter().enumerate() {
+            req.name[i] = b as libc::c_char;
+        }
+        let rc = unsafe { libc::ioctl(fd, SIOCGIFGROUP as libc::c_ulong, &mut req) };
+        if rc == 0 && req.len > 0 {
+            let len = req.len as usize;
+            let entry_size = std::mem::size_of::<IfgReq>();
+            if len % entry_size == 0 && len / entry_size <= 64 {
+                let mut buf = vec![0u8; len];
+                req.len = len as libc::c_uint;
+                let buf_ptr = buf.as_mut_ptr() as *mut libc::c_void;
+                unsafe {
+                    std::ptr::write(
+                        (&mut req as *mut IfGroupReq).cast::<u8>().add(24)
+                            as *mut *mut libc::c_void,
+                        buf_ptr,
+                    );
+                }
+                let rc = unsafe { libc::ioctl(fd, SIOCGIFGROUP as libc::c_ulong, &mut req) };
+                if rc == 0 {
+                    let count = len / entry_size;
+                    for i in 0..count {
+                        let entry = unsafe { &*(buf.as_ptr().add(i * entry_size) as *const IfgReq) };
+                        let group = unsafe { CStr::from_ptr(entry.group.as_ptr()) }
+                            .to_string_lossy()
+                            .into_owned();
+                        if !group.is_empty() && group != "all" {
+                            iface.groups.push(group);
+                        }
+                    }
+                }
+            }
         }
     }
-    Some(groups)
+
+    // ── SIOCGIFDESCR: interface description ──
+    {
+        const DESCR_SIZE: usize = 256;
+        let mut buf = [0u8; DESCR_SIZE];
+        let mut req = IfDescrReq {
+            name: [0; libc::IFNAMSIZ as usize],
+            buf_length: DESCR_SIZE,
+            buf_ptr: buf.as_mut_ptr() as *mut libc::c_void,
+        };
+        for (i, &b) in name_bytes.iter().enumerate() {
+            req.name[i] = b as libc::c_char;
+        }
+        let rc = unsafe { libc::ioctl(fd, SIOCGIFDESCR as libc::c_ulong, &mut req) };
+        if rc == 0 {
+            if let Some(len) = buf.iter().position(|&b| b == 0) {
+                if len > 0 {
+                    iface.description =
+                        Some(String::from_utf8_lossy(&buf[..len]).into_owned());
+                }
+            }
+        }
+    }
+
+    // ── SIOCGIFSTATUS: driver status text ──
+    {
+        let mut req = IfStat {
+            ifs_name: [0; libc::IFNAMSIZ as usize],
+            ascii: [0; IFSTATMAX + 1],
+        };
+        for (i, &b) in name_bytes.iter().enumerate() {
+            req.ifs_name[i] = b as libc::c_char;
+        }
+        let rc = unsafe { libc::ioctl(fd, SIOCGIFSTATUS as libc::c_ulong, &mut req) };
+        if rc == 0 {
+            if let Some(len) = req.ascii.iter().position(|&c| c == 0) {
+                if len > 0 {
+                    let bytes: Vec<u8> = req.ascii[..len].iter().map(|&c| c as u8).collect();
+                    let raw = String::from_utf8_lossy(&bytes);
+                    let cleaned: Vec<&str> = raw
+                        .lines()
+                        .map(|l| l.trim())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    if !cleaned.is_empty() {
+                        iface.status = Some(cleaned.join("\n"));
+                    }
+                }
+            }
+        }
+    }
+
+    // ── SIOCGDRVSPEC(BRDGGIFS): bridge members ──
+    {
+        const MAX_ENTRIES: usize = 256;
+        let buf_size = MAX_ENTRIES * std::mem::size_of::<IfBreq>();
+        let mut buf = vec![0u8; buf_size];
+        let mut bifc = IfBifConf {
+            ifbic_len: buf_size as u32,
+            ifbic_buf: buf.as_mut_ptr() as *mut libc::c_void,
+        };
+        let mut ifd = IfDrv {
+            ifd_name: [0; libc::IFNAMSIZ as usize],
+            ifd_cmd: BRDGGIFS,
+            ifd_len: std::mem::size_of::<IfBifConf>(),
+            ifd_data: &mut bifc as *mut IfBifConf as *mut libc::c_void,
+        };
+        for (i, &b) in name_bytes.iter().enumerate() {
+            ifd.ifd_name[i] = b as libc::c_char;
+        }
+        let rc = unsafe { libc::ioctl(fd, SIOCGDRVSPEC as libc::c_ulong, &mut ifd) };
+        if rc == 0 {
+            let entry_size = std::mem::size_of::<IfBreq>();
+            let count = (bifc.ifbic_len as usize) / entry_size;
+            for i in 0..count {
+                let entry = unsafe { &*(buf.as_ptr().add(i * entry_size) as *const IfBreq) };
+                let member_name = unsafe { CStr::from_ptr(entry.ifbr_ifsname.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned();
+                if member_name.is_empty() {
+                    continue;
+                }
+                let mut info = format!(
+                    "port {} priority {} path cost {}",
+                    entry.ifbr_portno, entry.ifbr_priority, entry.ifbr_path_cost
+                );
+                if let Some(proto) = decode_vlan_proto(entry.ifbr_vlanproto) {
+                    info.push_str(&format!(" vlan protocol {proto}"));
+                }
+                iface.members.push(BridgeMember { name: member_name, info });
+            }
+        }
+    }
 }
 
 /// Extract a MAC address string from a `sockaddr_dl`.
@@ -421,6 +600,16 @@ fn flags_to_strings(flags: libc::c_int) -> Vec<String> {
         .filter(|(bit, _)| flags & bit != 0)
         .map(|(_, name)| (*name).to_string())
         .collect()
+}
+
+/// Decode VLAN protocol ethertype to a readable name.
+fn decode_vlan_proto(proto: u16) -> Option<String> {
+    match proto {
+        0 => None,
+        0x8100 => Some(String::from("802.1Q")),
+        0x88a8 => Some(String::from("802.1ad")),
+        _ => Some(format!("0x{proto:04x}")),
+    }
 }
 
 // ─── Route table reading via sysctl(NET_RT_DUMP) ───────────────────────────
@@ -1129,5 +1318,62 @@ mod tests {
         assert_eq!(ipv4_mask_to_prefix("255.255.0.0"), 16);
         assert_eq!(ipv4_mask_to_prefix("255.255.255.255"), 32);
         assert_eq!(ipv4_mask_to_prefix("0.0.0.0"), 0);
+    }
+
+    #[test]
+    fn description_read_and_clear() {
+        // Pick a real interface from the system.
+        let ifaces = read_interfaces().expect("getifaddrs should succeed");
+        let iface = ifaces
+            .iter()
+            .find(|i| i.is_physical)
+            .or_else(|| ifaces.first())
+            .expect("should have at least one interface");
+        let name = &iface.name;
+
+        // Set a description via ifconfig.
+        let test_desc = "fwp-test-description-12345";
+        let r = std::process::Command::new("/sbin/ifconfig")
+            .args([name, "description", test_desc])
+            .output()
+            .expect("ifconfig should run");
+        assert!(r.status.success(), "ifconfig description set failed");
+
+        // Verify the ioctl-based read picks it up.
+        let ifaces2 = read_interfaces().expect("getifaddrs should succeed");
+        let iface2 = ifaces2.iter().find(|i| &i.name == name).unwrap();
+        assert_eq!(
+            iface2.description.as_deref(),
+            Some(test_desc),
+            "description should be readable via SIOCGIFDESCR"
+        );
+
+        // Clean up: remove the description.
+        let _ = std::process::Command::new("/sbin/ifconfig")
+            .args([name, "description", ""])
+            .output();
+    }
+
+    #[test]
+    fn bridge_members_vm_public() {
+        // vm-public is expected to exist on this system as a bridge.
+        let ifaces = read_interfaces().expect("getifaddrs should succeed");
+        let bridge = ifaces.iter().find(|i| i.name == "vm-public");
+        if let Some(bridge) = bridge {
+            assert!(
+                !bridge.members.is_empty(),
+                "vm-public should have bridge members, got: {:?}",
+                bridge.members
+            );
+            // Each member should have a name and info string.
+            for m in &bridge.members {
+                assert!(!m.name.is_empty(), "member name should not be empty");
+                assert!(!m.info.is_empty(), "member info should not be empty");
+            }
+        }
+        // Non-bridge interfaces should have empty members.
+        if let Some(phys) = ifaces.iter().find(|i| i.is_physical) {
+            assert!(phys.members.is_empty(), "physical interface should not have bridge members");
+        }
     }
 }

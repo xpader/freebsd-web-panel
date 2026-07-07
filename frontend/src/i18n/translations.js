@@ -370,6 +370,7 @@ export const en = {
     gatewayConfigured: 'rc.conf Configured',
     notConfigured: 'Not configured',
     interfaceInfo: 'Interface Details',
+    members: 'Members',
   },
   dns: {
     title: 'DNS Configuration',
@@ -1207,6 +1208,7 @@ export const zh = {
     gatewayConfigured: 'rc.conf 配置',
     notConfigured: '未配置',
     interfaceInfo: '接口详情',
+    members: '成员',
   },
   dns: {
     title: 'DNS 配置',
