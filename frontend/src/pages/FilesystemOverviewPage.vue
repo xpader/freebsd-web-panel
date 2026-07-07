@@ -71,7 +71,7 @@ onMounted(async () => {
     <div class="card" style="padding:0;">
       <table>
         <thead><tr>
-          <th>{{ t('common.device') }}</th><th>{{ t('fs.mountpoint') }}</th><th>{{ t('fs.fstype') }}</th>
+          <th>{{ t('fs.filesystem') }}</th><th>{{ t('fs.mountpoint') }}</th><th>{{ t('fs.fstype') }}</th>
           <th>{{ t('common.total') }}</th><th>{{ t('common.used') }}</th><th>{{ t('common.available') }}</th><th>{{ t('common.usage') }}</th>
         </tr></thead>
         <tbody>
