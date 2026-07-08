@@ -121,11 +121,11 @@ const PARAM_GROUPS = {
     { key: 'allow.reserved_ports', type: 'bool' },
   ],
   exec: [
+    { key: 'exec.prestart', type: 'textarea', descKey: 'jails.descExecPrestart' },
     { key: 'exec.start', type: 'textarea', descKey: 'jails.descExecStart', lockWhenRunning: true },
+    { key: 'exec.poststart', type: 'textarea', descKey: 'jails.descExecPoststart' },
     { key: 'exec.stop', type: 'textarea', descKey: 'jails.descExecStop', lockWhenRunning: true },
-    { key: 'exec.prestart', type: 'textarea' },
-    { key: 'exec.poststart', type: 'textarea' },
-    { key: 'exec.poststop', type: 'textarea' },
+    { key: 'exec.poststop', type: 'textarea', descKey: 'jails.descExecPoststop' },
     { key: 'exec.clean', type: 'bool', descKey: 'jails.descExecClean', lockWhenRunning: true },
     { key: 'exec.jail_user', type: 'text', lockWhenRunning: true },
     { key: 'exec.system_user', type: 'text', lockWhenRunning: true },
@@ -179,7 +179,7 @@ const definedKeys = computed(() => {
 const extraParams = computed(() => {
   if (!jail.value) return [];
   const all = Object.keys(jail.value.params || {});
-  return all.filter(k => !definedKeys.value.has(k) && !JAIL_READONLY.has(k)).sort();
+  return all.filter(k => !definedKeys.value.has(k) && !JAIL_READONLY.has(k) && !k.startsWith('__')).sort();
 });
 
 const isRunning = computed(() => jail.value?.jid > 0);
@@ -384,7 +384,13 @@ onMounted(async () => {
                 <input v-if="showIpAddr(p.key)" type="text" :value="ipAddr(p.key)" :placeholder="ipPlaceholder(p.key)" :disabled="isLocked(p)" @input="onIpAddrInput(p.key, $event.target.value)" />
               </div>
 
-              <textarea v-else-if="p.type === 'textarea'" v-model="form[p.key]" rows="3" :placeholder="p.ph || ''" :disabled="isLocked(p)" class="param-textarea"></textarea>
+              <div v-else-if="p.type === 'textarea'" class="exec-field">
+                <textarea v-model="form[p.key]" rows="3" :placeholder="p.ph || ''" :disabled="isLocked(p)" class="param-textarea"></textarea>
+                <label class="exec-override-toggle" :class="{ 'lock-disabled': isLocked(p) }">
+                  <input type="checkbox" :checked="form[`__override.${p.key}`] !== '1'" :disabled="isLocked(p)" @change="form[`__override.${p.key}`] = $event.target.checked ? '' : '1'" />
+                  <span class="param-desc-inline">{{ t('jails.inheritGlobal') }}</span>
+                </label>
+              </div>
 
               <input v-else type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" :readonly="p.readOnly" />
 
@@ -492,7 +498,6 @@ onMounted(async () => {
 .warn-banner {
   background: rgba(245, 158, 11, 0.08);
   border-left: 3px solid var(--warn);
-  padding: 10px 16px;
   margin-bottom: 16px;
 }
 .form-row-label {
@@ -545,6 +550,21 @@ input[readonly] {
 .param-textarea:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.exec-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.exec-field .param-textarea {
+  flex: 1;
+}
+.exec-override-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
 }
 .ip-field {
   display: flex;

@@ -159,6 +159,37 @@ pub struct ListQuery {
     pub running: Option<String>,
 }
 
+/// Resolve a display IP via multi-level fallback:
+/// Resolve a display IP via multi-level fallback:
+/// 1. Runtime ip4.addr/ip6.addr (from libjail)
+/// 2. Config ip4.addr/ip6.addr (from jail.conf)
+/// 3. meta.ip4/meta.ip6 (static IP, "dhcp", "inherit", "disable")
+/// 4. ip4/ip6 (e.g. "inherit", "disable")
+fn resolve_display_ip(
+    runtime: Option<&HashMap<String, String>>,
+    config: &HashMap<String, String>,
+    ver: &str,
+) -> String {
+    let addr_key = format!("{ver}.addr");
+    let meta_key = format!("meta.{ver}");
+
+    if let Some(rt) = runtime {
+        if let Some(v) = rt.get(&addr_key) {
+            if !v.is_empty() {
+                return strip_iface_prefix(v).to_string();
+            }
+        }
+    }
+    for key in [&addr_key, &meta_key, ver] {
+        if let Some(v) = config.get(key) {
+            if !v.is_empty() && v != "disable" {
+                return strip_iface_prefix(v).to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 /// List jails. By default returns all jails from jail.conf with running
 /// status merged from libjail. Pass ?running=true to get only running jails.
 pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> {
@@ -166,10 +197,11 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
 
     if only_running {
         // Fast path: query libjail directly.
-        // Parse jail.conf once to get meta.description (not available via libjail).
+        // Parse jail.conf for meta.description and config fallback params.
         let conf_entries = parse_jail_conf().unwrap_or_default();
-        let desc_map: HashMap<String, String> = conf_entries.iter()
-            .filter_map(|e| e.params.get("meta.description").map(|v| (e.name.clone(), v.clone())))
+        let conf_map: HashMap<String, &HashMap<String, String>> = conf_entries
+            .iter()
+            .map(|e| (e.name.clone(), &e.params))
             .collect();
         let auto = read_jail_list();
         let jails: Vec<JailInfo> = jail::list_jails()
@@ -178,15 +210,16 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
             .filter_map(|p| {
                 let jid: i32 = p.get("jid")?.parse().ok()?;
                 let name = p.get("name")?.clone();
+                let cfg = conf_map.get(&name).copied();
                 Some(JailInfo {
                     auto_start: auto.contains(&name),
-                    description: desc_map.get(&name).cloned().unwrap_or_default(),
-                    name,
-                    jid,
+                    description: cfg.and_then(|c| c.get("meta.description").cloned()).unwrap_or_default(),
                     hostname: p.get("host.hostname").cloned().unwrap_or_default(),
                     path: p.get("path").cloned().unwrap_or_default(),
-                    ip4_addr: p.get("ip4.addr").cloned().unwrap_or_default(),
-                    ip6_addr: p.get("ip6.addr").cloned().unwrap_or_default(),
+                    ip4_addr: resolve_display_ip(Some(p), cfg.unwrap_or(&HashMap::new()), "ip4"),
+                    ip6_addr: resolve_display_ip(Some(p), cfg.unwrap_or(&HashMap::new()), "ip6"),
+                    name,
+                    jid,
                     params: None,
                     runtime: None,
                 })
@@ -199,27 +232,29 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
     let entries = parse_jail_conf()?;
     let auto = read_jail_list();
 
-    let running: HashMap<String, i32> = jail::list_jails()
-        .map_err(ApiError::Internal)?
+    let rt_jails = jail::list_jails().map_err(ApiError::Internal)?;
+    let running: HashMap<String, &HashMap<String, String>> = rt_jails
         .iter()
         .filter_map(|p| {
             let name = p.get("name")?;
-            let jid: i32 = p.get("jid")?.parse().ok()?;
-            Some((name.clone(), jid))
+            Some((name.clone(), p))
         })
         .collect();
 
     let result: Vec<JailInfo> = entries
         .into_iter()
         .map(|pj| {
-            let jid = running.get(&pj.name).copied().unwrap_or(0);
+            let rt = running.get(&pj.name).copied();
+            let jid = rt
+                .and_then(|p| p.get("jid").and_then(|j| j.parse().ok()))
+                .unwrap_or(0);
             JailInfo {
                 auto_start: auto.contains(&pj.name),
                 description: pj.params.get("meta.description").cloned().unwrap_or_default(),
                 hostname: pj.params.get("host.hostname").cloned().unwrap_or_else(|| pj.name.clone()),
                 path: pj.params.get("path").cloned().unwrap_or_default(),
-                ip4_addr: pj.params.get("ip4.addr").cloned().unwrap_or_else(|| pj.params.get("ip4").cloned().unwrap_or_default()),
-                ip6_addr: pj.params.get("ip6.addr").cloned().unwrap_or_else(|| pj.params.get("ip6").cloned().unwrap_or_default()),
+                ip4_addr: resolve_display_ip(rt, &pj.params, "ip4"),
+                ip6_addr: resolve_display_ip(rt, &pj.params, "ip6"),
                 name: pj.name,
                 jid,
                 params: None,
@@ -388,11 +423,14 @@ pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
     // fwp-vnet commands ARE included — they render in the textarea and are fully
     // regenerated on save based on the network meta config.
     for exec_key in &["exec.start", "exec.stop", "exec.prestart", "exec.poststart", "exec.poststop"] {
-        let raw = collect_exec_lines(&name, exec_key, &conf_content);
+        let (raw, override_first) = collect_exec_lines(&name, exec_key, &conf_content);
         if raw.is_empty() {
             pj.params.remove(*exec_key);
         } else {
             pj.params.insert(exec_key.to_string(), raw);
+            if override_first {
+                pj.params.insert(format!("__override.{exec_key}"), "1".into());
+            }
         }
     }
 
@@ -1870,11 +1908,13 @@ fn scan_vnet_auto(name: &str, conf_content: &str) -> Option<String> {
     None
 }
 
-/// Collect all exec.* += commands for a specific jail and key from raw
-/// jail.conf. Returns them joined by newlines (for textarea display).
+/// Collect all exec.* commands for a specific jail and key from raw
+/// jail.conf. Returns `(joined_lines, first_is_override)` — the bool is
+/// true when the first matching line used `=` (override) instead of `+=`.
 /// The HashMap parser only keeps the last value, so we scan the raw file.
-fn collect_exec_lines(name: &str, exec_key: &str, conf_content: &str) -> String {
+fn collect_exec_lines(name: &str, exec_key: &str, conf_content: &str) -> (String, bool) {
     let mut cmds: Vec<String> = Vec::new();
+    let mut first_is_override = false;
     let mut in_jail = false;
     let mut in_block_comment = false;
 
@@ -1907,12 +1947,15 @@ fn collect_exec_lines(name: &str, exec_key: &str, conf_content: &str) -> String 
             }
         } else if let Some(rest) = line.strip_prefix(&set_prefix) {
             if let Some(cmd) = rest.strip_suffix("\";") {
+                if cmds.is_empty() {
+                    first_is_override = true;
+                }
                 cmds.push(cmd.to_string());
             }
         }
     }
 
-    cmds.join("\n")
+    (cmds.join("\n"), first_is_override)
 }
 
 /// Strip "interface|" prefix from an IP address string.
@@ -2237,6 +2280,29 @@ fn generate_jail_block_from_params(
     skip_keys.insert("ip6");
     skip_keys.insert("ip6.addr");
 
+    // Determine which exec.* keys have override enabled. When override is on,
+    // the first line uses `=` instead of `+=` so it replaces the global default.
+    // The `=` line must appear before any `+=` lines (both VNET and user),
+    // so we emit it here, before the VNET block.
+    const EXEC_MULTI_KEYS: &[&str] =
+        &["exec.start", "exec.stop", "exec.prestart", "exec.poststart", "exec.poststop"];
+    let mut override_exec_keys: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for exec_key in EXEC_MULTI_KEYS {
+        let ov_param = format!("__override.{exec_key}");
+        if params.get(&ov_param).map(|v| v == "1" || v == "true").unwrap_or(false) {
+            override_exec_keys.insert(exec_key);
+            if let Some(val) = params.get(*exec_key) {
+                for cmd in val.lines() {
+                    let cmd = cmd.trim();
+                    if !cmd.is_empty() && !cmd.contains("fwp-vnet") {
+                        lines.push(format!("    {exec_key} = \"{cmd}\";"));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     if vnet_auto {
         // ── VNET mode ──
         let bridge = if !meta_iface.is_empty() {
@@ -2292,6 +2358,9 @@ fn generate_jail_block_from_params(
     keys.sort();
 
     for key in keys {
+        if key.starts_with("__") {
+            continue;
+        }
         if JAIL_READONLY_PARAMS.contains(&key.as_str()) {
             continue;
         }
@@ -2326,12 +2395,18 @@ fn generate_jail_block_from_params(
         // Filter out fwp-vnet commands — they are regenerated by the
         // VNET block above from the current network config, never from
         // the textarea value (which only contains stale copies).
-        let is_multi_exec = matches!(key.as_str(),
-            "exec.start" | "exec.stop" | "exec.prestart" | "exec.poststart" | "exec.poststop");
+        // When override is enabled, the first non-fwp-vnet line was already
+        // emitted as `=` above, so we skip it here.
+        let is_multi_exec = EXEC_MULTI_KEYS.contains(&key.as_str());
         if is_multi_exec {
+            let mut skip_first = override_exec_keys.contains(key.as_str());
             for cmd in value.lines() {
                 let cmd = cmd.trim();
                 if !cmd.is_empty() && !cmd.contains("fwp-vnet") {
+                    if skip_first {
+                        skip_first = false;
+                        continue;
+                    }
                     lines.push(format!("    {key} += \"{cmd}\";"));
                 }
             }
@@ -2360,16 +2435,10 @@ pub async fn jail_update(
     backup_jail_conf(&state)?;
 
     let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
-    let without_old = remove_jail_block(&conf_content, &name);
     let globals = parse_global_params();
     let new_block = generate_jail_block_from_params(&name, &body.params, &globals);
 
-    let new_content = if without_old.is_empty() {
-        format!("{new_block}\n")
-    } else {
-        let separator = if without_old.ends_with('\n') { "" } else { "\n" };
-        format!("{without_old}{separator}\n{new_block}\n")
-    };
+    let new_content = replace_jail_block(&conf_content, &name, &new_block);
 
     write_jail_conf_atomic(&new_content)?;
 
@@ -2527,12 +2596,97 @@ fn remove_jail_block(conf: &str, name: &str) -> String {
         }
     }
 
+    // Collapse consecutive blank lines into a single one.
+    let mut compacted = Vec::new();
+    let mut prev_blank = false;
+    for l in &result {
+        let is_blank = l.trim().is_empty();
+        if is_blank && prev_blank {
+            continue;
+        }
+        compacted.push(*l);
+        prev_blank = is_blank;
+    }
+
     // Clean up: remove trailing blank lines, ensure single trailing newline.
-    let content = result.join("\n");
+    let content = compacted.join("\n");
     let content = content.trim_end_matches('\n');
     if content.is_empty() {
         String::new()
     } else {
         format!("{content}\n")
     }
+}
+
+/// Replace a jail block in-place within jail.conf content, preserving
+/// the original position of the block.
+fn replace_jail_block(conf: &str, name: &str, new_block: &str) -> String {
+    let lines: Vec<&str> = conf.lines().collect();
+    let mut result = Vec::new();
+    let mut in_block = false;
+    let mut replaced = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        if !in_block && !replaced {
+            if trimmed == format!("{name} {{")
+                || trimmed == format!("{name}{{")
+                || trimmed.starts_with(&format!("{name} {{"))
+            {
+                let before_brace = trimmed.trim_end_matches('{').trim();
+                if before_brace == name {
+                    in_block = true;
+                    // Emit new block immediately.
+                    for blk_line in new_block.lines() {
+                        result.push(blk_line.to_string());
+                    }
+                    // Check if the original block had a trailing blank line.
+                    // Find the closing brace to determine block end.
+                    continue;
+                }
+            }
+            result.push(line.to_string());
+        } else if in_block {
+            // Skip lines until we pass the closing brace.
+            if trimmed.starts_with('}') {
+                in_block = false;
+                replaced = true;
+                // Skip the blank line after the closing brace if present.
+                if i + 1 < lines.len() && lines[i + 1].trim().is_empty() {
+                    result.push(String::new()); // preserve a blank line separator
+                }
+            }
+            // Otherwise skip (old block content being replaced)
+        } else {
+            result.push(line.to_string());
+        }
+    }
+
+    // Collapse consecutive blank lines into a single one.
+    let mut compacted = Vec::new();
+    let mut prev_blank = false;
+    for l in &result {
+        let is_blank = l.trim().is_empty();
+        if is_blank && prev_blank {
+            continue;
+        }
+        compacted.push(l.clone());
+        prev_blank = is_blank;
+    }
+
+    // If the block was not found, append at the end.
+    if !replaced {
+        let content = compacted.join("\n");
+        let content = content.trim_end_matches('\n');
+        return if content.is_empty() {
+            format!("{new_block}\n")
+        } else {
+            format!("{content}\n\n{new_block}\n")
+        };
+    }
+
+    let content = compacted.join("\n");
+    let content = content.trim_end_matches('\n');
+    format!("{content}\n")
 }

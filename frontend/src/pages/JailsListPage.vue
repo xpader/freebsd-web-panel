@@ -26,8 +26,8 @@ function jailState(name, running) {
 
 function formatIpStr(ip4, ip6) {
   const parts = [];
-  if (ip4 && ip4 !== 'inherit' && ip4 !== 'disable') parts.push(ip4);
-  if (ip6 && ip6 !== 'inherit' && ip6 !== 'disable') parts.push(ip6);
+  if (ip4) parts.push(ip4);
+  if (ip6) parts.push(ip6);
   if (!parts.length) return '';
   return parts.join(', ');
 }
