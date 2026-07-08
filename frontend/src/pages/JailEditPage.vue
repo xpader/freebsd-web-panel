@@ -86,6 +86,8 @@ const JAIL_READONLY = new Set([
   'jid', 'dying', 'lastjid', 'children.cur',
   'osrelease', 'osreldate', 'cpuset.id',
   'ip4.saddrsel', 'ip6.saddrsel',
+  'interface', 'ip4', 'ip4.addr', 'ip6', 'ip6.addr',
+  'meta.ip4_mode', 'meta.ip4_addr', 'meta.ip6_mode', 'meta.ip6_addr',
 ]);
 
 const TABS = [
@@ -102,38 +104,31 @@ const PARAM_GROUPS = {
   basic: [
     { key: 'path', type: 'text', picker: true, lockWhenRunning: true },
     { key: 'host.hostname', type: 'text' },
+    { key: 'meta.description', type: 'text', labelKey: 'common.description', descKey: 'jails.descMetaDesc' },
     { key: 'host.domainname', type: 'text' },
     { key: 'host.hostuuid', type: 'text', descKey: 'jails.descHostuuid' },
     { key: 'allow.set_hostname', type: 'bool', descKey: 'jails.descAllowSetHostname' },
     { key: '__autoStart', type: 'bool', descKey: 'jails.descAutoStart' },
   ],
   network: [
-    { key: 'interface', type: 'text', descKey: 'jails.descInterface', lockWhenRunning: true },
-    { key: 'ip4', type: 'select', lockWhenRunning: true, options: [
-      { value: '', label: '—' },
-      { value: 'inherit', label: 'inherit' },
-      { value: 'disable', label: 'disable' },
-    ]},
-    { key: 'ip4.addr', type: 'text', descKey: 'jails.descIpAddr', lockWhenRunning: true, ph: '192.168.1.10 or bge1|192.168.1.10' },
-    { key: 'ip6', type: 'select', lockWhenRunning: true, options: [
-      { value: '', label: '—' },
-      { value: 'inherit', label: 'inherit' },
-      { value: 'disable', label: 'disable' },
-    ]},
-    { key: 'ip6.addr', type: 'text', lockWhenRunning: true, ph: '2001:db8::1' },
+    { key: 'meta.interface', type: 'text', labelKey: 'jails.labelMetaInterface', descKey: 'jails.descMetaInterface', lockWhenRunning: true },
+    { key: 'meta.ip4', type: 'ip', labelKey: 'jails.labelMetaIp4', lockWhenRunning: true },
+    { key: 'meta.ip6', type: 'ip', labelKey: 'jails.labelMetaIp6', lockWhenRunning: true },
     { key: 'vnet', type: 'bool', descKey: 'jails.descVnet', lockWhenRunning: true },
+    { key: 'vnet.interface', type: 'text', vnetDependent: true, readOnly: true, descKey: 'jails.descVnetInterface' },
     { key: 'allow.raw_sockets', type: 'bool', descKey: 'jails.descAllowRawSockets' },
     { key: 'allow.socket_af', type: 'bool', descKey: 'jails.descAllowSocketAf' },
     { key: 'allow.reserved_ports', type: 'bool' },
   ],
   exec: [
-    { key: 'exec.start', type: 'text', descKey: 'jails.descExecStart', lockWhenRunning: true },
-    { key: 'exec.stop', type: 'text', descKey: 'jails.descExecStop', lockWhenRunning: true },
+    { key: 'exec.start', type: 'textarea', descKey: 'jails.descExecStart', lockWhenRunning: true },
+    { key: 'exec.stop', type: 'textarea', descKey: 'jails.descExecStop', lockWhenRunning: true },
+    { key: 'exec.prestart', type: 'textarea' },
+    { key: 'exec.poststart', type: 'textarea' },
+    { key: 'exec.poststop', type: 'textarea' },
     { key: 'exec.clean', type: 'bool', descKey: 'jails.descExecClean', lockWhenRunning: true },
     { key: 'exec.jail_user', type: 'text', lockWhenRunning: true },
     { key: 'exec.system_user', type: 'text', lockWhenRunning: true },
-    { key: 'exec.prestart', type: 'text' },
-    { key: 'exec.poststop', type: 'text' },
     { key: 'exec.timeout', type: 'text', descKey: 'jails.descExecTimeout', lockWhenRunning: true },
     { key: 'exec.consolelog', type: 'text' },
   ],
@@ -194,6 +189,90 @@ function boolVal(key) {
   return v === 'true' || v === '1';
 }
 
+function paramLabel(p) {
+  if (p.labelKey) return t(p.labelKey);
+  if (p.key === '__autoStart') return t('jails.autoStart');
+  return p.key;
+}
+
+function onBoolChange(key, checked) {
+  form.value[key] = checked ? 'true' : '';
+  if (key === 'vnet') {
+    form.value['vnet.interface'] = checked ? 'auto' : '';
+  }
+}
+
+function descText(p) {
+  if (!p.descKey) return '';
+  if (p.key === 'meta.interface' && boolVal('vnet')) {
+    return t('jails.descMetaInterfaceVnet');
+  }
+  return t(p.descKey);
+}
+
+const isVnet = computed(() => boolVal('vnet'));
+
+// ── Unified IP field helpers ──
+// meta.ip4 stores: "" = none, "dhcp" = DHCP, "inherit" = inherit, "disable" = disable, else = static IP.
+
+// Track mode selection and address text independently from form value.
+// form.value[key] is only populated on submit — switching modes never
+// destroys the address the user typed.
+const ipModeOverrides = ref({});
+const ipAddrs = ref({});
+
+function ipMode(key) {
+  if (key in ipModeOverrides.value) return ipModeOverrides.value[key];
+  const v = form.value[key] || '';
+  if (!v) return isVnet.value ? 'disable' : '';
+  if (v === 'dhcp') return 'dhcp';
+  if (v === 'inherit') return 'inherit';
+  if (v === 'disable') return 'disable';
+  return 'static';
+}
+
+function onIpModeChange(key, mode) {
+  ipModeOverrides.value[key] = mode;
+}
+
+function ipAddr(key) {
+  if (!(key in ipAddrs.value)) {
+    // Initialize from form on first load.
+    const v = form.value[key] || '';
+    ipAddrs.value[key] = ['', 'dhcp', 'inherit', 'disable'].includes(v) ? '' : v;
+  }
+  return ipAddrs.value[key];
+}
+
+function onIpAddrInput(key, val) {
+  ipAddrs.value[key] = val;
+}
+
+function ipOptions() {
+  if (isVnet.value) {
+    return [
+      { value: 'static', label: t('jails.ipStatic') },
+      { value: 'dhcp', label: 'DHCP' },
+      { value: 'disable', label: t('jails.ipDisable') },
+    ];
+  }
+  return [
+    { value: '', label: '—' },
+    { value: 'static', label: t('jails.ipStatic') },
+    { value: 'inherit', label: 'inherit' },
+    { value: 'disable', label: t('jails.ipDisable') },
+  ];
+}
+
+function showIpAddr(key) {
+  return ipMode(key) === 'static';
+}
+
+function ipPlaceholder(key) {
+  if (key === 'meta.ip4') return isVnet.value ? '192.168.1.10/24' : '192.168.1.10';
+  return '2001:db8::1';
+}
+
 function isLocked(p) {
   return isRunning.value && p.lockWhenRunning;
 }
@@ -202,6 +281,17 @@ async function onSubmit() {
   submitting.value = true;
   try {
     const params = { ...form.value };
+    // Merge IP fields: resolve mode + address into final meta.ip4/ip6 value.
+    for (const key of ['meta.ip4', 'meta.ip6']) {
+      const mode = ipMode(key);
+      if (mode === 'static') {
+        params[key] = (ipAddrs.value[key] || '').trim();
+      } else if (mode === '') {
+        params[key] = '';
+      } else {
+        params[key] = mode;
+      }
+    }
     delete params.__autoStart;
     await api.put(`/api/jails/${encodeURIComponent(name)}`, {
       params,
@@ -249,9 +339,10 @@ onMounted(async () => {
         <template #default="{ active }">
         <template v-for="tab in TABS" :key="tab.key">
         <div v-if="active === tab.key">
-        <div v-for="p in PARAM_GROUPS[tab.key]" :key="p.key" class="form-row">
+        <template v-for="p in PARAM_GROUPS[tab.key]" :key="p.key">
+        <div v-if="!p.vnetDependent || isVnet" class="form-row">
           <label class="form-row-label">
-            <span class="mono">{{ p.key === '__autoStart' ? t('jails.autoStart') : p.key }}</span>
+            <span class="mono">{{ paramLabel(p) }}</span>
           </label>
 
           <div>
@@ -266,7 +357,7 @@ onMounted(async () => {
                 type="checkbox"
                 :checked="boolVal(p.key)"
                 :disabled="isLocked(p)"
-                @change="form[p.key] = $event.target.checked ? 'true' : ''"
+                @change="onBoolChange(p.key, $event.target.checked)"
               />
               <span class="param-desc-inline" v-if="p.descKey">{{ t(p.descKey) }}</span>
             </label>
@@ -286,12 +377,22 @@ onMounted(async () => {
                 </button>
               </div>
 
-              <input v-else type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" />
+              <div v-else-if="p.type === 'ip'" class="ip-field">
+                <select :value="ipMode(p.key)" :disabled="isLocked(p)" @change="onIpModeChange(p.key, $event.target.value)">
+                  <option v-for="opt in ipOptions()" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+                <input v-if="showIpAddr(p.key)" type="text" :value="ipAddr(p.key)" :placeholder="ipPlaceholder(p.key)" :disabled="isLocked(p)" @input="onIpAddrInput(p.key, $event.target.value)" />
+              </div>
 
-              <p v-if="p.descKey" class="param-desc">{{ t(p.descKey) }}</p>
+              <textarea v-else-if="p.type === 'textarea'" v-model="form[p.key]" rows="3" :placeholder="p.ph || ''" :disabled="isLocked(p)" class="param-textarea"></textarea>
+
+              <input v-else type="text" v-model="form[p.key]" :placeholder="p.ph || ''" :disabled="isLocked(p)" :readonly="p.readOnly" />
+
+              <p v-if="p.descKey" class="param-desc">{{ descText(p) }}</p>
             </div>
           </div>
         </div>
+        </template>
         </div>
         </template>
         </template>
@@ -414,6 +515,42 @@ onMounted(async () => {
 input:disabled, select:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+input[readonly] {
+  color: var(--text-dim);
+  cursor: default;
+}
+.param-textarea {
+  width: 100%;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+  line-height: 1.5;
+}
+.param-textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.param-textarea:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ip-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ip-field select {
+  width: auto;
+  min-width: 100px;
+}
+.ip-field input {
+  flex: 1;
 }
 .fstab-section {
   margin-top: 20px;

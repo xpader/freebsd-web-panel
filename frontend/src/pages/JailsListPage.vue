@@ -104,18 +104,17 @@ onMounted(load);
   <div class="card" style="padding:0;">
     <table>
       <thead><tr>
-        <th>JID</th><th>{{ t('common.name') }}</th><th>{{ t('jails.hostname') }}</th>
-        <th>{{ t('jails.path') }}</th><th>IP</th><th>{{ t('common.status') }}</th><th>{{ t('common.actions') }}</th>
+        <th>JID</th><th>{{ t('common.name') }}</th><th>{{ t('common.description') }}</th>
+        <th>IP</th><th>{{ t('common.status') }}</th><th>{{ t('common.actions') }}</th>
       </tr></thead>
       <tbody>
-        <tr v-if="error"><td colspan="7" class="empty">{{ t('common.loadFailed', { msg: error }) }}</td></tr>
-        <tr v-else-if="loading"><td colspan="7" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</td></tr>
-        <tr v-else-if="!allJails.length"><td colspan="7" class="empty">{{ t('jails.noJails') }}</td></tr>
+        <tr v-if="error"><td colspan="6" class="empty">{{ t('common.loadFailed', { msg: error }) }}</td></tr>
+        <tr v-else-if="loading"><td colspan="6" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</td></tr>
+        <tr v-else-if="!allJails.length"><td colspan="6" class="empty">{{ t('jails.noJails') }}</td></tr>
         <tr v-for="j in allJails" :key="j.name" class="row-clickable" @click="router.push(`/jails/detail/${j.name}`)">
           <td class="mono">{{ j.jid > 0 ? j.jid : '—' }}</td>
           <td class="mono"><strong>{{ j.name }}</strong></td>
-          <td>{{ j.hostname || '—' }}</td>
-          <td class="mono text-dim">{{ j.path || '—' }}</td>
+          <td>{{ j.description || '—' }}</td>
           <td class="mono">
             <span v-if="formatIpStr(j.ip4_addr, j.ip6_addr)" class="badge badge-dim">{{ formatIpStr(j.ip4_addr, j.ip6_addr) }}</span>
             <span v-else class="text-dim">—</span>
@@ -132,7 +131,6 @@ onMounted(load);
                 <button class="btn-secondary btn-sm" :disabled="jailState(j.name, j.jid > 0) !== 'running'" @click="jailAction(j.name, 'stop')">{{ t('jails.stop') }}</button>
               </template>
               <a v-if="j.jid > 0" :href="`#/jails/terminal/${j.name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('term.openTerminal') }}</a>
-              <button class="btn-danger btn-sm" @click="jailDelete(j.name)">{{ t('common.delete') }}</button>
             </div>
           </td>
         </tr>

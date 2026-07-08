@@ -1,18 +1,24 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
+import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
 import SectionCard from '../components/ui/SectionCard.vue';
 import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const route = useRoute();
+const router = useRouter();
+const toast = useToast();
+const alert = useAlert();
+const confirm = useConfirm();
 const name = route.params.name;
 
 const d = ref(null);
 const error = ref('');
 const activeTab = ref('overview');
+const acting = ref(false);
 
 const running = computed(() => d.value?.jid > 0);
 const merged = computed(() => {
@@ -57,13 +63,57 @@ function stateBadge(state) {
   return { cls: 'badge-dim', text: t('jails.stopped') };
 }
 
-onMounted(async () => {
+function ipModeText(key) {
+  const v = merged.value[key];
+  if (!v || v === 'disable') return t('jails.ipDisable');
+  if (v === 'dhcp') return 'DHCP';
+  if (v === 'inherit') return 'inherit';
+  return t('jails.ipStatic');
+}
+
+function ipAddrText(key) {
+  const v = merged.value[key];
+  if (!v || v === 'dhcp' || v === 'inherit' || v === 'disable') return '';
+  return ` (${v})`;
+}
+
+async function reload() {
   try {
     d.value = await api.get(`/api/jails/${encodeURIComponent(name)}`);
   } catch (err) {
     error.value = err.message || '';
   }
-});
+}
+
+async function jailAction(action) {
+  acting.value = true;
+  try {
+    await api.post(`/api/jails/${encodeURIComponent(name)}/${action}`);
+    toast.toast(t('jails.actionDone', { name, action: t('jails.' + action) }));
+    await reload();
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  } finally {
+    acting.value = false;
+  }
+}
+
+async function jailDelete() {
+  const result = await confirm(t('jails.deleteJail'), t('jails.deleteConfirm', { name }), [
+    { key: 'removeFiles', label: t('jails.deleteFiles'), checked: false },
+  ]);
+  if (!result || !result.confirmed) return;
+  try {
+    const qs = result.removeFiles ? '?remove_files=true' : '';
+    await api.del(`/api/jails/${encodeURIComponent(name)}${qs}`);
+    toast.toast(t('jails.deleted'));
+    router.push('/jails/running');
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  }
+}
+
+onMounted(reload);
 </script>
 
 <template>
@@ -73,8 +123,11 @@ onMounted(async () => {
       <h1>{{ name }}</h1>
     </div>
     <div class="flex btn-group" style="margin-left:auto;">
+        <button v-if="!running" class="btn-sm" :disabled="acting" @click="jailAction('start')"><i class="fa-solid fa-play"></i> {{ t('jails.start') }}</button>
+        <button v-if="running" class="btn-secondary btn-sm" :disabled="acting" @click="jailAction('stop')"><i class="fa-solid fa-stop"></i> {{ t('jails.stop') }}</button>
         <a v-if="running" :href="`#/jails/terminal/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('term.openTerminal') }}</a>
         <a :href="`#/jails/edit/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-pen-to-square"></i> {{ t('common.edit') }}</a>
+        <button class="btn-danger btn-sm" @click="jailDelete"><i class="fa-solid fa-trash"></i> {{ t('common.delete') }}</button>
     </div>
   </div>
 
@@ -100,70 +153,73 @@ onMounted(async () => {
       <!-- Overview -->
       <table v-if="active === 'overview'" class="kv-table">
         <tbody>
-        <tr><td class="mono text-dim">{{ t('jails.autoStart') }}</td><td>
+        <tr><td class="text-dim">{{ t('common.description') }}</td><td>{{ d.description || '—' }}</td></tr>
+        <tr><td class="text-dim">{{ t('jails.autoStart') }}</td><td>
           <i v-if="d.auto_start" class="fa-solid fa-check" style="color: var(--success);"></i>
           <i v-else class="fa-solid fa-xmark" style="color: var(--danger);"></i>
         </td></tr>
-        <tr><td class="mono text-dim">path</td><td class="mono">{{ merged.path || '—' }}</td></tr>
-        <tr><td class="mono text-dim">host.hostname</td><td class="mono">{{ merged['host.hostname'] || d.name || '—' }}</td></tr>
-        <tr><td class="mono text-dim">host.domainname</td><td class="mono">{{ merged['host.domainname'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">host.hostuuid</td><td class="mono">{{ merged['host.hostuuid'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">host.hostid</td><td class="mono">{{ merged['host.hostid'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">mount.fstab</td><td class="mono">{{ merged['mount.fstab'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">mount.devfs</td><td class="mono">{{ merged['mount.devfs'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">mount.fdescfs</td><td class="mono">{{ merged['mount.fdescfs'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">mount.procfs</td><td class="mono">{{ merged['mount.procfs'] || '—' }}</td></tr>
+        <tr><td class="text-dim">path</td><td class="mono">{{ merged.path || '—' }}</td></tr>
+        <tr><td class="text-dim">{{ t('jails.hostname') }}</td><td class="mono">{{ merged['host.hostname'] || d.name || '—' }}</td></tr>
+        <tr><td class="text-dim">host.domainname</td><td class="mono">{{ merged['host.domainname'] || '—' }}</td></tr>
+        <tr><td class="text-dim">host.hostuuid</td><td class="mono">{{ merged['host.hostuuid'] || '—' }}</td></tr>
+        <tr><td class="text-dim">host.hostid</td><td class="mono">{{ merged['host.hostid'] || '—' }}</td></tr>
+        <tr><td class="text-dim">mount.fstab</td><td class="mono">{{ merged['mount.fstab'] || '—' }}</td></tr>
+        <tr><td class="text-dim">mount.devfs</td><td class="mono">{{ merged['mount.devfs'] || '—' }}</td></tr>
+        <tr><td class="text-dim">mount.fdescfs</td><td class="mono">{{ merged['mount.fdescfs'] || '—' }}</td></tr>
+        <tr><td class="text-dim">mount.procfs</td><td class="mono">{{ merged['mount.procfs'] || '—' }}</td></tr>
         </tbody>
       </table>
 
       <!-- Network -->
       <table v-else-if="active === 'network'" class="kv-table">
         <tbody>
-        <tr><td class="mono text-dim">interface</td><td class="mono">{{ merged.interface || '—' }}</td></tr>
-        <tr><td class="mono text-dim">ip4</td><td class="mono">{{ merged.ip4 || '—' }}</td></tr>
-        <tr><td class="mono text-dim">ip4.addr</td><td class="mono">{{ ip4Addr.length ? ip4Addr.join(', ') : '—' }}</td></tr>
-        <tr><td class="mono text-dim">ip6</td><td class="mono">{{ merged.ip6 || '—' }}</td></tr>
-        <tr><td class="mono text-dim">ip6.addr</td><td class="mono">{{ ip6Addr.length ? ip6Addr.join(', ') : '—' }}</td></tr>
-        <tr><td class="mono text-dim">vnet</td><td class="mono">{{ merged.vnet || '—' }}</td></tr>
+        <tr><td class="text-dim">{{ t('jails.labelMetaInterface') }}</td><td class="mono">{{ merged['meta.interface'] || '—' }}</td></tr>
+        <tr><td class="text-dim">{{ t('jails.labelMetaIp4') }}</td><td class="mono">{{ ipModeText('meta.ip4') }}{{ ipAddrText('meta.ip4') }}</td></tr>
+        <tr><td class="text-dim">{{ t('jails.labelMetaIp6') }}</td><td class="mono">{{ ipModeText('meta.ip6') }}{{ ipAddrText('meta.ip6') }}</td></tr>
+        <tr><td class="text-dim">vnet</td><td>
+          <i v-if="merged.vnet === 'true' || merged.vnet === '1'" class="fa-solid fa-check" style="color: var(--success);"></i>
+          <i v-else class="fa-solid fa-xmark" style="color: var(--danger);"></i>
+        </td></tr>
         </tbody>
       </table>
 
       <!-- Execution -->
       <table v-else-if="active === 'exec'" class="kv-table">
         <tbody>
-        <tr><td class="mono text-dim">exec.start</td><td class="mono">{{ merged['exec.start'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.stop</td><td class="mono">{{ merged['exec.stop'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.clean</td><td class="mono">{{ merged['exec.clean'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.jail_user</td><td class="mono">{{ merged['exec.jail_user'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.system_user</td><td class="mono">{{ merged['exec.system_user'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.prestart</td><td class="mono">{{ merged['exec.prestart'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.poststop</td><td class="mono">{{ merged['exec.poststop'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.timeout</td><td class="mono">{{ merged['exec.timeout'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">exec.consolelog</td><td class="mono">{{ merged['exec.consolelog'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.start</td><td class="mono">{{ merged['exec.start'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.stop</td><td class="mono">{{ merged['exec.stop'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.clean</td><td class="mono">{{ merged['exec.clean'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.jail_user</td><td class="mono">{{ merged['exec.jail_user'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.system_user</td><td class="mono">{{ merged['exec.system_user'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.prestart</td><td class="mono">{{ merged['exec.prestart'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.poststart</td><td class="mono">{{ merged['exec.poststart'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.poststop</td><td class="mono">{{ merged['exec.poststop'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.timeout</td><td class="mono">{{ merged['exec.timeout'] || '—' }}</td></tr>
+        <tr><td class="text-dim">exec.consolelog</td><td class="mono">{{ merged['exec.consolelog'] || '—' }}</td></tr>
         </tbody>
       </table>
 
       <!-- Security -->
       <table v-else-if="active === 'security'" class="kv-table">
         <tbody>
-        <tr><td class="mono text-dim">securelevel</td><td class="mono">{{ merged.securelevel || '—' }}</td></tr>
-        <tr><td class="mono text-dim">enforce_statfs</td><td class="mono">{{ merged.enforce_statfs || '—' }}</td></tr>
-        <tr><td class="mono text-dim">devfs_ruleset</td><td class="mono">{{ merged.devfs_ruleset || '—' }}</td></tr>
-        <tr><td class="mono text-dim">children.max</td><td class="mono">{{ merged['children.max'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">children.cur</td><td class="mono">{{ merged['children.cur'] || '—' }}</td></tr>
+        <tr><td class="text-dim">securelevel</td><td class="mono">{{ merged.securelevel || '—' }}</td></tr>
+        <tr><td class="text-dim">enforce_statfs</td><td class="mono">{{ merged.enforce_statfs || '—' }}</td></tr>
+        <tr><td class="text-dim">devfs_ruleset</td><td class="mono">{{ merged.devfs_ruleset || '—' }}</td></tr>
+        <tr><td class="text-dim">children.max</td><td class="mono">{{ merged['children.max'] || '—' }}</td></tr>
+        <tr><td class="text-dim">children.cur</td><td class="mono">{{ merged['children.cur'] || '—' }}</td></tr>
         </tbody>
       </table>
 
       <!-- Runtime -->
       <table v-else-if="active === 'runtime'" class="kv-table">
         <tbody>
-        <tr><td class="mono text-dim">jid</td><td class="mono">{{ d.jid }}</td></tr>
-        <tr><td class="mono text-dim">osrelease</td><td class="mono">{{ merged.osrelease || '—' }}</td></tr>
-        <tr><td class="mono text-dim">osreldate</td><td class="mono">{{ merged.osreldate || '—' }}</td></tr>
-        <tr><td class="mono text-dim">cpuset.id</td><td class="mono">{{ merged['cpuset.id'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">dying</td><td class="mono">{{ merged.dying || 'false' }}</td></tr>
-        <tr><td class="mono text-dim">ip4.saddrsel</td><td class="mono">{{ merged['ip4.saddrsel'] || '—' }}</td></tr>
-        <tr><td class="mono text-dim">ip6.saddrsel</td><td class="mono">{{ merged['ip6.saddrsel'] || '—' }}</td></tr>
+        <tr><td class="text-dim">JID</td><td class="mono">{{ d.jid }}</td></tr>
+        <tr><td class="text-dim">osrelease</td><td class="mono">{{ merged.osrelease || '—' }}</td></tr>
+        <tr><td class="text-dim">osreldate</td><td class="mono">{{ merged.osreldate || '—' }}</td></tr>
+        <tr><td class="text-dim">cpuset.id</td><td class="mono">{{ merged['cpuset.id'] || '—' }}</td></tr>
+        <tr><td class="text-dim">dying</td><td class="mono">{{ merged.dying || 'false' }}</td></tr>
+        <tr><td class="text-dim">ip4.saddrsel</td><td class="mono">{{ merged['ip4.saddrsel'] || '—' }}</td></tr>
+        <tr><td class="text-dim">ip6.saddrsel</td><td class="mono">{{ merged['ip6.saddrsel'] || '—' }}</td></tr>
         </tbody>
       </table>
 

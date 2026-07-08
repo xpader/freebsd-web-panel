@@ -7,17 +7,17 @@ Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/�
 当前阶段已实现：
 - libjail FFI 绑定 + RAII 安全封装
 - 容器列表页（运行中 Tab / 全部 Tab，全部 Tab 解析 jail.conf）
-- Jail 详情页（全参数展示）
+- Jail 详情页（分区展示，翻译标签，含启动/停止/删除按钮）
 - Jail 创建（从基础系统 ZFS Clone / SharedFS，或直接指定目录）
-- Jail 启动 / 停止（`jail -c` / `jail -r`）
-- Jail 删除（从 jail.conf 移除 + 可选删除文件系统）
+- Jail 编辑（参数编辑、meta.* 网络配置、VNET 自动配置、fstab 管理）
+- Jail 启动 / 停止 / 删除（`jail -c` / `jail -r`）
 - jail.conf 解析器（变量替换、注释处理、全局参数继承）
 - jail.conf 块写入（备份 + 原子替换，智能省略与全局默认相同的参数）
-- 基础系统创建（三种方式：导入已有目录/数据集、从 base.txz 文件创建、自动下载创建）、列表、编辑快照、删除
-- 镜像创建（ZFS Clone / SharedFS，生成 fstab）
-- 弹窗提交安全（遮罩 + spin，成功才关闭，失败保留弹窗）
+- 基础系统管理（三种创建方式/编辑/镜像创建）
+- VNET 自动配置（epair/bridge 生命周期、DHCP/静态 IP）
+- Jail 终端（WebSocket + PTY + xterm.js）
 
-未实现：jail 编辑（修改已有 jail.conf 条目）、restart、控制台 WebSocket、快照/回滚 UI。
+未实现：restart、快照/回滚 UI。
 
 ## 实现细节
 
@@ -313,64 +313,136 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 **未来可能重新引入的条件**：FreeBSD 为 ZFS 添加 whiteout 支持，或引入新的联合文件系统。
 
-### 前端 `web/js/pages/jails.js`
+### 前端
 
-#### 容器列表页（`/jails/running`）
+#### 容器列表页（`/jails/running`，`JailsListPage.vue`）
 
 - Tab 切换（运行中 / 全部），使用 `filter-group` + `filter-btn` 样式
-- 运行中：调用 `GET /api/jails?running=true`（libjail 快速路径）
-- 全部：调用 `GET /api/jails`（jail.conf 解析 + libjail 状态合并）
-- 表格列：JID / 名称 / 主机名 / 路径 / IP / 状态 / 操作
+- 表格列：JID / 名称 / 描述 / IP / 状态 / 操作
+- 操作列：启动 / 停止 / 终端（仅运行中），无删除按钮（删除在详情页）
 - 行可点击跳转详情页
-- 操作列：启动 / 停止（按状态启用/禁用）/ 删除按钮
-- 右上角"创建"按钮
 
-#### 创建 Jail 独立页面（`/jails/create`）
+#### Jail 详情页（`JailDetailPage.vue`）
 
-独立页面（非弹窗），动态字段：
-- 名称 + hostname + 位置类型选择器
-- "目录路径"→ 路径输入框
-- "从基础系统创建"→ 基础系统下拉：
-  - ZFS 类型 → 快照选择 + 目标数据集（默认值）+ 挂载点（默认值）
-  - SharedFS 类型 → 目标目录（默认值）
-- 网络接口 + IPv4 + IPv6
-- 底部固定操作栏（取消 + 确定），提交时禁用按钮 + loading 状态，成功后跳转列表页
+- 头部按钮：启动/停止、终端、编辑、删除
+- 状态栏：JID / 状态 / persist / 父级
+- 分区表格（标签使用翻译名，非原始参数键）：
+  - 基本信息：描述、自动启动、path、主机名等
+  - 网络：接口、IPv4（模式+地址）、IPv6、vnet（✓/✗ 图标）
+  - 执行：exec.start/stop/prestart/poststart 等
+  - 安全、权限（allow.*）、全部参数
+- 运行中时额外显示运行时信息标签页
 
-从弹窗改为独立页面的原因：选择基础系统 + ZFS 类型后字段较多，弹窗在小屏幕上过高导致底部按钮不可见。
+#### Jail 编辑页（`JailEditPage.vue`）
 
-#### Jail 详情页（`/jails/detail/<name>`）
+分区标签页编辑，与详情页结构对应：
+- **基本信息**：path、hostname、meta.description、自动启动等
+- **网络**：meta.interface（接口）、meta.ip4（统一 IP 字段 = 下拉选模式 + 条件地址输入框）、meta.ip6、vnet、vnet.interface（只读 auto）
+- **执行**：exec.start/stop/prestart/poststop 为多行文本框（每行一条命令，保存为 `+=`）、exec.clean 等
+- **挂载**：mount.fstab（含 fstab 管理弹窗）、devfs 等
+- **安全**、**其它**
 
-- 单次 API 调用 `GET /api/jails/{name}`，返回配置参数 + 可选运行时
-- 头部行内布局：JID / 状态 / persist / 父级（紧凑展示，非独立卡片）
-- 运行中时额外显示运行时信息卡片（osrelease、osreldate、cpuset 等）
-- 分区表格：网络 / 主机信息 / 安全 / 系统 / 权限（allow.* 徽章网格）
-- conf 参数与 libjail 参数合并后统一展示
+IP 字段交互（`type: 'ip'`）：
+- 模式选择和地址文本独立存储（`ipModeOverrides` / `ipAddrs`），切换模式不丢失地址
+- VNET 模式选项：静态/DHCP/禁用；普通模式：—/静态/inherit/禁用
+- 仅提交时合并写入 `form.value`
 
-#### 基础系统列表页（`/jails/bases`）
+### 网络配置与 VNET 自动配置
 
-- 表格：名称 / 源路径 / 类型徽章（ZFS/SharedFS）/ 快照数 / 操作按钮
-- "创建"按钮 → 动态弹窗（三种创建方式）：
-  - 创建方式选择器（导入已有 / 从 base.txz / 自动下载）+ 描述框
-  - 类型选择器（ZFS / SharedFS）+ 描述框
-  - 根据方式×类型组合动态显示/隐藏字段：
-    - 导入 + ZFS：现有数据集下拉 + 快照多选
-    - 导入 + SharedFS：现有 template + sharedfs 路径
-    - 从 base.txz + ZFS：txz 文件路径 + 新数据集 + 快照名
-    - 从 base.txz + SharedFS：txz 文件路径 + 新 sharedfs 目录 + 新 template 目录
-    - 自动下载：镜像下拉 + 版本输入（datalist 常用版本）+ 架构下拉，然后同 from-txz
-- "编辑"按钮（仅 ZFS 类型）→ 快照编辑弹窗
-- "创建镜像"按钮 → 按基础系统类型显示对应字段
-- "删除"按钮 → 确认弹窗
+#### meta.* 参数体系
 
-#### 弹窗提交安全机制 `submitModal()`
+网络配置使用 `meta.*` 命名空间作为唯一数据源（source of truth），存储在 jail.conf 中。所有 `meta.*` 键使用下划线分隔（不用点号），jail(8) 忽略这些参数但 fwp 读取它们来派生实际的 jail.conf 参数。
 
-所有写操作弹窗（创建 Jail、导入/编辑基础系统、创建镜像）统一使用：
-1. 提交时在弹窗内显示遮罩层 + spinner（`.modal-busy`）
-2. 调用 API
-3. 成功 → 关闭弹窗
-4. 失败 → 移除遮罩，弹窗保留，toast 报错
+| meta 键 | 含义 | 示例值 |
+|---|---|---|
+| `meta.description` | 人类可读描述 | `"Web server"` |
+| `meta.interface` | 出口网络接口 | `"bge1"` |
+| `meta.ip4` | IPv4 配置（单值） | `"dhcp"` / `"192.168.1.10"` / `"inherit"` / `"disable"` / 空 |
+| `meta.ip6` | IPv6 配置（同上） | 同上 |
 
-### 导航结构 `web/js/ui/layout.js`
+`meta.ip4` 的值决定 IP 模式：
+- **空/不存在** = None（无 IP 配置）
+- **`dhcp`** = DHCP 模式（仅 VNET）
+- **`inherit`** = 继承主机网络栈（仅非 VNET）
+- **`disable`** = 禁用
+- **其他值** = 静态 IP 地址（值本身就是地址）
+
+#### 普通模式（非 VNET）
+
+`meta.interface` 直接派生为 `interface` 参数，`meta.ip4` 派生为 `ip4.addr` 或 `ip4 = "inherit"`：
+
+```
+myjail {
+    meta.description = "Web server";
+    meta.interface = "bge1";
+    meta.ip4 = "192.168.1.10";
+    interface = "bge1";
+    ip4.addr = 192.168.1.10;
+}
+```
+
+#### VNET 自动模式
+
+勾选 `vnet` 后，`vnet.interface` 设为 `auto`。保存时：
+1. `meta.interface` 用于查找或创建网桥（`ensure_bridge_for_interface`）
+2. 自动生成 epair 生命周期命令（`fwp-vnet` 脚本）
+3. 根据 `meta.ip4` 值生成 IP 配置命令
+
+```
+myjail {
+    meta.description = "DHCP jail";
+    meta.interface = "bge1";
+    meta.ip4 = "dhcp";
+    vnet;
+    vnet.interface = "vnet0";
+    devfs_ruleset = "11";
+    exec.prestart += "/usr/local/libexec/fwp-vnet up ${name} bridge0";
+    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} dhcp";
+    exec.poststop += "/usr/local/libexec/fwp-vnet down ${name}";
+}
+```
+
+静态 IP 的 VNET jail：
+```
+    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} static 192.168.1.10/24 192.168.1.1";
+```
+
+#### 网桥自动管理
+
+`ensure_bridge_for_interface(iface)`:
+1. 如果接口已是某网桥成员 → 返回该网桥
+2. 如果接口本身是网桥 → 返回它
+3. 否则 → 创建新网桥，加入接口，全部 up
+
+#### fwp-vnet 辅助脚本
+
+`/usr/local/libexec/fwp-vnet`，带版本标记（`# fwp-vnet-version: N`），版本不匹配时自动覆盖：
+
+| 子命令 | 执行位置 | 作用 |
+|---|---|---|
+| `up <name> <bridge>` | 主机（exec.prestart） | 创建 epair，host 端加入网桥，jail 端重命名 vnet0 |
+| `down <name>` | 主机（exec.poststop） | 销毁 vnet0（epair 对自动销毁） |
+| `init <name> dhcp` | 主机（exec.poststart） | jexec 进 jail 启动 dhclient |
+| `init <name> static <ip> <gw>` | 主机（exec.poststart） | jexec 进 jail 配置 ifconfig + route |
+
+#### 编辑时的 exec 行管理
+
+所有含 `fwp-vnet` 的 exec.* 行由网络配置完全控制：
+- **保存时**：通用循环跳过所有含 `fwp-vnet` 的命令，由 VNET 块根据当前 `meta.*` 重新生成
+- **读取时**：exec.* 的 `+=` 和 `=` 行（包括 fwp-vnet 行）都被收集到多行文本框中显示
+- 不做隐藏——fwp-vnet 行在执行标签页的文本框中可见，但保存时不会重复写入
+
+#### Jail 编辑 API
+
+`PUT /api/jails/{name}` — 完整参数替换：
+- 请求体：`{params: HashMap<String, String>, auto_start?: bool}`
+- 后端用 `generate_jail_block_from_params()` 重新生成整个 jail 块
+- `meta.*` 直接写入，派生参数（interface/ip4 等）从 meta 生成，fwp-vnet 行自动管理
+
+### fstab 管理
+
+- `GET /api/jails/{name}/fstab` — 读取 jail 的 mount.fstab 文件
+- `PUT /api/jails/{name}/fstab` — 替换全部 fstab 条目
 
 ```
 虚拟化 (topbar)
@@ -386,18 +458,16 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/api/jails` | — | `[{name, jid, hostname, path, ip4_addr, ip6_addr}]`（全部 jail，jid>0=运行中） |
+| GET | `/api/jails` | — | `[{name, jid, description, hostname, path, ip4_addr, ip6_addr, auto_start}]`（全部 jail，jid>0=运行中） |
 | GET | `/api/jails?running=true` | — | 同上，仅运行中 jail |
-| GET | `/api/jails/{name}` | — | `{name, jid, hostname, path, ip4_addr, ip6_addr, params?, runtime?}` |
-
-### Jail 生命周期
-
-| 方法 | 路径 | 请求 | 响应 |
-|---|---|---|---|
-| POST | `/api/jails/create` | `{name, hostname?, location_type, path?, base_name?, snapshot?, target_dataset?, interface?, ip4?, ip6?}` | `201 {name, path, fstab?}` |
+| GET | `/api/jails/{name}` | — | `{name, jid, description, ..., params?, runtime?}` |
+| PUT | `/api/jails/{name}` | `{params, auto_start?}` | `200 {name}` |
+| POST | `/api/jails/create` | `{name, hostname?, location_type, ...}` | `201 {name, path, fstab?}` |
 | POST | `/api/jails/{name}/start` | — | `200 {name, action}` |
 | POST | `/api/jails/{name}/stop` | — | `200 {name, action}` |
 | DELETE | `/api/jails/{name}?remove_files=true` | — | `204` |
+| GET | `/api/jails/{name}/fstab` | — | `[FstabEntry]` |
+| PUT | `/api/jails/{name}/fstab` | `{entries}` | `[FstabEntry]` |
 
 ### 基础系统管理
 
@@ -428,6 +498,9 @@ POST `/api/jails/bases` 请求体根据 `method` 不同：
 - **`/usr/bin/tar`** — base.txz 解压（from-txz / download 方式）
 - **`/usr/bin/fetch`** — base.txz 下载（download 方式，FreeBSD 原生）
 - **`/etc/jail.conf`** — Jail 配置文件（读取 + 备份 + 原子写入）
+- **`/usr/local/libexec/fwp-vnet`** — VNET epair 生命周期管理脚本（首次启用 VNET 时自动创建）
+- **`/sbin/ifconfig`** — 网桥检测、epair 创建/销毁（VNET 自动配置）
+- **`/sbin/route`** — 默认网关检测（VNET 自动配置）
 - **crate: libc** — FFI 类型（`c_char`, `c_int`, `c_void`, `size_t`）
 - **crate: serde_json** — 基础系统注册表 JSON 读写
 
@@ -447,10 +520,8 @@ db = "/var/db/fwp/fwp.db"
 
 ## 已知限制 / TODO
 
-- **Jail 编辑** — 未实现修改已有 jail.conf 条目（如修改 IP、接口等参数）。
 - **restart** — 未实现（可通过先 stop 再 start 实现）。
-- **控制台 WebSocket** — 未实现。设计为 `jexec` + PTY。
-- **jail.conf 写回格式保留** — 当前创建/删除 jail 时是文本追加/移除块，不是 AST 级编辑，不保留块内注释和原始缩进格式。设计文档 `docs/plan/10-jail.md` §2 规划了 AST 解析器。
+- **快照/回滚 UI** — 未实现。
+- **jail.conf 写回格式保留** — 当前创建/删除 jail 时是文本追加/移除块，不是 AST 级编辑，不保留块内注释和原始缩进格式。
 - **UnionFS/OverlayFS** — 设计阶段调研并实测后暂不实现。原因：ZFS 不支持 whiteout。
-- **VNET 管理** — 未实现（epair 创建/销毁、bridge 管理）。
 - **资源限制** — 未实现（rctl CPU/内存/进程数限制）。
