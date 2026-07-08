@@ -102,6 +102,42 @@ const TEMPLATE_REAL_USR: &[&str] = &["local", "obj", "tests"];
 /// Empty dirs to create in template (standard FreeBSD layout).
 const TEMPLATE_EMPTY_DIRS: &[&str] = &["dev", "media", "mnt", "net", "proc", "sharedfs"];
 
+const JAIL_CONF: &str = "/etc/jail.conf";
+const DEVFS_RULES: &str = "/etc/devfs.rules";
+
+/// Default jail.conf content created during initialization.
+const DEFAULT_JAIL_CONF: &str = r#"exec.clean;
+exec.system_user = "root";
+exec.jail_user = "root";
+exec.start += "/bin/sh /etc/rc";
+exec.stop = "/bin/sh /etc/rc.shutdown";
+mount.devfs;
+devfs_ruleset = "4";
+enforce_statfs = "2";
+path="/usr/jails/${name}";
+host.hostname = "${name}";
+"#;
+
+/// Default devfs.rules content created during initialization.
+const DEFAULT_DEVFS_RULES: &str = r#"[devfsrules_jail_bpf=11]
+add include $devfsrules_jail
+add path 'bpf*' unhide
+"#;
+
+/// Default jail resolv.conf content created during initialization.
+const DEFAULT_JAIL_RESOLV: &str = "nameserver 8.8.8.8\nnameserver 1.1.1.1\n";
+
+/// Path to the default jail resolv.conf stored in fwp's data directory.
+fn jail_resolv_path(state: &AppState) -> PathBuf {
+    state
+        .config
+        .paths
+        .db
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("/var/db/fwp"))
+        .join("jail-resolv.conf")
+}
+
 // ── Running jail list / detail ────────────────────────────────────
 
 /// Read the jail_list from rc.conf (via sysrc) and return as a HashSet of jail names.
@@ -193,6 +229,11 @@ fn resolve_display_ip(
 /// List jails. By default returns all jails from jail.conf with running
 /// status merged from libjail. Pass ?running=true to get only running jails.
 pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> {
+    // If jail.conf doesn't exist, signal initialization is needed.
+    if !std::path::Path::new(JAIL_CONF).exists() {
+        return Err(ApiError::NeedsInit);
+    }
+
     let only_running = q.running.as_deref() == Some("true");
 
     if only_running {
@@ -264,6 +305,207 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
         .collect();
 
     Ok(Json(result))
+}
+
+// ── Initialization & default config ───────────────────────────────
+
+#[derive(Serialize)]
+pub struct InitStatus {
+    pub needs_init: bool,
+    pub jail_conf_exists: bool,
+    pub devfs_rules_exists: bool,
+}
+
+/// Check whether jail infrastructure files exist.
+pub async fn init_status() -> ApiResult<Json<InitStatus>> {
+    let jail_conf_exists = std::path::Path::new(JAIL_CONF).exists();
+    let devfs_rules_exists = std::path::Path::new(DEVFS_RULES).exists();
+    Ok(Json(InitStatus {
+        needs_init: !jail_conf_exists,
+        jail_conf_exists,
+        devfs_rules_exists,
+    }))
+}
+
+/// Create /etc/jail.conf and /etc/devfs.rules with default content.
+pub async fn jail_init(State(state): State<AppState>) -> ApiResult<StatusCode> {
+    if !std::path::Path::new(JAIL_CONF).exists() {
+        write_jail_conf_atomic(DEFAULT_JAIL_CONF)?;
+    }
+    if !std::path::Path::new(DEVFS_RULES).exists() {
+        fs::write(DEVFS_RULES, DEFAULT_DEVFS_RULES)?;
+    }
+    let resolv_path = jail_resolv_path(&state);
+    if !resolv_path.exists() {
+        if let Some(parent) = resolv_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&resolv_path, DEFAULT_JAIL_RESOLV)?;
+    }
+    Ok(StatusCode::CREATED)
+}
+
+/// Extract lines outside any jail block from jail.conf content.
+fn extract_global_conf(content: &str) -> String {
+    let mut global_lines = Vec::new();
+    let mut in_block = false;
+    let mut in_block_comment = false;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+
+        if in_block_comment {
+            if line.contains("*/") {
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if line.starts_with("/*") {
+            if !line.contains("*/") {
+                in_block_comment = true;
+            }
+            continue;
+        }
+
+        if line.ends_with('{') && !line.contains('=') && !line.contains(';') {
+            in_block = true;
+            continue;
+        }
+        if line.starts_with('}') {
+            in_block = false;
+            continue;
+        }
+        if !in_block {
+            global_lines.push(raw_line.to_string());
+        }
+    }
+
+    global_lines.join("\n")
+}
+
+/// Replace the global section of jail.conf while preserving jail blocks.
+fn replace_global_conf(content: &str, new_global: &str) -> String {
+    let mut result = Vec::new();
+    let mut in_block = false;
+    let mut in_block_comment = false;
+    let mut global_emitted = false;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+
+        if in_block_comment {
+            result.push(raw_line.to_string());
+            if line.contains("*/") {
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if line.starts_with("/*") {
+            result.push(raw_line.to_string());
+            if !line.contains("*/") {
+                in_block_comment = true;
+            }
+            continue;
+        }
+
+        if line.ends_with('{') && !line.contains('=') && !line.contains(';') {
+            // Entering a jail block — emit global section before the first block.
+            if !global_emitted {
+                result.push(new_global.to_string());
+                global_emitted = true;
+            }
+            in_block = true;
+            result.push(raw_line.to_string());
+            continue;
+        }
+        if line.starts_with('}') {
+            in_block = false;
+            result.push(raw_line.to_string());
+            continue;
+        }
+        if in_block {
+            result.push(raw_line.to_string());
+        }
+        // Skip global lines (will be replaced by new_global)
+    }
+
+    // If no blocks exist, the entire file is global.
+    if !global_emitted {
+        return new_global.to_string();
+    }
+
+    result.join("\n")
+}
+
+#[derive(Serialize)]
+pub struct ConfigText {
+    pub content: String,
+}
+
+#[derive(Deserialize)]
+pub struct ConfigTextUpdate {
+    pub content: String,
+}
+
+/// GET /api/jails/config/global — return the global (non-jail-block) lines of jail.conf.
+pub async fn get_global_conf() -> ApiResult<Json<ConfigText>> {
+    let content = fs::read_to_string(JAIL_CONF)
+        .map_err(|_| ApiError::NotFound("/etc/jail.conf not found".into()))?;
+    Ok(Json(ConfigText {
+        content: extract_global_conf(&content),
+    }))
+}
+
+/// PUT /api/jails/config/global — replace the global section of jail.conf.
+pub async fn put_global_conf(
+    State(state): State<AppState>,
+    Json(body): Json<ConfigTextUpdate>,
+) -> ApiResult<StatusCode> {
+    let content = fs::read_to_string(JAIL_CONF)
+        .map_err(|_| ApiError::NotFound("/etc/jail.conf not found".into()))?;
+    backup_jail_conf(&state)?;
+    let new_content = replace_global_conf(&content, body.content.trim_end());
+    write_jail_conf_atomic(&new_content)?;
+    Ok(StatusCode::OK)
+}
+
+/// GET /api/jails/config/devfs — return /etc/devfs.rules content.
+pub async fn get_devfs_rules() -> ApiResult<Json<ConfigText>> {
+    let content = fs::read_to_string(DEVFS_RULES)
+        .map_err(|_| ApiError::NotFound("/etc/devfs.rules not found".into()))?;
+    Ok(Json(ConfigText { content }))
+}
+
+/// PUT /api/jails/config/devfs — write /etc/devfs.rules.
+pub async fn put_devfs_rules(Json(body): Json<ConfigTextUpdate>) -> ApiResult<StatusCode> {
+    fs::write(DEVFS_RULES, &body.content)?;
+    Ok(StatusCode::OK)
+}
+
+/// GET /api/jails/config/resolv — return the default jail resolv.conf.
+pub async fn get_resolv_conf(
+    State(state): State<AppState>,
+) -> ApiResult<Json<ConfigText>> {
+    let path = jail_resolv_path(&state);
+    let content = if path.exists() {
+        fs::read_to_string(&path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    Ok(Json(ConfigText { content }))
+}
+
+/// PUT /api/jails/config/resolv — write the default jail resolv.conf.
+pub async fn put_resolv_conf(
+    State(state): State<AppState>,
+    Json(body): Json<ConfigTextUpdate>,
+) -> ApiResult<StatusCode> {
+    let path = jail_resolv_path(&state);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, &body.content)?;
+    Ok(StatusCode::OK)
 }
 
 // ── jail.conf parsing ─────────────────────────────────────────────
@@ -1355,8 +1597,6 @@ pub struct JailCreateBody {
     pub auto_start: Option<bool>,
 }
 
-const JAIL_CONF: &str = "/etc/jail.conf";
-
 /// Backup jail.conf to /var/db/fwp/backup/ with timestamp.
 fn backup_jail_conf(state: &AppState) -> ApiResult<()> {
     let backup_dir = bases_file(state)
@@ -1581,6 +1821,24 @@ pub async fn jail_create(
             return Err(ApiError::BadRequest(format!(
                 "unknown location_type: \"{other}\""
             )));
+        }
+    }
+
+    // Apply default resolv.conf if the jail doesn't have one.
+    let jail_resolv = std::path::PathBuf::from(&jail_path).join("etc/resolv.conf");
+    let needs_resolv = match fs::read_to_string(&jail_resolv) {
+        Ok(content) => content.trim().is_empty(),
+        Err(_) => true,
+    };
+    if needs_resolv {
+        let default_resolv = jail_resolv_path(&state);
+        if let Ok(default_content) = fs::read_to_string(&default_resolv) {
+            if !default_content.trim().is_empty() {
+                if let Some(parent) = jail_resolv.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&jail_resolv, &default_content)?;
+            }
         }
     }
 

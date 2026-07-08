@@ -32,6 +32,7 @@ import JailDetailPage from '../pages/JailDetailPage.vue';
 import JailEditPage from '../pages/JailEditPage.vue';
 import JailTerminalPage from '../pages/JailTerminalPage.vue';
 import JailBasesPage from '../pages/JailBasesPage.vue';
+import JailDefaultsPage from '../pages/JailDefaultsPage.vue';
 import ZfsPoolsPage from '../pages/ZfsPoolsPage.vue';
 import ZfsPoolDetailPage from '../pages/ZfsPoolDetailPage.vue';
 import ZfsDatasetsPage from '../pages/ZfsDatasetsPage.vue';
@@ -76,6 +77,7 @@ const routes = [
       { path: 'jails/edit/:name', name: 'jail-edit', component: JailEditPage },
       { path: 'jails/terminal/:name', name: 'jail-terminal', component: JailTerminalPage },
       { path: 'jails/bases', name: 'jail-bases', component: JailBasesPage },
+      { path: 'jails/defaults', name: 'jail-defaults', component: JailDefaultsPage },
       { path: 'zfs/pools', name: 'zfs-pools', component: ZfsPoolsPage },
       { path: 'zfs/pools/:name', name: 'zfs-pool-detail', component: ZfsPoolDetailPage },
       { path: 'zfs/datasets', name: 'zfs-datasets', component: ZfsDatasetsPage },

@@ -16,6 +16,8 @@ const allJails = ref([]);
 const loading = ref(true);
 const refreshing = ref(false);
 const error = ref('');
+const needsInit = ref(false);
+const initializing = ref(false);
 const pendingActions = ref(new Set());
 
 function jailState(name, running) {
@@ -46,8 +48,13 @@ async function load() {
   try {
     const url = jailTab.value === 'running' ? '/api/jails?running=true' : '/api/jails';
     allJails.value = await api.get(url);
+    needsInit.value = false;
   } catch (err) {
-    error.value = err.message || '';
+    if (err.status === 428) {
+      needsInit.value = true;
+    } else {
+      error.value = err.message || '';
+    }
   } finally {
     loading.value = false;
     refreshing.value = false;
@@ -82,10 +89,54 @@ async function jailDelete(name) {
   }
 }
 
+async function doInit() {
+  initializing.value = true;
+  try {
+    await api.post('/api/jails/init');
+    toast.toast(t('jails.initDone'));
+    await load();
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  } finally {
+    initializing.value = false;
+  }
+}
+
 onMounted(load);
 </script>
 
 <template>
+  <!-- Initialization prompt -->
+  <template v-if="needsInit">
+    <div class="page-header">
+      <h1>{{ t('jails.title') }}</h1>
+      <p>{{ t('jails.subtitle') }}</p>
+    </div>
+    <div class="card init-card">
+      <div class="init-icon"><i class="fa-solid fa-cube"></i></div>
+      <h2>{{ t('jails.initTitle') }}</h2>
+      <p class="text-dim init-desc">{{ t('jails.initDesc') }}</p>
+      <div class="init-files">
+        <div class="init-file">
+          <i class="fa-solid fa-file-lines"></i>
+          <code>/etc/jail.conf</code>
+          <span class="text-dim">{{ t('jails.initFileJailConf') }}</span>
+        </div>
+        <div class="init-file">
+          <i class="fa-solid fa-shield-halved"></i>
+          <code>/etc/devfs.rules</code>
+          <span class="text-dim">{{ t('jails.initFileDevfs') }}</span>
+        </div>
+      </div>
+      <button class="btn-primary init-btn" @click="doInit" :disabled="initializing">
+        <i :class="['fa-solid fa-rocket', { 'fa-spin': initializing }]"></i>
+        {{ t('jails.initButton') }}
+      </button>
+    </div>
+  </template>
+
+  <!-- Normal list view -->
+  <template v-else>
   <div class="page-header">
     <h1>{{ t('jails.title') }}</h1>
     <p>{{ t('jails.subtitle') }}</p>
@@ -137,4 +188,50 @@ onMounted(load);
       </tbody>
     </table>
   </div>
+  </template>
 </template>
+
+<style scoped>
+.init-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px 24px;
+  gap: 12px;
+}
+.init-icon {
+  font-size: 48px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.init-card h2 {
+  margin: 0;
+}
+.init-desc {
+  max-width: 500px;
+}
+.init-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0;
+  width: 100%;
+  max-width: 480px;
+}
+.init-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-elev);
+  border-radius: var(--radius);
+}
+.init-file .text-dim {
+  margin-left: auto;
+  font-size: 13px;
+}
+.init-btn {
+  margin-top: 8px;
+}
+</style>

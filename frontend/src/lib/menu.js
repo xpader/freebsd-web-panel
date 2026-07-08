@@ -86,6 +86,7 @@ export const MENU = [
         children: [
           { path: '/jails/running', labelKey: 'nav.jailList', icon: 'fa-solid fa-list' },
           { path: '/jails/bases', labelKey: 'nav.jailBases', icon: 'fa-solid fa-layer-group' },
+          { path: '/jails/defaults', labelKey: 'nav.jailDefaults', icon: 'fa-solid fa-gears' },
         ],
       },
       { path: '/bhyve', labelKey: 'nav.bhyve', icon: 'fa-regular fa-square' },

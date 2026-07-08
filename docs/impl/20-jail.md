@@ -16,6 +16,8 @@ Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/�
 - 基础系统管理（三种创建方式/编辑/镜像创建）
 - VNET 自动配置（epair/bridge 生命周期、DHCP/静态 IP）
 - Jail 终端（WebSocket + PTY + xterm.js）
+- Jail 初始化（检测 /etc/jail.conf 不存在 → 428 状态码 → 初始化按钮 → 创建默认配置文件）
+- 默认配置管理（jail.conf 全局参数 / devfs.rules / 默认 resolv.conf 的查看与编辑）
 
 未实现：restart、快照/回滚 UI。
 
@@ -469,6 +471,20 @@ myjail {
 | GET | `/api/jails/{name}/fstab` | — | `[FstabEntry]` |
 | PUT | `/api/jails/{name}/fstab` | `{entries}` | `[FstabEntry]` |
 
+### 初始化与默认配置
+
+| 方法 | 路径 | 请求 | 响应 |
+|---|---|---|---|
+| GET | `/api/jails` | — | `428 {"error":"needs_init"}` — 当 `/etc/jail.conf` 不存在时返回此状态码，前端显示初始化界面 |
+| GET | `/api/jails/init` | — | `200 {needs_init, jail_conf_exists, devfs_rules_exists}` |
+| POST | `/api/jails/init` | — | `201` — 创建 `/etc/jail.conf`（默认全局参数）和 `/etc/devfs.rules`（bpf 规则），已存在则跳过 |
+| GET | `/api/jails/config/global` | — | `200 {content}` — jail.conf 中 jail 块之外的全局参数文本 |
+| PUT | `/api/jails/config/global` | `{content}` | `200` — 替换 jail.conf 全局段（保留 jail 块位置，自动备份） |
+| GET | `/api/jails/config/devfs` | — | `200 {content}` — `/etc/devfs.rules` 文件内容 |
+| PUT | `/api/jails/config/devfs` | `{content}` | `200` — 写入 `/etc/devfs.rules` |
+| GET | `/api/jails/config/resolv` | — | `200 {content}` — 默认 jail resolv.conf（存储于 `/var/db/fwp/jail-resolv.conf`） |
+| PUT | `/api/jails/config/resolv` | `{content}` | `200` — 写入默认 jail resolv.conf |
+
 ### 基础系统管理
 
 | 方法 | 路径 | 请求 | 响应 |
@@ -497,7 +513,9 @@ POST `/api/jails/bases` 请求体根据 `method` 不同：
 - **`/bin/cp`** — SharedFS 模板拷贝
 - **`/usr/bin/tar`** — base.txz 解压（from-txz / download 方式）
 - **`/usr/bin/fetch`** — base.txz 下载（download 方式，FreeBSD 原生）
-- **`/etc/jail.conf`** — Jail 配置文件（读取 + 备份 + 原子写入）
+- **`/etc/jail.conf`** — Jail 配置文件（读取 + 备份 + 原子写入 + 初始化 + 全局段编辑）
+- **`/etc/devfs.rules`** — Devfs 规则文件（初始化 + 读写）
+- **`/var/db/fwp/jail-resolv.conf`** — 默认 jail DNS 配置（读写）
 - **`/usr/local/libexec/fwp-vnet`** — VNET epair 生命周期管理脚本（首次启用 VNET 时自动创建）
 - **`/sbin/ifconfig`** — 网桥检测、epair 创建/销毁（VNET 自动配置）
 - **`/sbin/route`** — 默认网关检测（VNET 自动配置）
@@ -517,6 +535,7 @@ db = "/var/db/fwp/fwp.db"
 - 注册表：`/var/db/fwp/jail-bases.json`
 - SharedFS fstab：`/var/db/fwp/jail-fstabs/<sanitized_target>.fstab`
 - jail.conf 备份：`/var/db/fwp/backup/jail.conf.<timestamp>`
+- 默认 jail resolv.conf：`/var/db/fwp/jail-resolv.conf`
 
 ## 已知限制 / TODO
 

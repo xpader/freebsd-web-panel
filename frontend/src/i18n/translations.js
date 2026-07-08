@@ -117,6 +117,7 @@ export const en = {
     jails: 'Jails',
     jailList: 'Jail List',
     jailBases: 'Base Systems',
+    jailDefaults: 'Default Config',
     bhyve: 'Bhyve VMs',
     monitorCpu: 'CPU & Load',
     monitorMemory: 'Memory',
@@ -879,6 +880,27 @@ export const en = {
     descAllowSuser: 'Allow privilege escalation inside the jail (root in jail can access more).',
     descPersist: 'Keep the jail alive even when no processes are running inside it.',
     descParent: 'Parent jail name for hierarchical jails.',
+    initTitle: 'Jail Configuration Not Initialized',
+    initDesc: 'The jail configuration file /etc/jail.conf does not exist. Initialize it to start managing jail containers.',
+    initButton: 'Initialize',
+    initDone: 'Jail configuration initialized',
+    initFileJailConf: 'Global jail parameters',
+    initFileDevfs: 'Device filesystem rules',
+    defaults: {
+      subtitle: 'Global jail configuration files',
+      global: {
+        title: 'jail.conf Defaults',
+        subtitle: 'Global parameters applied to all jails',
+      },
+      devfs: {
+        title: 'devfs.rules',
+        subtitle: 'Device filesystem rules for jails',
+      },
+      resolv: {
+        title: 'Default resolv.conf',
+        subtitle: 'DNS configuration copied into new jails',
+      },
+    },
   },
 };
 
@@ -969,6 +991,7 @@ export const zh = {
     jails: 'Jail 容器',
     jailList: '容器列表',
     jailBases: '基础系统',
+    jailDefaults: '默认配置',
     bhyve: 'Bhyve 虚拟机',
     monitorCpu: 'CPU & 负载',
     monitorMemory: '内存',
@@ -1731,5 +1754,26 @@ export const zh = {
     descAllowSuser: '允许 Jail 内提权（Jail 中的 root 可访问更多资源）。',
     descPersist: '即使 Jail 内没有进程运行也保持存活。',
     descParent: '父 Jail 名称，用于层级 Jail。',
+    initTitle: 'Jail 配置未初始化',
+    initDesc: '配置文件 /etc/jail.conf 不存在。请先初始化以开始管理 Jail 容器。',
+    initButton: '初始化',
+    initDone: 'Jail 配置已初始化',
+    initFileJailConf: '全局 Jail 参数',
+    initFileDevfs: '设备文件系统规则',
+    defaults: {
+      subtitle: 'Jail 全局配置文件',
+      global: {
+        title: 'jail.conf 默认配置',
+        subtitle: '应用于所有 Jail 的全局参数',
+      },
+      devfs: {
+        title: 'devfs.rules',
+        subtitle: 'Jail 设备文件系统规则',
+      },
+      resolv: {
+        title: '默认 resolv.conf',
+        subtitle: '创建新 Jail 时复制使用的 DNS 配置',
+      },
+    },
   },
 };

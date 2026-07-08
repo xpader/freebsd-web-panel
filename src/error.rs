@@ -22,6 +22,8 @@ pub enum ApiError {
     BadRequest(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("jail.conf not initialized")]
+    NeedsInit,
     #[error(transparent)]
     Database(#[from] rusqlite::Error),
     #[error("password hashing error: {0}")]
@@ -49,6 +51,7 @@ impl ApiError {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            ApiError::NeedsInit => (StatusCode::PRECONDITION_REQUIRED, "needs_init"),
             ApiError::Command(_) => (StatusCode::UNPROCESSABLE_ENTITY, "command_failed"),
             ApiError::Database(_) | ApiError::Hash(_) | ApiError::Io(_) | ApiError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
