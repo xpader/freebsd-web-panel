@@ -519,82 +519,9 @@ struct ParsedJail {
 /// Parse `/etc/jail.conf` into a list of jail entries with variable
 /// substitution applied.
 fn parse_jail_conf() -> ApiResult<Vec<ParsedJail>> {
-    let content = fs::read_to_string("/etc/jail.conf")
+    let content = fs::read_to_string(JAIL_CONF)
         .map_err(|_| ApiError::NotFound("/etc/jail.conf not found".into()))?;
-
-    let mut entries = Vec::new();
-    let mut global_params: Vec<(String, String)> = Vec::new();
-    let mut current: Option<(String, Vec<(String, String)>)> = None;
-    let mut in_block_comment = false;
-
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-
-        // Block comments.
-        if in_block_comment {
-            if line.contains("*/") {
-                in_block_comment = false;
-            }
-            continue;
-        }
-        if line.starts_with("/*") {
-            if !line.contains("*/") {
-                in_block_comment = true;
-            }
-            continue;
-        }
-
-        // Strip line comments.
-        let line = if let Some(pos) = line.find('#') {
-            &line[..pos]
-        } else {
-            line
-        };
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // Block start: "name {" or "name{".
-        if line.ends_with('{') {
-            let name = line.trim_end_matches('{').trim();
-            // Skip if it looks like a parameter assignment.
-            if !name.contains('=') && !name.contains(';') && !name.is_empty() {
-                current = Some((name.to_string(), Vec::new()));
-            }
-            continue;
-        }
-
-        // Block end: "}".
-        if line.starts_with('}') {
-            if let Some((name, params)) = current.take() {
-                let mut merged: Vec<(String, String)> = global_params.clone();
-                merged.extend(params);
-                entries.push((name, merged));
-            }
-            continue;
-        }
-
-        // Parse parameter: "key = value;" or "key += value;" or "key;".
-        let param = parse_param(line);
-        if let Some((k, v)) = param {
-            if let Some((_, ref mut params)) = current {
-                params.push((k, v));
-            } else {
-                global_params.push((k, v));
-            }
-        }
-    }
-
-    // Resolve variable substitution and build entries.
-    let mut result = Vec::new();
-    for (name, params) in &entries {
-        let mut map: HashMap<String, String> = params.iter().cloned().collect();
-        substitute_vars(&mut map, name);
-        result.push(ParsedJail { name: name.clone(), params: map });
-    }
-
-    Ok(result)
+    parse_jail_conf_from_str(&content)
 }
 
 /// Parse a single parameter line into (key, value).
@@ -1588,10 +1515,18 @@ pub struct JailCreateBody {
     /// ZFS base: snapshot to clone, target dataset, mount point.
     pub snapshot: Option<String>,
     pub target_dataset: Option<String>,
-    /// Network.
+    /// Network: interface name.
     pub interface: Option<String>,
+    /// Network: meta.ip4 value — "", "dhcp", "inherit", "disable", or static IP.
     pub ip4: Option<String>,
+    /// Network: meta.ip6 value — "", "inherit", "disable", or static IP.
     pub ip6: Option<String>,
+    /// Enable VNET.
+    #[serde(default)]
+    pub vnet: Option<bool>,
+    /// Allow raw sockets.
+    #[serde(default)]
+    pub allow_raw_sockets: Option<bool>,
     /// Add to rc.conf jail_list for auto-start.
     #[serde(default)]
     pub auto_start: Option<bool>,
@@ -1618,68 +1553,6 @@ fn write_jail_conf_atomic(content: &str) -> ApiResult<()> {
     fs::write(&tmp, content)?;
     fs::rename(&tmp, JAIL_CONF)?;
     Ok(())
-}
-
-/// Generate a jail.conf block for a new jail.
-fn generate_jail_block(
-    name: &str,
-    path: &str,
-    hostname: Option<&str>,
-    interface: Option<&str>,
-    ip4: Option<&str>,
-    ip6: Option<&str>,
-    fstab_path: Option<&str>,
-) -> String {
-    let mut lines = vec![format!("{name} {{")];
-
-    // Only emit parameters that differ from the global defaults.
-    // Global defaults in this system typically include:
-    //   path="/jails/${name}";  host.hostname = "${name}";
-    // So we only emit path/hostname if they differ from the pattern.
-    let default_path = format!("/jails/{name}");
-    if path != default_path {
-        lines.push(format!("    path = \"{path}\";"));
-    }
-
-    if let Some(hn) = hostname {
-        if !hn.is_empty() && hn != name {
-            lines.push(format!("    host.hostname = \"{hn}\";"));
-        }
-    }
-
-    if let Some(iface) = interface {
-        if !iface.is_empty() {
-            lines.push(format!("    meta.interface = \"{iface}\";"));
-            lines.push(format!("    interface = \"{iface}\";"));
-        }
-    }
-
-    if let Some(ip) = ip4 {
-        if !ip.is_empty() {
-            if ip == "inherit" {
-                lines.push("    ip4 = \"inherit\";".into());
-            } else {
-                lines.push(format!("    ip4.addr = {ip};"));
-            }
-        }
-    }
-
-    if let Some(ip) = ip6 {
-        if !ip.is_empty() {
-            if ip == "inherit" {
-                lines.push("    ip6 = \"inherit\";".into());
-            } else {
-                lines.push(format!("    ip6.addr = {ip};"));
-            }
-        }
-    }
-
-    if let Some(fstab) = fstab_path {
-        lines.push(format!("    mount.fstab = \"{fstab}\";"));
-    }
-
-    lines.push("}".into());
-    lines.join("\n")
 }
 
 /// Create a new jail: prepare filesystem + write jail.conf entry.
@@ -1846,15 +1719,43 @@ pub async fn jail_create(
     backup_jail_conf(&state)?;
 
     let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
-    let block = generate_jail_block(
-        &body.name,
-        &jail_path,
-        body.hostname.as_deref(),
-        body.interface.as_deref(),
-        body.ip4.as_deref(),
-        body.ip6.as_deref(),
-        fstab_path.as_deref(),
-    );
+
+    // Build params map for generate_jail_block_from_params (same logic as edit).
+    let mut params = HashMap::new();
+    params.insert("path".to_string(), jail_path.clone());
+    if let Some(hn) = &body.hostname {
+        if !hn.is_empty() && *hn != body.name {
+            params.insert("host.hostname".to_string(), hn.clone());
+        }
+    }
+    if let Some(fstab) = &fstab_path {
+        params.insert("mount.fstab".to_string(), fstab.to_string());
+    }
+    if let Some(iface) = &body.interface {
+        if !iface.is_empty() {
+            params.insert("meta.interface".to_string(), iface.clone());
+        }
+    }
+    if let Some(ip4) = &body.ip4 {
+        if !ip4.is_empty() {
+            params.insert("meta.ip4".to_string(), ip4.clone());
+        }
+    }
+    if let Some(ip6) = &body.ip6 {
+        if !ip6.is_empty() {
+            params.insert("meta.ip6".to_string(), ip6.clone());
+        }
+    }
+    if body.vnet.unwrap_or(false) {
+        params.insert("vnet".to_string(), "true".to_string());
+        params.insert("vnet.interface".to_string(), "auto".to_string());
+    }
+    if body.allow_raw_sockets.unwrap_or(false) {
+        params.insert("allow.raw_sockets".to_string(), "true".to_string());
+    }
+
+    let globals = parse_global_params();
+    let block = generate_jail_block_from_params(&body.name, &params, &globals);
 
     let new_content = if conf_content.is_empty() {
         block
@@ -2225,16 +2126,11 @@ fn strip_iface_prefix(ip: &str) -> &str {
     }
 }
 
-/// Write or remove VNET-related entries in the jail's /etc/rc.conf.
-/// When `enable` is true, writes `ifconfig_vnet0` and optionally `defaultrouter`.
-/// When `enable` is false, removes those entries.
-///
-/// `ip4_mode`: "" = static (use ip4_addr), "DHCP" = DHCP, "disable" = no IPv4.
-fn update_jail_rc_conf(path: &str, ip4_mode: &str, ip4_addr: Option<&str>, enable: bool) {
+/// Remove fwp-managed VNET entries (`ifconfig_vnet0`, `defaultrouter # fwp-vnet`)
+/// from the jail's /etc/rc.conf. Called when VNET is turned off.
+fn remove_jail_vnet_rc_conf(path: &str) {
     let rc_conf = std::path::Path::new(path).join("etc/rc.conf");
     let content = fs::read_to_string(&rc_conf).unwrap_or_default();
-
-    // Remove existing fwp-managed VNET lines.
     let filtered: Vec<&str> = content
         .lines()
         .filter(|l| {
@@ -2242,43 +2138,8 @@ fn update_jail_rc_conf(path: &str, ip4_mode: &str, ip4_addr: Option<&str>, enabl
             !t.starts_with("ifconfig_vnet0=") && !(t.starts_with("defaultrouter=") && t.contains("# fwp-vnet"))
         })
         .collect();
-
-    if !enable {
-        let new_content = filtered.join("\n");
-        let _ = fs::write(&rc_conf, if new_content.is_empty() { String::new() } else { format!("{new_content}\n") });
-        return;
-    }
-
-    let mut new_lines: Vec<String> = filtered.iter().map(|s| s.to_string()).collect();
-
-    match ip4_mode {
-        "DHCP" => {
-            new_lines.push("ifconfig_vnet0=\"DHCP\"".to_string());
-        }
-        "disable" => {
-            // No ifconfig line — IPv4 effectively disabled.
-        }
-        _ => {
-            // Static mode: use ip4.addr if provided.
-            if let Some(ip) = ip4_addr {
-                let ip = strip_iface_prefix(ip);
-                if !ip.is_empty() && ip != "inherit" {
-                    new_lines.push(format!("ifconfig_vnet0=\"inet {ip}\""));
-                }
-            }
-        }
-    }
-
-    // Auto-detect default gateway from host (not needed for DHCP — dhclient
-    // obtains the router via DHCP option 3).
-    if ip4_mode != "DHCP" {
-        if let Ok(gw) = get_default_gateway() {
-            new_lines.push(format!("defaultrouter=\"{gw}\"  # fwp-vnet"));
-        }
-    }
-
-    let new_content = new_lines.join("\n");
-    let _ = fs::write(&rc_conf, format!("{new_content}\n"));
+    let new_content = filtered.join("\n");
+    let _ = fs::write(&rc_conf, if new_content.is_empty() { String::new() } else { format!("{new_content}\n") });
 }
 
 /// Get the host's default IPv4 gateway from the routing table.
@@ -2525,6 +2386,7 @@ fn generate_jail_block_from_params(
 
     let meta_iface = params.get("meta.interface").map(|v| v.as_str()).unwrap_or("");
     let ip4 = params.get("meta.ip4").map(|v| v.as_str()).unwrap_or("");
+    let ip6 = params.get("meta.ip6").map(|v| v.as_str()).unwrap_or("");
 
     let vnet_on = params.get("vnet").map(|v| v == "true" || v == "1").unwrap_or(false);
     let vnet_auto = vnet_on
@@ -2608,6 +2470,11 @@ fn generate_jail_block_from_params(
             "" | "disable" => { /* no IP */ }
             "inherit" => { lines.push("    ip4 = \"inherit\";".into()); }
             _ => { lines.push(format!("    ip4.addr = {ip4};")); }
+        }
+        match ip6 {
+            "" | "disable" => { /* no IP */ }
+            "inherit" => { lines.push("    ip6 = \"inherit\";".into()); }
+            _ => { lines.push(format!("    ip6.addr = {ip6};")); }
         }
     }
 
@@ -2722,7 +2589,7 @@ pub async fn jail_update(
         if let Some(old) = old_entries.iter().find(|e| e.name == name) {
             if let Some(path) = old.params.get("path") {
                 if !path.is_empty() {
-                    update_jail_rc_conf(path, "", None, false);
+                    remove_jail_vnet_rc_conf(path);
                 }
             }
         }

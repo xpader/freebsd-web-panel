@@ -224,7 +224,7 @@ const ipAddrs = ref({});
 function ipMode(key) {
   if (key in ipModeOverrides.value) return ipModeOverrides.value[key];
   const v = form.value[key] || '';
-  if (!v) return isVnet.value ? 'disable' : '';
+  if (!v) return '';
   if (v === 'dhcp') return 'dhcp';
   if (v === 'inherit') return 'inherit';
   if (v === 'disable') return 'disable';
@@ -233,6 +233,17 @@ function ipMode(key) {
 
 function onIpModeChange(key, mode) {
   ipModeOverrides.value[key] = mode;
+  if (mode === 'dhcp') {
+    if (!boolVal('vnet')) {
+      form.value['vnet'] = 'true';
+      form.value['vnet.interface'] = 'auto';
+    }
+  } else if (mode === 'inherit') {
+    if (boolVal('vnet')) {
+      form.value['vnet'] = '';
+      form.value['vnet.interface'] = '';
+    }
+  }
 }
 
 function ipAddr(key) {
@@ -249,16 +260,10 @@ function onIpAddrInput(key, val) {
 }
 
 function ipOptions() {
-  if (isVnet.value) {
-    return [
-      { value: 'static', label: t('jails.ipStatic') },
-      { value: 'dhcp', label: 'DHCP' },
-      { value: 'disable', label: t('jails.ipDisable') },
-    ];
-  }
   return [
     { value: '', label: '—' },
     { value: 'static', label: t('jails.ipStatic') },
+    { value: 'dhcp', label: 'DHCP' },
     { value: 'inherit', label: 'inherit' },
     { value: 'disable', label: t('jails.ipDisable') },
   ];
@@ -269,7 +274,7 @@ function showIpAddr(key) {
 }
 
 function ipPlaceholder(key) {
-  if (key === 'meta.ip4') return isVnet.value ? '192.168.1.10/24' : '192.168.1.10';
+  if (key === 'meta.ip4') return '192.168.1.10';
   return '2001:db8::1';
 }
 

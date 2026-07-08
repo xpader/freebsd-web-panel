@@ -16,12 +16,45 @@ const alert = useAlert();
 const bases = ref([]);
 const submitting = ref(false);
 const form = ref({
-  name: '', hostname: '', location_type: '', interface: '',
-  ip4: '', ip6: '',
+  name: '', hostname: '', location_type: '',
   dir_path: '', base_name: '', snapshot: '',
   target_dataset: '', base_path: '', sfs_path: '',
   auto_start: false,
 });
+
+// ── Network config (same pattern as edit page) ──
+const metaInterface = ref('');
+const vnet = ref(false);
+const allowRawSockets = ref(false);
+const ip4Mode = ref('');
+const ip4Addr = ref('');
+const ip6Mode = ref('');
+const ip6Addr = ref('');
+
+function onIpModeChange(key, mode) {
+  if (key === 'ip4') ip4Mode.value = mode;
+  else ip6Mode.value = mode;
+  if (mode === 'dhcp') {
+    vnet.value = true;
+  } else if (mode === 'inherit') {
+    vnet.value = false;
+  }
+}
+
+function ipOptions() {
+  return [
+    { value: '', label: '—' },
+    { value: 'static', label: t('jails.ipStatic') },
+    { value: 'dhcp', label: 'DHCP' },
+    { value: 'inherit', label: 'inherit' },
+    { value: 'disable', label: t('jails.ipDisable') },
+  ];
+}
+
+function ipPlaceholder(key) {
+  if (key === 'ip4') return '192.168.1.10';
+  return '2001:db8::1';
+}
 
 const sections = computed(() => [
   { key: 'basic', label: t('jails.basicInfo') },
@@ -49,11 +82,23 @@ async function onSubmit() {
     name: form.value.name,
     hostname: form.value.hostname || null,
     location_type: form.value.location_type,
-    interface: form.value.interface || null,
-    ip4: form.value.ip4 || null,
-    ip6: form.value.ip6 || null,
+    interface: metaInterface.value || null,
     auto_start: form.value.auto_start,
+    vnet: vnet.value,
+    allow_raw_sockets: allowRawSockets.value,
   };
+
+  // Resolve IP modes to meta values.
+  if (ip4Mode.value === 'static') {
+    result.ip4 = ip4Addr.value.trim() || null;
+  } else if (ip4Mode.value && ip4Mode.value !== 'disable') {
+    result.ip4 = ip4Mode.value;
+  }
+  if (ip6Mode.value === 'static') {
+    result.ip6 = ip6Addr.value.trim() || null;
+  } else if (ip6Mode.value && ip6Mode.value !== 'disable') {
+    result.ip6 = ip6Mode.value;
+  }
 
   if (form.value.location_type === 'directory') {
     result.path = form.value.dir_path;
@@ -207,23 +252,58 @@ onMounted(async () => {
       <!-- Network -->
       <template v-if="active === 'network'">
         <div class="form-row">
-          <label class="form-row-label">{{ t('jails.networkInterface') }}</label>
+          <label class="form-row-label">{{ t('jails.labelMetaInterface') }}</label>
           <div>
-            <input type="text" v-model="form.interface" placeholder="bge0" />
-            <p class="param-desc">{{ t('jails.descInterface') }}</p>
+            <input type="text" v-model="metaInterface" placeholder="bge0" />
+            <p class="param-desc">{{ vnet ? t('jails.descMetaInterfaceVnet') : t('jails.descMetaInterface') }}</p>
           </div>
         </div>
         <div class="form-row">
-          <label class="form-row-label">IPv4</label>
+          <label class="form-row-label">{{ t('jails.labelMetaIp4') }}</label>
           <div>
-            <input type="text" v-model="form.ip4" :placeholder="t('jails.ip4Ph')" />
+            <div class="ip-field">
+              <select :value="ip4Mode" @change="onIpModeChange('ip4', $event.target.value)">
+                <option v-for="opt in ipOptions()" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              </select>
+              <input v-if="ip4Mode === 'static'" type="text" v-model="ip4Addr" :placeholder="ipPlaceholder('ip4')" />
+            </div>
             <p class="param-desc">{{ t('jails.descIpAddr') }}</p>
           </div>
         </div>
         <div class="form-row">
-          <label class="form-row-label">IPv6</label>
+          <label class="form-row-label">{{ t('jails.labelMetaIp6') }}</label>
           <div>
-            <input type="text" v-model="form.ip6" :placeholder="t('jails.ip6Ph')" />
+            <div class="ip-field">
+              <select :value="ip6Mode" @change="onIpModeChange('ip6', $event.target.value)">
+                <option v-for="opt in ipOptions()" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              </select>
+              <input v-if="ip6Mode === 'static'" type="text" v-model="ip6Addr" :placeholder="ipPlaceholder('ip6')" />
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="form-row-label">VNET</label>
+          <div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="vnet" />
+              <span class="param-desc-inline">{{ t('jails.descVnet') }}</span>
+            </label>
+          </div>
+        </div>
+        <div v-if="vnet" class="form-row">
+          <label class="form-row-label">vnet.interface</label>
+          <div>
+            <input type="text" value="auto" readonly />
+            <p class="param-desc">{{ t('jails.descVnetInterface') }}</p>
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="form-row-label">allow.raw_sockets</label>
+          <div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="allowRawSockets" />
+              <span class="param-desc-inline">{{ t('jails.descAllowRawSockets') }}</span>
+            </label>
           </div>
         </div>
       </template>
@@ -266,5 +346,17 @@ onMounted(async () => {
   gap: 6px;
   cursor: pointer;
   padding-top: 8px;
+}
+.ip-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ip-field select {
+  width: auto;
+  min-width: 100px;
+}
+.ip-field input {
+  flex: 1;
 }
 </style>
