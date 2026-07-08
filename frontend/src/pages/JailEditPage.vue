@@ -329,7 +329,7 @@ onMounted(async () => {
   <div v-else-if="!jail" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</div>
 
   <template v-else>
-    <div v-if="isRunning" class="card" style="border-color: var(--warn); border-style: dashed;">
+    <div v-if="isRunning" class="card warn-banner">
       <i class="fa-solid fa-triangle-exclamation" style="color: var(--warn);"></i>
       <span style="margin-left: 8px;">{{ t('jails.editRunningWarn') }}</span>
     </div>
@@ -489,6 +489,12 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.warn-banner {
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid var(--warn);
+  padding: 10px 16px;
+  margin-bottom: 16px;
+}
 .form-row-label {
   padding-top: 8px;
 }
