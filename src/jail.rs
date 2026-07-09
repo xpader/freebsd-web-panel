@@ -240,34 +240,43 @@ pub fn get_jail(name: &str) -> Result<Option<HashMap<String, String>>, String> {
 /// Uses `status()` (not `output()`) to avoid pipe FD inheritance: `jail -c`
 /// runs `exec.start` which may spawn long-running children (e.g. ElasticSearch)
 /// that would inherit and keep open stdout/stderr pipes, causing `output()`
-/// to block forever waiting for EOF.
+/// to block forever waiting for EOF. Instead, stderr is redirected to a temp
+/// file so error messages can be captured without risking a deadlock.
 pub fn start_jail(name: &str) -> Result<(), String> {
-    let status = Command::new("/usr/sbin/jail")
-        .args(["-q", "-c", name])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err(format!("jail -c {name} failed (exit status {})", status));
-    }
-    Ok(())
+    run_jail_cmd(name, &["-q", "-c"], "jail -c")
 }
 
 /// Stop a running jail using `jail -r`.
 pub fn stop_jail(name: &str) -> Result<(), String> {
-    let status = Command::new("/usr/sbin/jail")
-        .args(["-q", "-r", name])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err(format!("jail -r {name} failed (exit status {})", status));
+    run_jail_cmd(name, &["-q", "-r"], "jail -r")
+}
+
+/// Run a `jail` subcommand, capturing stderr to a temp file for error reporting.
+fn run_jail_cmd(name: &str, base_args: &[&str], label: &str) -> Result<(), String> {
+    let stderr_file = std::env::temp_dir().join(format!("fwp-jail-{name}.err"));
+    {
+        let f = std::fs::File::create(&stderr_file).map_err(|e| e.to_string())?;
+        let status = Command::new("/usr/sbin/jail")
+            .args(base_args)
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(f))
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            let _ = std::fs::remove_file(&stderr_file);
+            return Ok(());
+        }
     }
-    Ok(())
+    let stderr_msg = std::fs::read_to_string(&stderr_file).unwrap_or_default();
+    let _ = std::fs::remove_file(&stderr_file);
+    let detail = stderr_msg.trim();
+    Err(if detail.is_empty() {
+        format!("{label} {name} failed")
+    } else {
+        format!("{label} {name}: {detail}")
+    })
 }
 
 /// Check if a jail is currently running.

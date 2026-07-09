@@ -141,6 +141,8 @@ FreeBSD 管理通过 spawn 系统二进制并传校验过的参数完成。**禁
 
 本机已确认存在的关键工具：`/sbin/sysctl`、`/usr/sbin/sysrc`、`/sbin/ifconfig`、`/sbin/pfctl`、`/sbin/zfs`、`/sbin/zpool`、`/usr/sbin/jail`、`/usr/sbin/pkg`、`/usr/local/sbin/vm`（vm-bhyve 1.7.3）。
 
+**系统源码**：FreeBSD 完整源码树位于 `/usr/src`（只读）。需要了解内核结构体定义、ioctl/sysctl 调用方式、系统命令（如 `ifconfig`、`jail`）的内部实现逻辑、API 调用链、如何查询或操作系统资源时，均可参照源码。
+
 ### 何时用 C API / FFI，何时用 spawn 命令？
 
 默认用 **spawn 命令**。仅当满足以下条件之一时，才用 C API（libc syscall）或 FFI（共享库）：
