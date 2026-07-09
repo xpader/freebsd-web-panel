@@ -84,29 +84,6 @@ struct RtMsghdr {
 
 // ─── Constants/structs for SIOCGIFGROUP (interface groups) ────────────────
 
-/// `SIOCGIFGROUP` — get interface group membership. From `<sys/sockio.h>`.
-/// `_IOWR('i', 136, struct ifgroupreq)` = 0xc0286988 (sizeof=40 on amd64).
-const SIOCGIFGROUP: libc::c_ulong = 0xc0286988;
-
-/// `struct ifgroupreq` — from `<net/if.h>`.
-/// Layout: name[16] + len(4) + pad(4) + union{ char[16] | *ifg_req }(16).
-/// Total = 40 bytes.
-#[repr(C)]
-struct IfGroupReq {
-    name: [libc::c_char; libc::IFNAMSIZ as usize],
-    len: libc::c_uint,
-    _pad: libc::c_uint,
-    // Union: char[IFNAMSIZ] or struct ifg_req *. In the second call we store
-    // a pointer at offset 24 (16+4+4), which is 8 bytes within the 16-byte union.
-    groups_ptr: [u8; 16],
-}
-
-/// `struct ifg_req` — one group entry. From `<net/if.h>`.
-#[repr(C)]
-struct IfgReq {
-    group: [libc::c_char; libc::IFNAMSIZ as usize],
-}
-
 // ─── Constants/structs for SIOCGIFDESCR (interface description) ───────────
 
 /// `SIOCGIFDESCR` — get interface description. From `<sys/sockio.h>`.
@@ -392,8 +369,15 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
 }
 
 /// Populate groups, description, status, and bridge members for a single
-/// interface via four ioctls on the same socket fd.
+/// interface via ioctls on the same socket fd.
 fn fill_iface_ioctl(fd: libc::c_int, iface: &mut NetworkInterface) {
+    // ── Interface groups (via shared ifutil) ──
+    for group in crate::ifutil::list_interface_groups(&iface.name) {
+        if !group.is_empty() && group != "all" {
+            iface.groups.push(group);
+        }
+    }
+
     let cname = match std::ffi::CString::new(iface.name.as_str()) {
         Ok(c) => c,
         Err(_) => return,
@@ -401,49 +385,6 @@ fn fill_iface_ioctl(fd: libc::c_int, iface: &mut NetworkInterface) {
     let name_bytes = cname.as_bytes_with_nul();
     if name_bytes.len() > libc::IFNAMSIZ as usize {
         return;
-    }
-
-    // ── SIOCGIFGROUP: interface groups ──
-    {
-        let mut req = IfGroupReq {
-            name: [0; libc::IFNAMSIZ as usize],
-            len: 0,
-            _pad: 0,
-            groups_ptr: [0u8; 16],
-        };
-        for (i, &b) in name_bytes.iter().enumerate() {
-            req.name[i] = b as libc::c_char;
-        }
-        let rc = unsafe { libc::ioctl(fd, SIOCGIFGROUP as libc::c_ulong, &mut req) };
-        if rc == 0 && req.len > 0 {
-            let len = req.len as usize;
-            let entry_size = std::mem::size_of::<IfgReq>();
-            if len % entry_size == 0 && len / entry_size <= 64 {
-                let mut buf = vec![0u8; len];
-                req.len = len as libc::c_uint;
-                let buf_ptr = buf.as_mut_ptr() as *mut libc::c_void;
-                unsafe {
-                    std::ptr::write(
-                        (&mut req as *mut IfGroupReq).cast::<u8>().add(24)
-                            as *mut *mut libc::c_void,
-                        buf_ptr,
-                    );
-                }
-                let rc = unsafe { libc::ioctl(fd, SIOCGIFGROUP as libc::c_ulong, &mut req) };
-                if rc == 0 {
-                    let count = len / entry_size;
-                    for i in 0..count {
-                        let entry = unsafe { &*(buf.as_ptr().add(i * entry_size) as *const IfgReq) };
-                        let group = unsafe { CStr::from_ptr(entry.group.as_ptr()) }
-                            .to_string_lossy()
-                            .into_owned();
-                        if !group.is_empty() && group != "all" {
-                            iface.groups.push(group);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     // ── SIOCGIFDESCR: interface description ──

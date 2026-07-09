@@ -2012,120 +2012,6 @@ fn parse_epair_id(s: &str) -> Option<u32> {
     s.parse().ok()
 }
 
-/// Get the original driver-assigned name of a network interface via sysctl
-/// (CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, ifindex, IFDATA_DRIVERNAME).
-/// Works even if the interface was renamed by the user.
-fn ifconfig_drivername(ifname: &str) -> Option<String> {
-    use std::ffi::{CStr, CString};
-    let cname = CString::new(ifname).ok()?;
-    let ifindex = unsafe { libc::if_nametoindex(cname.as_ptr()) };
-    if ifindex == 0 {
-        return None;
-    }
-    let mib: [libc::c_int; 6] = [
-        4,    // CTL_NET
-        18,   // PF_LINK
-        0,    // NETLINK_GENERIC
-        2,    // IFMIB_IFDATA
-        ifindex as libc::c_int,
-        3,    // IFDATA_DRIVERNAME
-    ];
-    let mut len = 0usize;
-    let rc = unsafe {
-        libc::sysctl(
-            mib.as_ptr(),
-            6,
-            std::ptr::null_mut(),
-            &mut len,
-            std::ptr::null(),
-            0,
-        )
-    };
-    if rc != 0 || len == 0 {
-        return None;
-    }
-    let mut buf = vec![0u8; len];
-    let rc = unsafe {
-        libc::sysctl(
-            mib.as_ptr(),
-            6,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            &mut len,
-            std::ptr::null(),
-            0,
-        )
-    };
-    if rc != 0 {
-        return None;
-    }
-    let cstr = unsafe { CStr::from_ptr(buf.as_ptr() as *const libc::c_char) };
-    cstr.to_str().ok().map(|s| s.to_string())
-}
-
-/// List all network interfaces that belong to the given interface group.
-/// Uses the SIOCGIFGMEMB ioctl.
-fn list_group_members(group: &str) -> Vec<String> {
-    const SIOCGIFGMEMB: libc::c_ulong = 0xc028698a; // _IOWR('i', 138, struct ifgroupreq)
-    const IFNAMSIZ: usize = 16;
-
-    #[repr(C)]
-    struct IfGroupReq {
-        ifgr_name: [u8; IFNAMSIZ],      // 16 bytes
-        ifgr_len: u32,                   // 4 bytes
-        _pad1: u32,                      // 4 bytes padding for pointer alignment
-        ifgr_groups: *mut u8,            // 8 bytes (pointer to ifg_req array)
-        _pad2: [u8; 8],                  // 8 bytes (C struct is 40 bytes total)
-    }
-
-    let fd = unsafe { libc::socket(libc::AF_LOCAL, libc::SOCK_DGRAM, 0) };
-    if fd < 0 {
-        return Vec::new();
-    }
-
-    let mut req = IfGroupReq {
-        ifgr_name: [0u8; IFNAMSIZ],
-        ifgr_len: 0,
-        _pad1: 0,
-        ifgr_groups: std::ptr::null_mut(),
-        _pad2: [0u8; 8],
-    };
-    let cname = std::ffi::CString::new(group).unwrap_or_default();
-    let bytes = cname.as_bytes_with_nul();
-    let copy_len = bytes.len().min(IFNAMSIZ);
-    req.ifgr_name[..copy_len].copy_from_slice(&bytes[..copy_len]);
-
-    // First call: get required buffer length.
-    let rc = unsafe { libc::ioctl(fd, SIOCGIFGMEMB, &mut req as *mut _ as *mut libc::c_void) };
-    if rc != 0 || req.ifgr_len == 0 {
-        unsafe { libc::close(fd) };
-        return Vec::new();
-    }
-
-    let len = req.ifgr_len as usize;
-    // Each ifg_req entry is IFNAMSIZ bytes (union of group name or member name).
-    let entry_size = IFNAMSIZ;
-    let mut buf = vec![0u8; len];
-    req.ifgr_groups = buf.as_mut_ptr();
-
-    let rc = unsafe { libc::ioctl(fd, SIOCGIFGMEMB, &mut req as *mut _ as *mut libc::c_void) };
-    unsafe { libc::close(fd) };
-    if rc != 0 {
-        return Vec::new();
-    }
-
-    let count = len / entry_size;
-    let mut members = Vec::with_capacity(count);
-    for i in 0..count {
-        let start = i * entry_size;
-        let slice = &buf[start..start + entry_size];
-        let end = slice.iter().position(|&b| b == 0).unwrap_or(entry_size);
-        if let Ok(s) = std::str::from_utf8(&slice[..end]) {
-            members.push(s.to_string());
-        }
-    }
-    members
-}
-
 /// Allocate a unique epair ID for a VNET jail.
 ///
 /// Scans jail.conf for existing `meta.epair_id` values and checks the system
@@ -2152,13 +2038,13 @@ fn allocate_epair_id(conf_content: &str) -> u32 {
     // Enumerate interfaces in the "epair" group via ioctl SIOCGIFGMEMB
     // (works even if the interface was renamed). For renamed interfaces,
     // resolve the original drivername via sysctl IFDATA_DRIVERNAME.
-    for name in list_group_members("epair") {
+    for name in crate::ifutil::list_group_members("epair") {
         if let Some(id) = parse_epair_id(&name) {
             used.insert(id);
             continue;
         }
         // Interface was renamed — resolve via sysctl IFDATA_DRIVERNAME.
-        if let Some(dname) = ifconfig_drivername(&name) {
+        if let Some(dname) = crate::ifutil::get_drivername(&name) {
             if let Some(id) = parse_epair_id(&dname) {
                 used.insert(id);
             }

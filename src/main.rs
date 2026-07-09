@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod ifutil;
 mod jail;
 mod monitor;
 mod state;
