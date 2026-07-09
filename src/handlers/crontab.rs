@@ -752,9 +752,9 @@ fn build_task(input: &EntryInput, is_system: bool) -> ApiResult<(String, Parsed)
         if is_system {
             let user = input.user.as_deref().unwrap_or("").trim();
             validate_username(user)?;
-            (format!("{sp} {user} {cmd}"), classify(&format!("{sp} {user} {cmd}"), true))
+            (format!("{sp}\t{user}\t{cmd}"), classify(&format!("{sp} {user} {cmd}"), true))
         } else {
-            (format!("{sp} {cmd}"), classify(&format!("{sp} {cmd}"), false))
+            (format!("{sp}\t{cmd}"), classify(&format!("{sp} {cmd}"), false))
         }
     } else {
         let m = input.minute.as_deref().unwrap_or("*");
@@ -770,10 +770,10 @@ fn build_task(input: &EntryInput, is_system: bool) -> ApiResult<(String, Parsed)
         if is_system {
             let user = input.user.as_deref().unwrap_or("").trim();
             validate_username(user)?;
-            let line = format!("{m} {h} {dom} {mo} {dow} {user} {cmd}");
+            let line = format!("{m}\t{h}\t{dom}\t{mo}\t{dow}\t{user}\t{cmd}");
             (line.clone(), classify(&line, true))
         } else {
-            let line = format!("{m} {h} {dom} {mo} {dow} {cmd}");
+            let line = format!("{m}\t{h}\t{dom}\t{mo}\t{dow}\t{cmd}");
             (line.clone(), classify(&line, false))
         }
     };
