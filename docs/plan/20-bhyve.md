@@ -1,6 +1,9 @@
 # 模块设计：Bhyve 虚拟机管理
 
 > 依赖：`vm-bhyve` 1.7.3（已安装在 `/usr/local/sbin/vm`）。封装其 CLI，解析表格输出。
+>
+> **实现状态**：M1（命令封装 + 列表/详情解析）、M2（VM CRUD + 生命周期 start/stop）、M5（控制台 + VNC）已完成。
+> 实现文档见 `docs/impl/23-bhyve.md`。
 
 ## 1. 调用契约
 
@@ -108,52 +111,66 @@ struct VmSwitch {
 struct IsoImage { name: String, size: u64 }
 ```
 
-## 4. API 设计
+## 4. API 设计（✅ = 已实现）
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/vms` | 列出所有 VM |
-| GET | `/api/vms/:name` | VM 详情 |
-| POST | `/api/vms` | 创建 VM（参数：name/template/cpu/mem/size/datastore） |
-| PUT | `/api/vms/:name` | 修改 VM 配置（停机时改 cpu/mem/disk） |
-| DELETE | `/api/vms/:name` | 删除 VM（含磁盘，需二次确认） |
-| POST | `/api/vms/:name/start` | 启动 |
-| POST | `/api/vms/:name/stop` | 优雅停止 |
-| POST | `/api/vms/:name/destroy` | 强制断电 |
-| POST | `/api/vms/:name/restart` | 重启 |
-| POST | `/api/vms/:name/install` | 挂载 ISO 安装（body: iso 名） |
-| GET | `/api/vms/:name/console` | WebSocket VNC 代理 或 nmdm 文本控制台 |
-| POST | `/api/vms/:name/snapshot` | 创建快照（body: snap 名称） |
-| POST | `/api/vms/:name/rollback` | 回滚快照 |
-| POST | `/api/vms/:name/clone` | 克隆（body: newname） |
-| GET | `/api/vms/:name/snapshots` | 列出快照 |
-| GET | `/api/isos` | 列出可用 ISO |
-| POST | `/api/isos` | 下载 ISO（body: url） |
-| DELETE | `/api/isos/:name` | 删除 ISO |
-| GET | `/api/vm-switches` | 列出虚拟交换 |
-| POST | `/api/vm-switches` | 创建交换 |
-| DELETE | `/api/vm-switches/:name` | 删除交换 |
-| GET | `/api/vm-datastores` | 列出数据存储 |
+| 方法 | 路径 | 说明 | 状态 |
+|---|---|---|---|
+| GET | `/api/bhyve/vms` | 列出所有 VM（`?running=true` 仅运行中） | ✅ |
+| GET | `/api/bhyve/vms/{name}` | VM 详情（vm info + .conf） | ✅ |
+| POST | `/api/bhyve/vms` | 创建 VM（body: name/template/cpu/mem/size/datastore） | ✅ |
+| POST | `/api/bhyve/vms/{name}/start` | 启动 | ✅ |
+| POST | `/api/bhyve/vms/{name}/stop` | 优雅停止 | ✅ |
+| DELETE | `/api/bhyve/vms/{name}` | 删除 VM | |
+| POST | `/api/bhyve/vms/{name}/destroy` | 强制断电 | |
+| POST | `/api/bhyve/vms/{name}/restart` | 重启 | |
+| POST | `/api/bhyve/vms/{name}/install` | 挂载 ISO 安装 | |
+| PUT | `/api/bhyve/vms/{name}` | 修改 VM 配置 | |
+| WS | `/api/term/ws?vm=<name>` | 串口控制台（复用终端 WS） | ✅ |
+| WS | `/api/bhyve/vms/{name}/vnc` | VNC 代理（WS→TCP） | ✅ |
+| GET | `/api/bhyve/images` | 镜像列表 | ✅ |
+| GET | `/api/bhyve/switches` | 虚拟交换列表 | ✅ |
+| GET | `/api/bhyve/datastores` | 数据存储列表 | ✅ |
+| GET | `/api/bhyve/templates` | 模板列表 | ✅ |
+| GET | `/api/bhyve/isos` | ISO 列表 | ✅ |
 
 ## 5. 控制台访问
 
-vm-bhyve 控制台通过 `vm console <name>` 进入 nmdm 伪终端。
-- WebSocket 端点 `/api/vms/:name/console` 分配 nmdm 设备（`/dev/nmdm<N>A`），面板 fork 进程 attach B 端
-- VNC：若 VM 配置了 `vnc=0.0.0.0:port`，前端直接连该端口（或面板做 WebSocket→TCP 代理）
+### 串口控制台（✅ 已实现）
+
+复用 `/api/term/ws`（WebSocket 终端），新增 `SpawnTarget::Bhyve` 变体。
+- 浏览器 WS 连接 `/api/term/ws?vm=<name>&token=<token>`
+- 后端从 `/vm/<name>/console` 读取 nmdm 设备路径（如 `com1=/dev/nmdm-{name}.1B`）
+- fork+exec `cu -l <device>`（环境含 `HOME=/root` 消除 tiprc 警告）
+- PTY 双向桥接到 bhyve 串口
+
+### VNC（✅ 已实现）
+
+WebSocket→TCP 代理（Rust 内建），无外部依赖。
+- 端点 `/api/bhyve/vms/{name}/vnc?token=<token>`（公开路由）
+- 从 `.conf` 读取 `graphics="yes"` + `graphics_port` → 代理到 `127.0.0.1:<port>`
+- WS 握手协商 `binary` 子协议（noVNC 要求）
+- 前端使用 noVNC（`@novnc/novnc`）RFB 客户端渲染到 Canvas
+- VNC 按钮仅在 VM 启用了 graphics 且运行中时显示
 
 ## 6. 实现里程碑
 
-1. **M1 — 命令封装器**（`VmCmd::run()` 带超时和错误捕获）+ `vm list`/`info` 解析
-2. **M2 — VM CRUD + 生命周期 API**（start/stop/destroy/restart/install）
-3. **M3 — 快照/克隆/ISO API**
-4. **M4 — 交换机/数据存储 API**
-5. **M5 — 控制台 WebSocket**
+1. **M1 ✅** — 命令封装器 + 列表/详情解析（`vm list`/`info`/`switch list`/`image list`/`datastore list`/templates/ISO）
+2. **M2 ✅** — VM CRUD + 生命周期 API（create/start/stop）
+3. **M3** — 快照/克隆/ISO 管理 API（未开始）
+4. **M4** — 交换机/数据存储管理 API（未开始，只读列表已完成）
+5. **M5 ✅** — 控制台 + VNC（串口控制台 + VNC 代理）
+6. **M6** — 配置编辑 + VM 删除（未开始）
 
 ## 7. 风险与缓解
 
 | 风险 | 缓解 |
 |---|---|
-| `vm list` 输出格式跨版本不稳定 | 解析时校验表头列名，不匹配则降级为按空格分割 + 警告日志 |
-| `vm` 命令可能交互式等待（console/install） | 非交互命令统一加 `-f` 或重定向 stdin 到 `/dev/null`；交互场景隔离到 WebSocket 通道 |
-| VM 配置文件手动编辑冲突 | 读写用原子替换；编辑前展示当前内容 diff |
+| `vm list` 输出格式跨版本不稳定 | 解析时校验表头列名，不匹配则报错 |
+| `vm start` fork 长驻进程致 `.output()` 阻塞 | 使用 `.status()` 而非 `.output()`（同 jail.rs 模式） |
+| `vm info` snapshots 段日期含冒号 | snapshots 子段使用制表符分割，不使用 `key:value` 解析 |
+| `cu` 启动时 `$HOME not set` 警告 | 在子进程环境设置 `HOME=/root` |
+| noVNC 需 `binary` WS 子协议 | WS 握手时 `.protocols(["binary"])` |
+| noVNC 使用 top-level await | `vite.config.js` 设 `target: 'es2022'`（build + optimizeDeps） |
+| VNC 无密码认证 | bhyve fbuf 仅监听 127.0.0.1，面板 token 认证保护 WS 端点 |
+| VM 配置文件手动编辑冲突 | 读写用原子替换；编辑前展示当前内容 diff（计划中） |
 | 长时间命令（iso 下载） | 转为后台任务 + 任务 ID 查询进度（见 `70-task-queue.md`） |

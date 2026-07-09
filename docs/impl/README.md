@@ -29,6 +29,7 @@
 | [20-jail.md](20-jail.md) | Jail 容器：libjail FFI 运行时查询、基础系统管理（导入/镜像创建：ZFS Clone/unionfs/sharedfs） | `jail.rs`, `handlers/jails.rs`, `web/js/pages/jails.js` |
 | [21-pkg.md](21-pkg.md) | pkg 软件包管理：列出已安装包（全部/手动/自动）、查看包详情（描述/依赖/反向依赖/文件列表） | `handlers/pkg.rs`, `web/js/pages/pkg.js` |
 | [22-pkg-repos.md](22-pkg-repos.md) | pkg 软件源配置管理：仓库 CRUD（UCL 解析/生成）、启用/禁用、`pkg update -f` 后台任务、预设镜像模板 | `handlers/pkg.rs`, `web/js/pages/pkg-repos.js` |
+| [23-bhyve.md](23-bhyve.md) | Bhyve 虚拟机管理：VM 列表/详情/创建/启停、串口控制台（cu + nmdm）、VNC 代理（WS→TCP）、镜像/交换机/数据存储/模板/ISO 列表 | `bhyve.rs`, `handlers/bhyve.rs`, `terminal.rs`, `frontend/src/pages/Bhyve*.vue` |
 
 ## 文档规范
 
