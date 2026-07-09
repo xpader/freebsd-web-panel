@@ -539,6 +539,8 @@ pub struct VmDetail {
     pub disks: Vec<VmDisk>,
     pub snapshots: Vec<VmSnapshot>,
     pub config: std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vnc_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -762,6 +764,15 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
     // Read .conf file.
     let config = read_vm_config(vm_name);
 
+    // Extract VNC port from config: graphics="yes" + graphics_port="8010".
+    let vnc_port = if config.get("graphics").map(|v| v.as_str()) == Some("yes") {
+        config
+            .get("graphics_port")
+            .and_then(|p| p.parse::<u16>().ok())
+    } else {
+        None
+    };
+
     Ok(VmDetail {
         name: vm_name.to_string(),
         state,
@@ -776,6 +787,7 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
         disks,
         snapshots,
         config,
+        vnc_port,
     })
 }
 
@@ -813,6 +825,17 @@ fn read_vm_config(name: &str) -> std::collections::BTreeMap<String, String> {
         }
     }
     map
+}
+
+/// Read the VNC port for a VM from its .conf file.
+/// Returns Some(port) only if graphics="yes" and graphics_port is set.
+pub fn get_vnc_port(name: &str) -> Option<u16> {
+    let config = read_vm_config(name);
+    if config.get("graphics").map(|v| v.as_str()) == Some("yes") {
+        config.get("graphics_port").and_then(|p| p.parse().ok())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

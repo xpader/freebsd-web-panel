@@ -127,6 +127,7 @@ onMounted(load);
                 <span class="spinner" style="width:12px;height:12px;"></span>
               </button>
               <a v-if="vm.state === 'running'" :href="`#/bhyve/console/${vm.name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i></a>
+              <a v-if="vm.vnc && vm.state === 'running'" :href="`#/bhyve/vnc/${vm.name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-display"></i></a>
             </div>
           </td>
         </tr>

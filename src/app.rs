@@ -23,6 +23,9 @@ pub fn build(state: AppState) -> Router {
         .route("/api/users/bootstrap", post(handlers::users::bootstrap))
         .route("/api/auth/login", post(handlers::auth::login))
         .route("/api/term/ws", get(crate::terminal::ws_handler))
+        // VNC WebSocket proxy — public for the same reason as term/ws (browsers
+        // can't set Authorization on WS handshake). Token via ?token= query.
+        .route("/api/bhyve/vms/{name}/vnc", get(crate::terminal::vnc_ws_handler))
         // SSE stream for pkg tasks — EventSource cannot set Authorization
         // headers, so token is validated via query param inside the handler.
         .route("/api/pkg/tasks/{id}/stream", get(handlers::pkg::task_stream));

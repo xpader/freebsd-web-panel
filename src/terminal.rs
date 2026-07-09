@@ -541,3 +541,99 @@ fn write_all_fd(fd: libc::c_int, mut data: &[u8]) -> bool {
     }
     true
 }
+
+// ── VNC WebSocket→TCP proxy ──────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct VncParams {
+    token: String,
+}
+
+/// WebSocket upgrade handler that proxies raw bytes between the browser and a
+/// bhyve VNC TCP port. Authentication via `?token=` (same as terminal WS).
+pub async fn vnc_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(params): Query<VncParams>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let user = validate_token(&state, &params.token).await?;
+
+    if !valid_vm_name(&name) {
+        return Err(ApiError::BadRequest("invalid vm name".into()));
+    }
+
+    let port = crate::bhyve::get_vnc_port(&name).ok_or_else(|| {
+        ApiError::BadRequest(format!("vm {name} does not have VNC enabled"))
+    })?;
+
+    crate::audit::record(
+        &state,
+        Some(&user.username),
+        "GET",
+        &format!("/api/bhyve/vms/{}/vnc", name),
+        200,
+        Some(format!("vnc session opened for vm {name} (port {port})")),
+    );
+
+    Ok(ws
+        .protocols(["binary"])
+        .on_upgrade(move |socket| run_vnc_proxy(socket, name, port)))
+}
+
+/// Bidirectional pipe: WebSocket ↔ TCP (127.0.0.1:port).
+async fn run_vnc_proxy(socket: WebSocket, name: String, port: u16) {
+    let addr = format!("127.0.0.1:{port}");
+    let tcp = match tokio::net::TcpStream::connect(&addr).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, vm = %name, port, "vnc: failed to connect");
+            return;
+        }
+    };
+    tracing::info!(vm = %name, port, "vnc proxy connected");
+
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (mut tcp_read, mut tcp_write) = tcp.into_split();
+
+    // TCP → WebSocket
+    let ws_tx = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 16384];
+        loop {
+            match tcp_read.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let msg = Message::Binary(buf[..n].to_vec().into());
+                    if ws_sender.send(msg).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // WebSocket → TCP
+    let tcp_tx = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        while let Some(msg) = ws_receiver.next().await {
+            match msg {
+                Ok(Message::Binary(data)) => {
+                    if tcp_write.write_all(&data).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    if tcp_write.write_all(text.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Close(_)) | Err(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    let _ = ws_tx.await;
+    let _ = tcp_tx.await;
+}

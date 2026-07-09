@@ -75,12 +75,13 @@ onMounted(reload);
     </div>
     <div v-if="d" class="flex btn-group" style="margin-left:auto;">
       <button v-if="!isRunning" class="btn-sm" :disabled="acting || isLocked" @click="vmAction('start')">
-        <i class="fa-solid fa-play"></i> {{ t('bhyve.start') }}
+        <i class="fa-solid fa-play"></i> {{ t('common.start') }}
       </button>
       <button v-if="isRunning" class="btn-secondary btn-sm" :disabled="acting" @click="vmAction('stop')">
-        <i class="fa-solid fa-stop"></i> {{ t('bhyve.stop') }}
+        <i class="fa-solid fa-stop"></i> {{ t('common.stop') }}
       </button>
-      <a v-if="isRunning" :href="`#/bhyve/console/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('bhyve.console') }}</a>
+      <a v-if="isRunning" :href="`#/bhyve/console/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('common.console') }}</a>
+      <a v-if="d.vnc_port && isRunning" :href="`#/bhyve/vnc/${name}`" class="btn-sm"><i class="fa-solid fa-display"></i> VNC</a>
     </div>
   </div>
 
@@ -90,7 +91,7 @@ onMounted(reload);
   <template v-else>
     <!-- Overview -->
     <div class="card">
-      <h3>{{ t('bhyve.overview') }}</h3>
+      <h3>{{ t('common.overview') }}</h3>
       <div class="stat-row" style="flex-wrap:wrap;">
         <span>UUID: <strong class="mono">{{ d.uuid }}</strong></span>
         <span>{{ t('bhyve.loader') }}: <strong>{{ d.loader }}</strong></span>
@@ -98,13 +99,13 @@ onMounted(reload);
         <span>CPU: <strong>{{ d.cpu }}</strong></span>
         <span>{{ t('bhyve.memory') }}: <strong>{{ d.memory }}</strong></span>
         <span v-if="d.memory_resident">{{ t('bhyve.memoryResident') }}: <strong class="mono">{{ d.memory_resident }}</strong></span>
-        <span v-if="d.console_port">{{ t('bhyve.consolePort') }}: <strong class="mono">{{ d.console_port }}</strong></span>
+        <span v-if="d.console_port">{{ t('common.console') }}: <strong class="mono">{{ d.console_port }}</strong></span>
       </div>
     </div>
 
     <!-- Disks -->
     <div class="card" v-if="d.disks.length">
-      <h3>{{ t('bhyve.disks') }}</h3>
+      <h3>{{ t('common.disks') }}</h3>
       <table>
         <thead><tr>
           <th>#</th>
@@ -156,7 +157,7 @@ onMounted(reload);
 
     <!-- Snapshots -->
     <div class="card" v-if="d.snapshots.length">
-      <h3>{{ t('bhyve.snapshots') }}</h3>
+      <h3>{{ t('common.snapshots') }}</h3>
       <table>
         <thead><tr>
           <th>{{ t('common.name') }}</th>

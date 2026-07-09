@@ -130,7 +130,7 @@ onUnmounted(() => {
   <div class="page-header">
     <div class="flex">
       <BackButton :href="`#/bhyve/detail/${name}`" />
-      <h1>{{ t('bhyve.consoleTitle') }}: {{ name }}</h1>
+      <h1>{{ t('common.console') }}: {{ name }}</h1>
     </div>
   </div>
   <div class="term-page">

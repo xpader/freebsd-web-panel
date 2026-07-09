@@ -7,14 +7,21 @@ export default defineConfig({
     outDir: '../web',
     emptyOutDir: true,
     chunkSizeWarningLimit: 800,
+    target: 'es2022',
     rollupOptions: {
       output: {
         manualChunks: {
           'chart': ['chart.js', 'chartjs-adapter-date-fns'],
           'xterm': ['@xterm/xterm', '@xterm/addon-fit'],
+          'novnc': ['@novnc/novnc'],
           'vendor': ['vue', 'vue-router', 'pinia', 'vue-i18n'],
         },
       },
+    },
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: 'es2022',
     },
   },
   server: {
