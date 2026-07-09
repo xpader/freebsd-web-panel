@@ -29,6 +29,8 @@ enum SpawnTarget {
     Host,
     /// `jexec <name> login -f root` — a root login inside a running jail.
     Jail { name: String },
+    /// `cu -l /dev/nmdm-{name}B` — serial console of a bhyve VM.
+    Bhyve { name: String },
 }
 
 #[derive(Deserialize)]
@@ -36,6 +38,8 @@ pub struct TermParams {
     token: String,
     #[serde(default)]
     jail: Option<String>,
+    #[serde(default)]
+    vm: Option<String>,
 }
 
 /// WebSocket upgrade handler. Validates the query-param token, records an audit
@@ -46,40 +50,52 @@ pub async fn ws_handler(
     Query(params): Query<TermParams>,
 ) -> ApiResult<impl IntoResponse> {
     let user = authenticate(&state, &params.token).await?;
-    let target = match params.jail.as_deref() {
-        Some(name) => {
-            if !valid_jail_name(name) {
-                return Err(ApiError::BadRequest("invalid jail name".into()));
-            }
-            if !crate::jail::is_jail_running(name) {
-                return Err(ApiError::BadRequest(format!(
-                    "jail {name} is not running"
-                )));
-            }
-            let msg = format!("terminal session opened for jail {name}");
-            crate::audit::record(
-                &state,
-                Some(&user.username),
-                "GET",
-                "/api/term/ws",
-                200,
-                Some(msg),
-            );
-            SpawnTarget::Jail {
-                name: name.to_string(),
-            }
+    let target = if let Some(name) = params.jail.as_deref() {
+        if !valid_jail_name(name) {
+            return Err(ApiError::BadRequest("invalid jail name".into()));
         }
-        None => {
-            crate::audit::record(
-                &state,
-                Some(&user.username),
-                "GET",
-                "/api/term/ws",
-                200,
-                Some("terminal session opened".to_string()),
-            );
-            SpawnTarget::Host
+        if !crate::jail::is_jail_running(name) {
+            return Err(ApiError::BadRequest(format!(
+                "jail {name} is not running"
+            )));
         }
+        let msg = format!("terminal session opened for jail {name}");
+        crate::audit::record(
+            &state,
+            Some(&user.username),
+            "GET",
+            "/api/term/ws",
+            200,
+            Some(msg),
+        );
+        SpawnTarget::Jail {
+            name: name.to_string(),
+        }
+    } else if let Some(name) = params.vm.as_deref() {
+        if !valid_vm_name(name) {
+            return Err(ApiError::BadRequest("invalid vm name".into()));
+        }
+        crate::audit::record(
+            &state,
+            Some(&user.username),
+            "GET",
+            "/api/term/ws",
+            200,
+            Some(format!("console session opened for vm {name}")),
+        );
+        SpawnTarget::Bhyve {
+            name: name.to_string(),
+        }
+    } else {
+        crate::audit::record(
+            &state,
+            Some(&user.username),
+            "GET",
+            "/api/term/ws",
+            200,
+            Some("terminal session opened".to_string()),
+        );
+        SpawnTarget::Host
     };
     Ok(ws.on_upgrade(move |socket| run_session(socket, user, target)))
 }
@@ -253,6 +269,38 @@ fn setup_pty(target: &SpawnTarget) -> Result<(libc::c_int, CString, Shell), Stri
             ];
             let cwd = CString::new("/").unwrap();
             let envp = build_jail_env();
+            (exec_path, argv, cwd, envp)
+        }
+        SpawnTarget::Bhyve { name } => {
+            // Read the console device from /vm/{name}/console (same as vm console).
+            // Format: com1=/dev/nmdm-{name}.1B
+            let console_path = format!("/vm/{name}/console");
+            let console_content = std::fs::read_to_string(&console_path)
+                .map_err(|e| format!("cannot read {console_path}: {e}"))?;
+            let device = console_content
+                .lines()
+                .find_map(|l| {
+                    let l = l.trim();
+                    if l.starts_with("com") {
+                        if let Some(eq) = l.find('=') {
+                            return Some(l[eq + 1..].trim().to_string());
+                        }
+                    }
+                    None
+                })
+                .ok_or_else(|| format!("no com port found in {console_path}"))?;
+            if device.is_empty() || !device.starts_with("/dev/nmdm-") {
+                return Err(format!("invalid console device: {device}"));
+            }
+            // exec /usr/bin/cu -l <device>
+            let exec_path = CString::new("/usr/bin/cu").unwrap();
+            let argv = vec![
+                CString::new("cu").unwrap(),
+                CString::new("-l").unwrap(),
+                CString::new(device.as_str()).unwrap(),
+            ];
+            let cwd = CString::new("/").unwrap();
+            let envp = build_bhyve_env();
             (exec_path, argv, cwd, envp)
         }
     };
@@ -432,6 +480,15 @@ fn build_jail_env() -> Vec<CString> {
     vec![CString::new("TERM=xterm-256color").unwrap()]
 }
 
+/// Environment for a bhyve `cu` console session.  `cu` checks `$HOME` to look
+/// for `~/.tiprc`; without it `cu` prints a warning on every start.
+fn build_bhyve_env() -> Vec<CString> {
+    vec![
+        CString::new("TERM=xterm-256color").unwrap(),
+        CString::new("HOME=/root").unwrap(),
+    ]
+}
+
 /// Validate a jail name before it is used as a jexec argument. Same rules as the
 /// jail handlers: ASCII alphanumeric plus `_`, `.`, `-`.
 fn valid_jail_name(name: &str) -> bool {
@@ -440,6 +497,16 @@ fn valid_jail_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+}
+
+/// Validate a VM name before using it to construct a /dev/nmdm- path.
+/// Must be lowercase alphanumeric + . _ - to prevent path traversal.
+fn valid_vm_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
 }
 
 /// Update the PTY window size; the kernel forwards SIGWINCH to the shell.

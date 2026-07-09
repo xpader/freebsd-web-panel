@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod audit;
 pub mod auth;
+pub mod bhyve;
 pub mod crontab;
 pub mod files;
 pub mod filesystem;

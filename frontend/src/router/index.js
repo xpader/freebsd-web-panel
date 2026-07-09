@@ -25,7 +25,12 @@ import ServicesPage from '../pages/ServicesPage.vue';
 import AccountsUsersPage from '../pages/AccountsUsersPage.vue';
 import AccountsGroupsPage from '../pages/AccountsGroupsPage.vue';
 import PfPage from '../pages/PfPage.vue';
-import BhyvePage from '../pages/BhyvePage.vue';
+import BhyveVmsPage from '../pages/BhyveVmsPage.vue';
+import BhyveCreatePage from '../pages/BhyveCreatePage.vue';
+import BhyveDetailPage from '../pages/BhyveDetailPage.vue';
+import BhyveConsolePage from '../pages/BhyveConsolePage.vue';
+import BhyveImagesPage from '../pages/BhyveImagesPage.vue';
+import BhyveSwitchesPage from '../pages/BhyveSwitchesPage.vue';
 import JailsListPage from '../pages/JailsListPage.vue';
 import JailCreatePage from '../pages/JailCreatePage.vue';
 import JailDetailPage from '../pages/JailDetailPage.vue';
@@ -68,7 +73,13 @@ const routes = [
       { path: 'network/dns', name: 'dns', component: DnsPage },
       { path: 'services', name: 'services', component: ServicesPage },
       { path: 'pf', name: 'pf', component: PfPage },
-      { path: 'bhyve', name: 'bhyve', component: BhyvePage },
+      { path: 'bhyve', redirect: '/bhyve/vms' },
+      { path: 'bhyve/vms', name: 'bhyve-vms', component: BhyveVmsPage },
+      { path: 'bhyve/create', name: 'bhyve-create', component: BhyveCreatePage },
+      { path: 'bhyve/detail/:name', name: 'bhyve-detail', component: BhyveDetailPage },
+      { path: 'bhyve/console/:name', name: 'bhyve-console', component: BhyveConsolePage },
+      { path: 'bhyve/images', name: 'bhyve-images', component: BhyveImagesPage },
+      { path: 'bhyve/switches', name: 'bhyve-switches', component: BhyveSwitchesPage },
       { path: 'accounts/users', name: 'accounts-users', component: AccountsUsersPage },
       { path: 'accounts/groups', name: 'accounts-groups', component: AccountsGroupsPage },
       { path: 'jails/running', name: 'jails-list', component: JailsListPage },

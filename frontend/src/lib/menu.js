@@ -89,7 +89,16 @@ export const MENU = [
           { path: '/jails/defaults', labelKey: 'nav.jailDefaults', icon: 'fa-solid fa-gears' },
         ],
       },
-      { path: '/bhyve', labelKey: 'nav.bhyve', icon: 'fa-regular fa-square' },
+      {
+        path: '/bhyve',
+        labelKey: 'nav.bhyve',
+        icon: 'fa-solid fa-server',
+        children: [
+          { path: '/bhyve/vms', labelKey: 'nav.bhyveVms', icon: 'fa-solid fa-list' },
+          { path: '/bhyve/images', labelKey: 'nav.bhyveImages', icon: 'fa-solid fa-compact-disc' },
+          { path: '/bhyve/switches', labelKey: 'nav.bhyveSwitches', icon: 'fa-solid fa-network-wired' },
+        ],
+      },
     ],
   },
   {

@@ -29,4 +29,3 @@ macro_rules! status {
 }
 
 status!(pf, "pf");
-status!(bhyve, "bhyve");
