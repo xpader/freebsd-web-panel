@@ -96,6 +96,36 @@ pub async fn vm_detail(
     Ok(Json(detail))
 }
 
+/// PUT /api/bhyve/vms/{name} — replace VM configuration key-values.
+#[derive(Debug, Deserialize)]
+pub struct UpdateVmConfigBody {
+    pub config: std::collections::BTreeMap<String, String>,
+}
+
+pub async fn update_vm_config(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<UpdateVmConfigBody>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    validate_vm_config(&body.config)?;
+    let vm_name = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::update_vm_config(&vm_name, &body.config))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        &format!("/api/bhyve/vms/{name}"),
+        200,
+        Some(format!("updated VM configuration {name}")),
+    );
+    Ok(StatusCode::OK)
+}
+
 /// POST /api/bhyve/vms/{name}/start
 pub async fn vm_start(
     State(state): State<AppState>,
@@ -152,6 +182,103 @@ pub async fn list_images() -> ApiResult<Json<Vec<bhyve::VmImage>>> {
 pub async fn list_switches() -> ApiResult<Json<Vec<bhyve::VmSwitch>>> {
     let switches = bhyve::list_switches().map_err(ApiError::Command)?;
     Ok(Json(switches))
+}
+
+/// GET /api/bhyve/switches/{name} — virtual switch detail.
+pub async fn switch_detail(
+    Path(name): Path<String>,
+) -> ApiResult<Json<bhyve::VmSwitchDetail>> {
+    validate_switch_name(&name)?;
+    let switch_name = name.clone();
+    let detail = tokio::task::spawn_blocking(move || bhyve::get_switch_info(&switch_name))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+    Ok(Json(detail))
+}
+
+/// POST /api/bhyve/switches — create a virtual switch.
+#[derive(Debug, Deserialize)]
+pub struct CreateSwitchBody {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub typ: String,
+    pub iface: Option<String>,
+    pub vlan: Option<u16>,
+    pub bridge: Option<String>,
+    pub address: Option<String>,
+    pub mtu: Option<u16>,
+    #[serde(default)]
+    pub private: bool,
+}
+
+pub async fn create_switch(
+    State(state): State<AppState>,
+    Json(body): Json<CreateSwitchBody>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    validate_switch_name(&body.name)?;
+    validate_switch_create(&body)?;
+
+    let name = body.name.clone();
+    let typ = body.typ.clone();
+    let iface = body.iface.clone();
+    let vlan = body.vlan;
+    let bridge = body.bridge.clone();
+    let address = body.address.clone();
+    let mtu = body.mtu;
+    let private = body.private;
+    tokio::task::spawn_blocking(move || {
+        bhyve::create_switch(
+            &name,
+            &typ,
+            iface.as_deref(),
+            vlan,
+            bridge.as_deref(),
+            address.as_deref(),
+            mtu,
+            private,
+        )
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+    .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        "/api/bhyve/switches",
+        201,
+        Some(format!("created {} switch {}", body.typ, body.name)),
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "name": body.name })),
+    ))
+}
+
+/// DELETE /api/bhyve/switches/{name} — destroy a virtual switch.
+pub async fn delete_switch(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    validate_switch_name(&name)?;
+    let switch_name = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::destroy_switch(&switch_name))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "DELETE",
+        &format!("/api/bhyve/switches/{name}"),
+        200,
+        Some(format!("destroyed switch {name}")),
+    );
+    Ok(StatusCode::OK)
 }
 
 /// GET /api/bhyve/status — check vm-bhyve installation and configuration status.
@@ -303,6 +430,27 @@ fn validate_vm_name(name: &str) -> ApiResult<()> {
     Ok(())
 }
 
+fn validate_vm_config(config: &std::collections::BTreeMap<String, String>) -> ApiResult<()> {
+    if config.is_empty() {
+        return Err(ApiError::BadRequest("VM configuration must not be empty".into()));
+    }
+    if config.len() > 256 {
+        return Err(ApiError::BadRequest("VM configuration has too many entries".into()));
+    }
+    for (key, value) in config {
+        if key.is_empty()
+            || key.len() > 128
+            || !key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            return Err(ApiError::BadRequest(format!("invalid VM configuration key: {key}")));
+        }
+        if value.len() > 4096 || value.contains('\0') || value.contains('\n') || value.contains('\r') {
+            return Err(ApiError::BadRequest(format!("invalid value for VM configuration key: {key}")));
+        }
+    }
+    Ok(())
+}
+
 /// Validate datastore name: same rules as VM names — lowercase
 /// alphanumeric with `.`/`_`/`-`, must start/end with alphanumeric.
 fn validate_datastore_name(name: &str) -> ApiResult<()> {
@@ -324,6 +472,44 @@ fn validate_datastore_name(name: &str) -> ApiResult<()> {
         return Err(ApiError::BadRequest(
             "datastore name must start and end with a letter or digit".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_switch_name(name: &str) -> ApiResult<()> {
+    validate_datastore_name(name).map_err(|_| {
+        ApiError::BadRequest(
+            "switch name may only contain lowercase letters, digits, dots, underscores and dashes, and must start and end with a letter or digit".into(),
+        )
+    })
+}
+
+fn validate_switch_create(body: &CreateSwitchBody) -> ApiResult<()> {
+    match body.typ.as_str() {
+        "standard" | "manual" | "netgraph" | "vale" | "vxlan" => {}
+        _ => return Err(ApiError::BadRequest("invalid switch type".into())),
+    }
+    if body.typ == "manual" && body.bridge.as_deref().unwrap_or_default().is_empty() {
+        return Err(ApiError::BadRequest("manual switches require a bridge".into()));
+    }
+    if body.typ == "vxlan" && (body.iface.as_deref().unwrap_or_default().is_empty() || body.vlan.is_none()) {
+        return Err(ApiError::BadRequest("vxlan switches require an interface and VLAN ID".into()));
+    }
+    if body.vlan.is_some_and(|value| value >= 4095) {
+        return Err(ApiError::BadRequest("VLAN ID must be between 0 and 4094".into()));
+    }
+    if body.mtu.is_some_and(|value| !(100..=9000).contains(&value)) {
+        return Err(ApiError::BadRequest("MTU must be between 100 and 9000".into()));
+    }
+    if let Some(address) = &body.address {
+        let (ip, prefix) = address
+            .split_once('/')
+            .ok_or_else(|| ApiError::BadRequest("address must use CIDR notation".into()))?;
+        if ip.parse::<std::net::Ipv4Addr>().is_err()
+            || prefix.parse::<u8>().map_or(true, |value| value > 32)
+        {
+            return Err(ApiError::BadRequest("address must use IPv4 CIDR notation".into()));
+        }
     }
     Ok(())
 }

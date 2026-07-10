@@ -2,7 +2,7 @@
 
 > 依赖：`vm-bhyve` 1.7.3（已安装在 `/usr/local/sbin/vm`）。封装其 CLI，解析表格输出。
 >
-> **实现状态**：M1（命令封装 + 列表/详情解析）、M2（VM CRUD + 生命周期 start/stop）、M5（控制台 + VNC）已完成。
+> **实现状态**：M1（命令封装 + 列表/详情解析）、M2（VM CRUD + 生命周期 start/stop）、M4（交换机/数据存储）、M5（控制台 + VNC）及 VM 配置编辑已完成。
 > 实现文档见 `docs/impl/23-bhyve.md`。
 
 ## 1. 调用契约
@@ -34,7 +34,7 @@
 | 开机自启 | `vm list` 中 AUTO 列 + `/vm/.config/system.conf` | |
 | 全部启动 | `vm startall` | rc.d 调用 |
 | 全部停止 | `vm stopall [-f]` | |
-| 虚拟交换 | `vm switch list/create/destroy/add/remove/vlan/nat` | |
+| 交换机 | `vm switch list/create/destroy/add/remove/vlan/nat` | ✅ list + create + destroy |
 | 数据存储 | `vm datastore list/add/remove` | ✅ list + add + remove |
 | 直通 | `vm passthru` | PCI 设备直通 |
 
@@ -124,11 +124,14 @@ struct IsoImage { name: String, size: u64 }
 | POST | `/api/bhyve/vms/{name}/destroy` | 强制断电 | |
 | POST | `/api/bhyve/vms/{name}/restart` | 重启 | |
 | POST | `/api/bhyve/vms/{name}/install` | 挂载 ISO 安装 | |
-| PUT | `/api/bhyve/vms/{name}` | 修改 VM 配置 | |
+| PUT | `/api/bhyve/vms/{name}` | 修改 VM 配置 | ✅ |
 | WS | `/api/term/ws?vm=<name>` | 串口控制台（复用终端 WS） | ✅ |
 | WS | `/api/bhyve/vms/{name}/vnc` | VNC 代理（WS→TCP） | ✅ |
 | GET | `/api/bhyve/images` | 镜像列表 | ✅ |
-| GET | `/api/bhyve/switches` | 虚拟交换列表 | ✅ |
+| GET | `/api/bhyve/switches` | 虚拟交换机列表 | ✅ |
+| GET | `/api/bhyve/switches/{name}` | 虚拟交换机详情 | ✅ |
+| POST | `/api/bhyve/switches` | 创建虚拟交换机 | ✅ |
+| DELETE | `/api/bhyve/switches/{name}` | 删除虚拟交换机 | ✅ |
 | GET | `/api/bhyve/datastores` | 数据存储列表 | ✅ |
 | GET | `/api/bhyve/templates` | 模板列表 | ✅ |
 | GET | `/api/bhyve/isos` | ISO 列表 | ✅ |
@@ -157,9 +160,9 @@ WebSocket→TCP 代理（Rust 内建），无外部依赖。
 1. **M1 ✅** — 命令封装器 + 列表/详情解析（`vm list`/`info`/`switch list`/`image list`/`datastore list`/templates/ISO）
 2. **M2 ✅** — VM CRUD + 生命周期 API（create/start/stop）
 3. **M3** — 快照/克隆/ISO 管理 API（未开始）
-4. **M4** — 交换机/数据存储管理 API（未开始，只读列表已完成）
+4. **M4 ✅** — 交换机/数据存储管理 API（交换机 list/create/destroy，数据存储 list/add/remove）
 5. **M5 ✅** — 控制台 + VNC（串口控制台 + VNC 代理）
-6. **M6** — 配置编辑 + VM 删除（未开始）
+6. **M6** — 配置编辑 + VM 删除（配置编辑 ✅，VM 删除未开始）
 
 ## 7. 风险与缓解
 

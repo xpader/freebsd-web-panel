@@ -343,6 +343,86 @@ pub fn list_switches() -> Result<Vec<VmSwitch>, String> {
     Ok(switches)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct VmSwitchDetail {
+    pub name: String,
+    pub fields: std::collections::BTreeMap<String, String>,
+}
+
+pub fn get_switch_info(name: &str) -> Result<VmSwitchDetail, String> {
+    let output = vm_run(&["switch", "info", name])?;
+    Ok(parse_switch_info(&output, name))
+}
+
+fn parse_switch_info(raw: &str, name: &str) -> VmSwitchDetail {
+    let mut fields = std::collections::BTreeMap::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if !key.is_empty() && !value.is_empty() {
+            fields.insert(key.to_string(), value.to_string());
+        }
+    }
+    VmSwitchDetail {
+        name: name.to_string(),
+        fields,
+    }
+}
+
+pub fn create_switch(
+    name: &str,
+    typ: &str,
+    iface: Option<&str>,
+    vlan: Option<u16>,
+    bridge: Option<&str>,
+    address: Option<&str>,
+    mtu: Option<u16>,
+    private: bool,
+) -> Result<(), String> {
+    let vlan_str;
+    let mtu_str;
+    let mut args = vec!["switch", "create", "-t", typ];
+
+    if let Some(value) = iface {
+        args.push("-i");
+        args.push(value);
+    }
+    if let Some(value) = vlan {
+        vlan_str = value.to_string();
+        args.push("-n");
+        args.push(&vlan_str);
+    }
+    if let Some(value) = bridge {
+        args.push("-b");
+        args.push(value);
+    }
+    if let Some(value) = address {
+        args.push("-a");
+        args.push(value);
+    }
+    if let Some(value) = mtu {
+        mtu_str = value.to_string();
+        args.push("-m");
+        args.push(&mtu_str);
+    }
+    if private {
+        args.push("-p");
+    }
+    args.push(name);
+
+    vm_run(&args)?;
+    Ok(())
+}
+
+pub fn destroy_switch(name: &str) -> Result<(), String> {
+    vm_run(&["switch", "destroy", name])?;
+    Ok(())
+}
+
 fn dash_to_none(s: &str) -> Option<String> {
     if s == "-" || s.is_empty() {
         None
@@ -418,9 +498,18 @@ pub fn remove_datastore(name: &str) -> Result<(), String> {
 
 // ── templates ─────────────────────────────────────────────────────
 
-/// List available VM templates from /vm/.templates/.
+fn default_datastore_path() -> Result<String, String> {
+    list_datastores()?
+        .into_iter()
+        .find(|datastore| datastore.name == "default")
+        .map(|datastore| datastore.path)
+        .ok_or_else(|| "vm datastore list: default datastore not found".to_string())
+}
+
+/// List available VM templates from the default datastore.
 pub fn list_templates() -> Result<Vec<String>, String> {
-    let dir = std::fs::read_dir("/vm/.templates").map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&default_datastore_path()?).join(".templates");
+    let dir = std::fs::read_dir(path).map_err(|e| e.to_string())?;
     let mut templates = Vec::new();
     for entry in dir {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -441,9 +530,10 @@ pub struct IsoImage {
     pub size: u64,
 }
 
-/// List ISO images from /vm/.iso/.
+/// List ISO images from the default datastore.
 pub fn list_isos() -> Result<Vec<IsoImage>, String> {
-    let dir = std::fs::read_dir("/vm/.iso").map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&default_datastore_path()?).join(".iso");
+    let dir = std::fs::read_dir(path).map_err(|e| e.to_string())?;
     let mut isos = Vec::new();
     for entry in dir {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -820,11 +910,23 @@ fn get_kv_opt(sub: &[(String, String)], key: &str) -> Option<String> {
     get_kv(sub, key).map(|s| s.to_string())
 }
 
-/// Read /vm/<name>/<name>.conf into a sorted map.
+fn vm_config_path(name: &str) -> Result<std::path::PathBuf, String> {
+    for datastore in list_datastores()? {
+        let path = std::path::Path::new(&datastore.path).join(name).join(format!("{name}.conf"));
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(format!("VM configuration not found: {name}"))
+}
+
 fn read_vm_config(name: &str) -> std::collections::BTreeMap<String, String> {
     let mut map = std::collections::BTreeMap::new();
-    let path = format!("/vm/{name}/{name}.conf");
-    let content = match std::fs::read_to_string(&path) {
+    let path = match vm_config_path(name) {
+        Ok(path) => path,
+        Err(_) => return map,
+    };
+    let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return map,
     };
@@ -844,6 +946,52 @@ fn read_vm_config(name: &str) -> std::collections::BTreeMap<String, String> {
         }
     }
     map
+}
+
+pub fn update_vm_config(
+    name: &str,
+    config: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    let path = vm_config_path(name)?;
+    let backup = path.with_extension("conf.fwp.bak");
+    std::fs::copy(&path, &backup).map_err(|e| format!("backup VM configuration failed: {e}"))?;
+
+    // Write keys in a natural order: loader & boot, cpu, memory, then the rest.
+    let priority: &[&str] = &[
+        "loader", "bhyveload_loader", "bhyveload_args", "loader_timeout",
+        "grub_install0", "grub_run0",
+        "cpu", "cpu_sockets", "cpu_cores", "cpu_threads",
+        "memory", "wired_memory",
+    ];
+    let mut written = std::collections::HashSet::new();
+    let mut content = String::new();
+
+    for &key in priority {
+        if let Some(value) = config.get(key) {
+            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+            content.push_str(key);
+            content.push_str("=\"");
+            content.push_str(&escaped);
+            content.push_str("\"\n");
+            written.insert(key);
+        }
+    }
+
+    for (key, value) in config {
+        if written.contains(key.as_str()) {
+            continue;
+        }
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        content.push_str(key);
+        content.push_str("=\"");
+        content.push_str(&escaped);
+        content.push_str("\"\n");
+    }
+
+    let tmp = path.with_extension("conf.fwp.tmp");
+    std::fs::write(&tmp, content).map_err(|e| format!("write VM configuration failed: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("replace VM configuration failed: {e}"))?;
+    Ok(())
 }
 
 /// Read the VNC port for a VM from its .conf file.

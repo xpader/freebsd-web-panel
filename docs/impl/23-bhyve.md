@@ -2,24 +2,24 @@
 
 ## 概述
 
-Bhyve 模块封装 vm-bhyve（`/usr/local/sbin/vm`）CLI，提供虚拟机列表/详情/创建/启停、串口控制台、VNC 代理，以及镜像/交换机/数据存储/模板/ISO 的只读列表。所有操作通过 spawn `vm` 子进程完成（无 FFI）。
+Bhyve 模块封装 vm-bhyve（`/usr/local/sbin/vm`）CLI，提供虚拟机列表/详情/创建/启停、串口控制台、VNC 代理，以及镜像、交换机、数据存储、模板和 ISO 管理。所有操作通过 spawn `vm` 子进程完成（无 FFI）。
 
 当前阶段已实现：
 - VM 列表（`vm list`，含 All/Running 筛选）
-- VM 详情（`vm info` + `.conf` 配置文件，含网络接口/磁盘/快照/控制台端口）
+- VM 详情（`vm info` + `.conf` 配置文件，含网络接口/磁盘/快照/控制台端口）与完整 VM 配置编辑
 - VM 创建（`vm create`，可选模板/数据存储/CPU/内存/磁盘大小 + 安装 ISO）
 - VM 启动/停止（`vm start` / `vm stop`）
 - VM 串口控制台（WebSocket + PTY + xterm.js，通过 `cu -l` 连接 nmdm 设备）
 - VM VNC 代理（WebSocket→TCP 代理 + noVNC 前端）
 - vm-bhyve 镜像列表（`vm image list`）
-- 虚拟交换列表（`vm switch list`）
+- 交换机列表/详情/创建/删除（`vm switch list` / `vm switch info` / `vm switch create` / `vm switch destroy`）
 - 数据存储列表（`vm datastore list`）
 - 数据存储添加/移除（`vm datastore add` / `vm datastore remove`）
-- 模板列表（读取 `/vm/.templates/`）
-- ISO 列表（读取 `/vm/.iso/`）
+- 模板列表（读取默认数据存储的 `.templates/`）
+- ISO 列表（读取默认数据存储的 `.iso/`）
 - vm-bhyve 初始化检测与引导（检测软件包/rc.conf 配置/init 状态，提供一键初始化）
 
-未实现：VM 删除、配置编辑、快照/克隆/回滚、重启/强制停止/挂起、ISO 下载、交换机创建/删除。
+未实现：VM 删除、快照/克隆/回滚、重启/强制停止/挂起、ISO 下载。
 
 ## 实现细节
 
@@ -67,7 +67,7 @@ AUTO 列解析（`:bhyve.rs:193`）：
 1. 跳过标题块（`-----` + `Virtual Machine: name` + `-----`）
 2. 逐行扫描：无冒号的行视为子段标题，后续缩进行为子段内容
 3. snapshots 子段特殊处理：制表符分隔（`name<TAB>size<TAB>date`），日期含冒号不可用 `key:value` 分割
-4. 读取 `/vm/<name>/<name>.conf` 作为 `config` 字段（`:bhyve.rs:810`）
+4. 遍历 `vm datastore list` 的存储路径，定位 `<datastore-path>/<name>/<name>.conf` 作为 `config` 字段
 5. 从 config 中提取 VNC 端口（`graphics="yes"` + `graphics_port`）
 
 ### 数据模型
@@ -93,6 +93,32 @@ pub struct IsoImage { name, size: u64 }
 所有写操作（create/start/stop）使用 `tokio::task::spawn_blocking` 包装（VM 命令含 ZFS/磁盘 I/O，阻塞）。每步操作记录审计日志。
 
 VM 名称校验（`:handlers/bhyve.rs:176`）：小写字母+数字+`.`/`_`/`-`，首尾必须字母或数字（遵循 vm-bhyve `util::check_name` 规则）。数据存储名称校验使用相同规则（`:handlers/bhyve.rs:248`）。
+
+### VM 配置编辑
+
+`PUT /api/bhyve/vms/{name}` 接收完整 `config` 键值映射，独立编辑页支持修改、增加和删除任意 vm-bhyve 配置项。键仅允许小写字母、数字和下划线；值拒绝换行和 NUL，避免生成额外配置项。
+
+编辑页 `/bhyve/edit/:name` 复用 Jail 创建页的 `SectionCard` 组件，以 Tab 模式按基础设置、磁盘设备、网络设备、VNC/图形、其他设备分区。磁盘与网络区按 `disk<N>_*` / `network<N>_*` 识别配置项，支持新增和删除完整设备组；高级参数不作为独立 Tab，而是作为单独 card 放在 SectionCard 下方，保留未分类参数的完整编辑能力。页面顶部使用 `WarnBanner` 组件提示“修改将在虚拟机下次启动时生效”，底部使用 `form-actions-bar` 放置取消和保存按钮。
+
+参数控件依据 vm-bhyve 1.7.3 的 `config.sample`：
+- 枚举选择：loader（bhyveload/grub/uefi/uefi-csm）、磁盘模拟类型（virtio-blk/ahci-hd/ahci-cd/nvme/virtio-9p）、磁盘后端（file/zvol/sparse-zvol/custom/iscsi）、网卡模拟类型（virtio-net/e1000）、VNC 分辨率、等待策略和 VGA 模式。
+- `virtio-9p` 使用专用字段：共享名与主机目录，通过目录选择器组合为 bhyve 所需的 `disk<N>_name="共享名=/绝对路径"`，并强制 `disk<N>_dev=custom`；`disk<N>_opts` 可填 `ro` 以只读导出共享目录。
+- 勾选：wired_memory、uefi_vars、ignore_msr、utctime、debug、virt_random、network span、graphics、xhci_mouse、sound。勾选项使用 `checkbox-label` 布局，勾选框靠左、描述文字跟在后面（与 Jail 编辑页一致）。
+- 文件选择器：bhyveload_loader、自定义磁盘 `disk<N>_name`（仅 dev=custom）与 sound_play/sound_rec。
+- 字段标签：专用字段显示简短 EN/ZH 名称，详细说明通过 `FieldHelp` 组件以可点击信息图标 tooltip 呈现；高级区将未知键显示为“高级参数（原始键名）”。
+- 其他设备：按编号管理 `passthru<N>` PCI 直通和 `virt_console<N>` virtio 控制台。
+
+后端按 VM 实际所在 datastore 定位配置文件，先创建同目录的 `.conf.fwp.bak` 备份，再写入 `.conf.fwp.tmp` 并以 `rename` 原子替换。保存后的配置按固定优先级排序输出：先 loader 与引导相关（loader、bhyveload_loader、bhyveload_args、loader_timeout、grub_install0、grub_run0），然后 CPU（cpu、cpu_sockets、cpu_cores、cpu_threads），再内存（memory、wired_memory），其余按键名字典序跟在后面。所有值统一写为双引号包裹。运行中 VM 的配置在下次启动生效。
+
+### 交换机创建
+
+`create_switch()` 按参数数组调用 `vm switch create`：`-t type`、可选 `-i interface`、`-n vlan`、`-b bridge`、`-a address/prefix`、`-m mtu` 与 `-p`。
+
+前端根据交换机类型显示有效字段：standard 支持接口、VLAN、CIDR 地址、MTU 和隔离；manual 强制现有 bridge；VXLAN 强制接口和 VLAN；netgraph 与 VALE 不接受创建参数。后端重复校验类型、VXLAN/manual 的必填组合、VLAN 范围（0-4094）、MTU 范围（100-9000）和 IPv4 CIDR 格式。
+
+`get_switch_info()` 调用 `vm switch info <name>`，解析缩进的 `key: value` 字段为有序键值映射，详情页展示类型、接口标识、VLAN、物理端口和收发字节等实际可用字段。
+
+`destroy_switch()` 调用 `vm switch destroy <name>`；前端删除前强制确认，警告已连接 VM 会失去网络连接，成功后刷新列表。
 
 ### 数据存储管理
 
@@ -166,10 +192,14 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | GET | `/api/bhyve/vms` | 列出所有 VM（`?running=true` 仅运行中） |
 | POST | `/api/bhyve/vms` | 创建 VM（body: name/template/datastore/size/cpu/memory） |
 | GET | `/api/bhyve/vms/{name}` | VM 详情（vm info + .conf） |
+| PUT | `/api/bhyve/vms/{name}` | 替换 VM 配置（body: config 键值映射） |
 | POST | `/api/bhyve/vms/{name}/start` | 启动 VM |
 | POST | `/api/bhyve/vms/{name}/stop` | 停止 VM |
 | GET | `/api/bhyve/images` | vm-bhyve 镜像列表 |
-| GET | `/api/bhyve/switches` | 虚拟交换列表 |
+| GET | `/api/bhyve/switches` | 交换机列表 |
+| GET | `/api/bhyve/switches/{name}` | 交换机详情 |
+| POST | `/api/bhyve/switches` | 创建交换机（body: name/type/iface/vlan/bridge/address/mtu/private） |
+| DELETE | `/api/bhyve/switches/{name}` | 删除交换机 |
 | GET | `/api/bhyve/status` | vm-bhyve 安装/配置状态 |
 | POST | `/api/bhyve/init` | 初始化 vm-bhyve（body: spec） |
 | GET | `/api/bhyve/datastores` | 数据存储列表 |
@@ -183,7 +213,7 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 ## 外部依赖
 
 - **系统命令**：`/usr/local/sbin/vm`（vm-bhyve 1.7.3）、`/usr/bin/cu`（串口连接）
-- **系统文件**：`/vm/<name>/<name>.conf`（VM 配置）、`/vm/<name>/console`（nmdm 设备映射）、`/vm/.templates/*.conf`（模板）、`/vm/.iso/*`（ISO）、`/vm/.config/system.conf`（全局配置）
+- **系统文件**：默认数据存储 PATH 下的 `<name>/<name>.conf`（VM 配置）、`<name>/console`（nmdm 设备映射）、`.templates/*.conf`（模板）、`.iso/*`（ISO）与 `.config/system.conf`（全局配置）。默认路径由 `vm datastore list` 中名称为 `default` 的条目确定，不固定为 `/vm`。
 - **Rust crate**：无额外（复用 axum WS + tokio TCP）
 - **前端库**：`@novnc/novnc`（VNC 客户端）、`@xterm/xterm`（串口终端）
 
@@ -194,14 +224,16 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | 虚拟机列表 | `/bhyve/vms` | `BhyveVmsPage.vue` |
 | 创建虚拟机 | `/bhyve/create` | `BhyveCreatePage.vue` |
 | VM 详情 | `/bhyve/detail/:name` | `BhyveDetailPage.vue` |
+| VM 配置 | `/bhyve/edit/:name` | `BhyveEditPage.vue` |
 | 串口控制台 | `/bhyve/console/:name` | `BhyveConsolePage.vue` |
 | VNC | `/bhyve/vnc/:name` | `BhyveVncPage.vue` |
 | 镜像列表 | `/bhyve/images` | `BhyveImagesPage.vue` |
-| 虚拟交换 | `/bhyve/switches` | `BhyveSwitchesPage.vue` |
+| 虚拟交换机 | `/bhyve/switches` | `BhyveSwitchesPage.vue` |
+| 交换机详情 | `/bhyve/switches/:name` | `BhyveSwitchDetailPage.vue` |
 | 存储池 | `/bhyve/datastores` | `BhyveDatastoresPage.vue` |
 | 初始化 | `/bhyve/init` | `BhyveInitPage.vue` |
 
-侧边栏菜单：`virtualization` → `bhyve`（带 4 个子项：虚拟机/镜像/虚拟交换/存储池）。初始化页面不在侧边栏，通过 VM 列表页的引导按钮进入。
+侧边栏菜单：`virtualization` → `bhyve`（带 4 个子项：虚拟机/镜像/虚拟交换机/存储池）。初始化页面不在侧边栏，通过 VM 列表页的引导按钮进入。
 
 VNC 按钮仅在 `vm.vnc`（列表）或 `vm.vnc_port`（详情）存在且 VM 运行时显示。
 
@@ -209,9 +241,8 @@ VNC 按钮仅在 `vm.vnc`（列表）或 `vm.vnc_port`（详情）存在且 VM �
 
 ## 已知限制 / TODO
 
-- VM 删除（`vm destroy`）、配置编辑、快照/克隆/回滚未实现
+- VM 删除（`vm destroy`）、快照/克隆/回滚未实现
 - ISO 下载（后台任务）未实现
-- 交换机创建/删除未实现
 - 数据存储添加时无法自动创建 ZFS dataset 或目录（vm-bhyve 要求用户预先创建）
 - `vm start` 使用 `.status()` — 如果 bhyve 启动失败，错误信息可能不够详细（stderr 未捕获到 spawn 端）
 - VNC 无密码认证（bhyve fbuf 不支持），依赖面板 token 认证保护 WS 端点

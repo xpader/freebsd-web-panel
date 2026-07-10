@@ -28,10 +28,12 @@ import PfPage from '../pages/PfPage.vue';
 import BhyveVmsPage from '../pages/BhyveVmsPage.vue';
 import BhyveCreatePage from '../pages/BhyveCreatePage.vue';
 import BhyveDetailPage from '../pages/BhyveDetailPage.vue';
+import BhyveEditPage from '../pages/BhyveEditPage.vue';
 import BhyveConsolePage from '../pages/BhyveConsolePage.vue';
 import BhyveVncPage from '../pages/BhyveVncPage.vue';
 import BhyveImagesPage from '../pages/BhyveImagesPage.vue';
 import BhyveSwitchesPage from '../pages/BhyveSwitchesPage.vue';
+import BhyveSwitchDetailPage from '../pages/BhyveSwitchDetailPage.vue';
 import BhyveDatastoresPage from '../pages/BhyveDatastoresPage.vue';
 import BhyveInitPage from '../pages/BhyveInitPage.vue';
 import JailsListPage from '../pages/JailsListPage.vue';
@@ -80,10 +82,12 @@ const routes = [
       { path: 'bhyve/vms', name: 'bhyve-vms', component: BhyveVmsPage },
       { path: 'bhyve/create', name: 'bhyve-create', component: BhyveCreatePage },
       { path: 'bhyve/detail/:name', name: 'bhyve-detail', component: BhyveDetailPage },
+      { path: 'bhyve/edit/:name', name: 'bhyve-edit', component: BhyveEditPage },
       { path: 'bhyve/console/:name', name: 'bhyve-console', component: BhyveConsolePage },
       { path: 'bhyve/vnc/:name', name: 'bhyve-vnc', component: BhyveVncPage },
       { path: 'bhyve/images', name: 'bhyve-images', component: BhyveImagesPage },
       { path: 'bhyve/switches', name: 'bhyve-switches', component: BhyveSwitchesPage },
+      { path: 'bhyve/switches/:name', name: 'bhyve-switch-detail', component: BhyveSwitchDetailPage },
       { path: 'bhyve/datastores', name: 'bhyve-datastores', component: BhyveDatastoresPage },
       { path: 'bhyve/init', name: 'bhyve-init', component: BhyveInitPage },
       { path: 'accounts/users', name: 'accounts-users', component: AccountsUsersPage },

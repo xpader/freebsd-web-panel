@@ -7,6 +7,7 @@ import { useToast, useAlert } from '../composables/useDialog.js';
 import FilePicker from '../components/ui/FilePicker.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import BackButton from '../components/ui/BackButton.vue';
+import WarnBanner from '../components/ui/WarnBanner.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -315,6 +316,15 @@ onMounted(async () => {
     jail.value = await api.get(`/api/jails/${encodeURIComponent(name)}`);
     form.value = { ...(jail.value.params || {}) };
     autoStart.value = !!jail.value.auto_start;
+    // Pre-initialize IP fields so they survive submit even if the user
+    // never visited the Network tab (ipAddr/ipMode are lazy-initialized
+    // during template rendering and would otherwise be undefined).
+    for (const key of ['meta.ip4', 'meta.ip6']) {
+      const v = form.value[key] || '';
+      const reserved = ['', 'dhcp', 'inherit', 'disable'];
+      ipModeOverrides.value[key] = reserved.includes(v) ? v : (v ? 'static' : '');
+      ipAddrs.value[key] = reserved.includes(v) ? '' : v;
+    }
     await loadFstab();
   } catch (err) {
     error.value = err.message || '';
@@ -334,10 +344,7 @@ onMounted(async () => {
   <div v-else-if="!jail" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</div>
 
   <template v-else>
-    <div v-if="isRunning" class="card warn-banner">
-      <i class="fa-solid fa-triangle-exclamation" style="color: var(--warn);"></i>
-      <span style="margin-left: 8px;">{{ t('jails.editRunningWarn') }}</span>
-    </div>
+    <WarnBanner v-if="isRunning" :message="t('jails.editRunningWarn')" />
 
     <form @submit.prevent="onSubmit">
       <SectionCard v-model="activeTab" :tabs="tabItems">
@@ -500,11 +507,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.warn-banner {
-  background: rgba(245, 158, 11, 0.08);
-  border-left: 3px solid var(--warn);
-  margin-bottom: 16px;
-}
 .form-row-label {
   padding-top: 8px;
 }
