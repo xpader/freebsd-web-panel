@@ -371,7 +371,10 @@ pub fn list_datastores() -> Result<Vec<VmDatastore>, String> {
         Some(h) => h,
         None => return Ok(Vec::new()),
     };
-    let cols = parse_header(header);
+    let mut cols = parse_header(header);
+    // "ZFS DATASET" is a two-word header for a single data column.
+    // Remove "DATASET" so col_value for ZFS extends to end of line.
+    cols.retain(|c| c.label.to_uppercase() != "DATASET");
 
     let i_name = col_index(&cols, "NAME").ok_or("vm datastore list: NAME column not found")?;
     let i_type = col_index(&cols, "TYPE").ok_or("vm datastore list: TYPE column not found")?;
@@ -387,8 +390,6 @@ pub fn list_datastores() -> Result<Vec<VmDatastore>, String> {
         if name.is_empty() {
             continue;
         }
-        // The ZFS column header is "ZFS DATASET" — col_value for i_zfs will
-        // capture from "ZFS" offset to end of line, which includes "DATASET".
         let zfs_raw = col_value(line, &cols, i_zfs);
         datastores.push(VmDatastore {
             name,

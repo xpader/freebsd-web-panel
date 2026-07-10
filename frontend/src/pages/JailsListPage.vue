@@ -148,7 +148,7 @@ onMounted(load);
     </div>
     <span class="text-dim">{{ t('jails.count', { n: allJails.length }) }}</span>
     <div class="flex">
-      <button @click="router.push('/jails/create')"><i class="fa-solid fa-plus"></i> {{ t('jails.create') }}</button>
+      <button @click="router.push('/jails/create')"><i class="fa-solid fa-plus"></i> {{ t('common.create') }}</button>
       <button @click="load" :disabled="refreshing"><i :class="['fa-solid fa-rotate-right', { 'fa-spin': refreshing }]"></i> {{ t('common.refresh') }}</button>
     </div>
   </div>
