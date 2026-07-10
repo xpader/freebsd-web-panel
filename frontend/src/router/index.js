@@ -32,6 +32,8 @@ import BhyveConsolePage from '../pages/BhyveConsolePage.vue';
 import BhyveVncPage from '../pages/BhyveVncPage.vue';
 import BhyveImagesPage from '../pages/BhyveImagesPage.vue';
 import BhyveSwitchesPage from '../pages/BhyveSwitchesPage.vue';
+import BhyveDatastoresPage from '../pages/BhyveDatastoresPage.vue';
+import BhyveInitPage from '../pages/BhyveInitPage.vue';
 import JailsListPage from '../pages/JailsListPage.vue';
 import JailCreatePage from '../pages/JailCreatePage.vue';
 import JailDetailPage from '../pages/JailDetailPage.vue';
@@ -82,6 +84,8 @@ const routes = [
       { path: 'bhyve/vnc/:name', name: 'bhyve-vnc', component: BhyveVncPage },
       { path: 'bhyve/images', name: 'bhyve-images', component: BhyveImagesPage },
       { path: 'bhyve/switches', name: 'bhyve-switches', component: BhyveSwitchesPage },
+      { path: 'bhyve/datastores', name: 'bhyve-datastores', component: BhyveDatastoresPage },
+      { path: 'bhyve/init', name: 'bhyve-init', component: BhyveInitPage },
       { path: 'accounts/users', name: 'accounts-users', component: AccountsUsersPage },
       { path: 'accounts/groups', name: 'accounts-groups', component: AccountsGroupsPage },
       { path: 'jails/running', name: 'jails-list', component: JailsListPage },

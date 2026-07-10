@@ -8,6 +8,9 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 
 const VM: &str = "/usr/local/sbin/vm";
+const SYSRC: &str = "/usr/sbin/sysrc";
+const PKG: &str = "/usr/sbin/pkg";
+const ZFS: &str = "/sbin/zfs";
 
 // ── Command helpers ───────────────────────────────────────────────
 
@@ -395,6 +398,21 @@ pub fn list_datastores() -> Result<Vec<VmDatastore>, String> {
         });
     }
     Ok(datastores)
+}
+
+/// Add a new datastore via `vm datastore add <name> <spec>`.
+/// The spec is either `/path/to/dir` (directory) or `zfs:pool/dataset` (ZFS).
+/// vm-bhyve also supports `iso:/path` and `img:/path`.
+pub fn add_datastore(name: &str, spec: &str) -> Result<(), String> {
+    vm_run(&["datastore", "add", name, spec])?;
+    Ok(())
+}
+
+/// Remove a datastore from vm-bhyve configuration via `vm datastore remove`.
+/// This only removes the configuration entry; it does not delete any data.
+pub fn remove_datastore(name: &str) -> Result<(), String> {
+    vm_run(&["datastore", "remove", name])?;
+    Ok(())
 }
 
 // ── templates ─────────────────────────────────────────────────────
@@ -835,6 +853,216 @@ pub fn get_vnc_port(name: &str) -> Option<u16> {
         config.get("graphics_port").and_then(|p| p.parse().ok())
     } else {
         None
+    }
+}
+
+// ── vm-bhyve initialization ───────────────────────────────────────
+
+/// Current vm-bhyve setup status, used to determine whether initialization
+/// is needed before the VM management UI can be used.
+#[derive(Debug, Clone, Serialize)]
+pub struct BhyveStatus {
+    /// `vm-bhyve` package installed (`/usr/local/sbin/vm` exists).
+    pub installed: bool,
+    /// `vm_enable="YES"` in rc.conf.
+    pub enabled: bool,
+    /// `vm_dir` value from rc.conf (e.g. `zfs:zroot/vm` or `/home/vm`).
+    pub vm_dir: Option<String>,
+    /// `vm init` has been run — the resolved path has `.config/` subdirectory.
+    pub initialized: bool,
+    /// Human-readable resolved filesystem path (e.g. `/vm`), for display.
+    pub resolved_path: Option<String>,
+}
+
+/// Check whether vm-bhyve is installed, enabled, and initialized.
+pub fn check_status() -> BhyveStatus {
+    let installed = std::path::Path::new(VM).exists();
+    let vm_enable = sysrc_get("vm_enable");
+    let enabled = vm_enable.as_deref() == Some("YES");
+    let vm_dir = sysrc_get("vm_dir");
+    let resolved_path = vm_dir.as_deref().and_then(resolve_vm_dir);
+    let initialized = resolved_path
+        .as_ref()
+        .map(|p| std::path::Path::new(p).join(".config").exists())
+        .unwrap_or(false);
+
+    BhyveStatus {
+        installed,
+        enabled,
+        vm_dir,
+        initialized,
+        resolved_path,
+    }
+}
+
+/// Perform full vm-bhyve initialization:
+/// 1. Install packages (vm-bhyve, bhyve-firmware, grub2-bhyve)
+/// 2. Set `vm_enable="YES"` and `vm_dir` in rc.conf
+/// 3. Prepare storage (create ZFS dataset or directory)
+/// 4. Run `vm init` (loads kernel modules, creates subdirectories)
+/// 5. Copy example templates into `.templates/`
+///
+/// `spec` is the vm_dir value: `/path/to/dir` or `zfs:pool/dataset`.
+/// Returns step descriptions for progress display.
+pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
+    let mut steps = Vec::new();
+
+    // 1. Install packages
+    let pkg_result = Command::new(PKG)
+        .args(["install", "-y", "vm-bhyve", "bhyve-firmware", "grub2-bhyve"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run pkg install: {e}"))?;
+    if !pkg_result.status.success() {
+        let stderr = String::from_utf8_lossy(&pkg_result.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&pkg_result.stdout).trim().to_string();
+        return Err(if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            "package installation failed".to_string()
+        });
+    }
+    steps.push("Installed packages: vm-bhyve, bhyve-firmware, grub2-bhyve".into());
+
+    // 2. Configure rc.conf
+    sysrc_set("vm_enable", "YES")?;
+    sysrc_set("vm_dir", spec)?;
+    steps.push(format!("rc.conf configured: vm_enable=YES, vm_dir={spec}"));
+
+    // 3. Prepare storage
+    if let Some(dataset) = spec.strip_prefix("zfs:") {
+        let exists = Command::new(ZFS)
+            .args(["list", "-H", "-o", "name", dataset])
+            .stdin(Stdio::null())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !exists {
+            Command::new(ZFS)
+                .args(["create", dataset])
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|e| format!("zfs create {dataset} failed: {e}"))
+                .and_then(|o| {
+                    if o.status.success() {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "zfs create {dataset} failed: {}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        ))
+                    }
+                })?;
+            steps.push(format!("ZFS dataset created: {dataset}"));
+        } else {
+            steps.push(format!("ZFS dataset already exists: {dataset}"));
+        }
+    } else {
+        std::fs::create_dir_all(spec)
+            .map_err(|e| format!("mkdir -p {spec} failed: {e}"))?;
+        steps.push(format!("Directory ready: {spec}"));
+    }
+
+    // 4. Run vm init (loads kernel modules, creates .config/.templates/.iso/.img)
+    let init_result = Command::new(VM)
+        .arg("init")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("vm init failed: {e}"))?;
+    if !init_result.status.success() {
+        let stderr = String::from_utf8_lossy(&init_result.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&init_result.stdout).trim().to_string();
+        return Err(format!(
+            "vm init failed: {}",
+            if !stderr.is_empty() { stderr } else { stdout }
+        ));
+    }
+    steps.push("vm init completed (kernel modules loaded, directories created)".into());
+
+    // 5. Copy example templates into .templates/
+    let resolved = resolve_vm_dir(spec)
+        .ok_or_else(|| "cannot resolve vm_dir filesystem path after init".to_string())?;
+    let templates_dir = std::path::Path::new(&resolved).join(".templates");
+    let examples_dir = "/usr/local/share/examples/vm-bhyve";
+
+    if std::path::Path::new(examples_dir).exists() {
+        let mut count = 0;
+        for entry in std::fs::read_dir(examples_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                let dest = templates_dir.join(entry.file_name());
+                std::fs::copy(entry.path(), &dest)
+                    .map_err(|e| format!("copy template failed: {e}"))?;
+                count += 1;
+            }
+        }
+        steps.push(format!("Copied {count} template files to {resolved}/.templates/"));
+    } else {
+        steps.push("Warning: example templates directory not found".into());
+    }
+
+    Ok(steps)
+}
+
+// ── sysrc / zfs helpers ────────────────────────────────────────────
+
+/// Read a single sysrc variable value (returns None if unset or error).
+fn sysrc_get(key: &str) -> Option<String> {
+    let output = Command::new(SYSRC)
+        .args(["-n", key])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Set a sysrc variable (`sysrc KEY=VALUE`).
+fn sysrc_set(key: &str, value: &str) -> Result<(), String> {
+    let assignment = format!("{key}={value}");
+    let output = Command::new(SYSRC)
+        .arg(&assignment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("sysrc {key} failed: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("sysrc {key}={value} failed: {stderr}"));
+    }
+    Ok(())
+}
+
+/// Resolve a vm_dir spec to a filesystem path.
+/// For `zfs:pool/dataset`, queries the ZFS mountpoint.
+/// For plain paths, returns as-is.
+fn resolve_vm_dir(vm_dir: &str) -> Option<String> {
+    if let Some(dataset) = vm_dir.strip_prefix("zfs:") {
+        let output = Command::new(ZFS)
+            .args(["get", "-H", "-o", "value", "mountpoint", dataset])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let mp = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if mp.is_empty() || mp == "-" {
+            return None;
+        }
+        Some(mp)
+    } else {
+        Some(vm_dir.to_string())
     }
 }
 

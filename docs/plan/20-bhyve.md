@@ -35,7 +35,7 @@
 | 全部启动 | `vm startall` | rc.d 调用 |
 | 全部停止 | `vm stopall [-f]` | |
 | 虚拟交换 | `vm switch list/create/destroy/add/remove/vlan/nat` | |
-| 数据存储 | `vm datastore list/add/remove` | |
+| 数据存储 | `vm datastore list/add/remove` | ✅ list + add + remove |
 | 直通 | `vm passthru` | PCI 设备直通 |
 
 ## 2. 输出解析
