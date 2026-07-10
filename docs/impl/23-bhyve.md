@@ -108,7 +108,7 @@ VM 名称校验（`:handlers/bhyve.rs:176`）：小写字母+数字+`.`/`_`/`-`�
 - 字段标签：专用字段显示简短 EN/ZH 名称，详细说明通过 `FieldHelp` 组件以可点击信息图标 tooltip 呈现；高级区将未知键显示为“高级参数（原始键名）”。
 - 其他设备：按编号管理 `passthru<N>` PCI 直通和 `virt_console<N>` virtio 控制台。
 
-后端按 VM 实际所在 datastore 定位配置文件，先创建同目录的 `.conf.fwp.bak` 备份，再写入 `.conf.fwp.tmp` 并以 `rename` 原子替换。保存后的配置按固定优先级排序输出：先 loader 与引导相关（loader、bhyveload_loader、bhyveload_args、loader_timeout、grub_install0、grub_run0），然后 CPU（cpu、cpu_sockets、cpu_cores、cpu_threads），再内存（memory、wired_memory），其余按键名字典序跟在后面。所有值统一写为双引号包裹。运行中 VM 的配置在下次启动生效。
+后端按 VM 实际所在 datastore 定位配置文件，先创建同目录的 `.conf.fwp.bak` 备份，再写入 `.conf.fwp.tmp` 并以 `rename` 原子替换。写入前先读取原配置文件，将前端未提交的键（即原配置中存在但 UI 未展示的字段，如 `network0_span`、`network0_device`、`hostbridge`、`comports`、`cpu_sockets` 等）保留合并到新配置中，避免编辑保存导致这些字段丢失。合并后的配置按固定优先级排序输出：先 loader 与引导相关（loader、bhyveload_loader、bhyveload_args、loader_timeout、grub_install0、grub_run0），然后 CPU（cpu、cpu_sockets、cpu_cores、cpu_threads），再内存（memory、wired_memory），其余按键名字典序跟在后面。所有值统一写为双引号包裹。运行中 VM 的配置在下次启动生效。
 
 ### 交换机创建
 

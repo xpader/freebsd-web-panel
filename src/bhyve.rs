@@ -950,11 +950,19 @@ fn read_vm_config(name: &str) -> std::collections::BTreeMap<String, String> {
 
 pub fn update_vm_config(
     name: &str,
-    config: &std::collections::BTreeMap<String, String>,
+    new_config: &std::collections::BTreeMap<String, String>,
 ) -> Result<(), String> {
     let path = vm_config_path(name)?;
     let backup = path.with_extension("conf.fwp.bak");
     std::fs::copy(&path, &backup).map_err(|e| format!("backup VM configuration failed: {e}"))?;
+
+    // Merge: start from the existing config, then overlay the submitted values.
+    // This preserves keys that exist in the file but are not shown in the UI
+    // (e.g. network0_span, hostbridge, comports, cpu_sockets, etc.).
+    let mut config = read_vm_config(name);
+    for (key, value) in new_config {
+        config.insert(key.clone(), value.clone());
+    }
 
     // Write keys in a natural order: loader & boot, cpu, memory, then the rest.
     let priority: &[&str] = &[
@@ -977,7 +985,7 @@ pub fn update_vm_config(
         }
     }
 
-    for (key, value) in config {
+    for (key, value) in &config {
         if written.contains(key.as_str()) {
             continue;
         }

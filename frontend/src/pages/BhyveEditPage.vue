@@ -40,6 +40,10 @@ const comportOptions = ['com1', 'com2', 'com1 com2', 'com2 com1'];
 const diskTypeOptions = ['virtio-blk', 'ahci-hd', 'ahci-cd', 'nvme', 'virtio-9p'];
 const diskDevOptions = ['file', 'zvol', 'sparse-zvol', 'custom', 'iscsi'];
 const networkTypeOptions = ['virtio-net', 'e1000'];
+const networkTypeLabels = { 'virtio-net': 'VirtIO', 'e1000': 'E1000' };
+function networkTypeLabel(value) {
+  return networkTypeLabels[value] || value;
+}
 const resolutionOptions = ['1920x1200', '1920x1080', '1600x1200', '1600x900', '1280x1024', '1280x720', '1024x768', '800x600', '640x480'];
 const graphicsWaitOptions = ['no', 'yes', 'auto'];
 const graphicsVgaOptions = ['on', 'off', 'io'];
@@ -56,7 +60,7 @@ const fieldKeys = {
   wired_memory: 'fieldWiredMemory', uefi_vars: 'fieldUefiVars', ignore_msr: 'fieldIgnoreMsr',
   utctime: 'fieldUtcTime', debug: 'fieldDebug', virt_random: 'fieldVirtRandom',
   type: 'fieldDeviceType', dev: 'fieldDiskBackend', name: 'fieldDeviceName', opts: 'fieldDeviceOptions',
-  switch: 'fieldSwitch', device: 'fieldHostInterface', mac: 'fieldMacAddress', span: 'fieldSpanPort',
+  switch: 'fieldSwitch', device: 'fieldHostInterface', mac: 'fieldMacAddress',
   graphics: 'fieldGraphicsEnabled', graphics_port: 'fieldGraphicsPort', graphics_listen: 'fieldGraphicsListen',
   graphics_res: 'fieldGraphicsResolution', graphics_wait: 'fieldGraphicsWait', graphics_vga: 'fieldGraphicsVga',
   vnc_password: 'fieldVncPassword', xhci_mouse: 'fieldXhciMouse', sound: 'fieldSoundEnabled',
@@ -71,7 +75,7 @@ const fieldHints = {
   wired_memory: 'fieldWiredMemoryHint', uefi_vars: 'fieldUefiVarsHint', ignore_msr: 'fieldIgnoreMsrHint',
   utctime: 'fieldUtcTimeHint', debug: 'fieldDebugHint', virt_random: 'fieldVirtRandomHint',
   dev: 'fieldDiskBackendHint', opts: 'fieldDeviceOptionsHint', switch: 'fieldSwitchHint',
-  device: 'fieldHostInterfaceHint', mac: 'fieldMacAddressHint', span: 'fieldSpanPortHint',
+  device: 'fieldHostInterfaceHint', mac: 'fieldMacAddressHint',
   graphics: 'fieldGraphicsEnabledHint', graphics_port: 'fieldGraphicsPortHint', graphics_listen: 'fieldGraphicsListenHint',
   graphics_res: 'fieldGraphicsResolutionHint', graphics_wait: 'fieldGraphicsWaitHint', graphics_vga: 'fieldGraphicsVgaHint',
   vnc_password: 'fieldVncPasswordHint', xhci_mouse: 'fieldXhciMouseHint', sound: 'fieldSoundEnabledHint',
@@ -79,6 +83,20 @@ const fieldHints = {
 
 function fieldLabel(key) {
   return fieldKeys[key] ? t(`bhyve.${fieldKeys[key]}`) : key;
+}
+
+function diskNameLabel(dev) {
+  switch (dev) {
+    case 'zvol':
+    case 'sparse-zvol':
+      return t('bhyve.fieldDiskZvolName');
+    case 'custom':
+      return t('bhyve.fieldDiskCustomPath');
+    case 'iscsi':
+      return t('bhyve.fieldDiskIscsiTarget');
+    default:
+      return t('bhyve.fieldDiskFileName');
+  }
 }
 
 function fieldHint(key) {
@@ -169,7 +187,6 @@ function addNetwork() {
   const index = networkIndexes.value.length ? Math.max(...networkIndexes.value.map(Number)) + 1 : 0;
   config[deviceKey('network', index, 'type')] = 'virtio-net';
   config[deviceKey('network', index, 'switch')] = switches.value[0]?.name || '';
-  config[deviceKey('network', index, 'span')] = 'no';
 }
 
 function addPassthru() {
@@ -302,7 +319,7 @@ onMounted(load);
             </template>
             <template v-else>
               <div class="form-row"><label class="form-row-label">{{ fieldLabel('dev') }}<FieldHelp :text="fieldHint('dev')" /></label><select v-model="config[deviceKey('disk', index, 'dev')]"><option v-for="value in diskDevOptions" :key="value" :value="value">{{ value }}</option></select></div>
-              <div class="form-row"><label class="form-row-label">{{ fieldLabel('name') }}</label><div v-if="config[deviceKey('disk', index, 'dev')] === 'custom'" class="input-with-btn"><input v-model="config[deviceKey('disk', index, 'name')]" /><button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker(deviceKey('disk', index, 'name'))"><i class="fa-solid fa-folder-open"></i></button></div><input v-else v-model="config[deviceKey('disk', index, 'name')]" /></div>
+              <div class="form-row"><label class="form-row-label">{{ diskNameLabel(config[deviceKey('disk', index, 'dev')]) }}</label><div v-if="config[deviceKey('disk', index, 'dev')] === 'custom'" class="input-with-btn"><input v-model="config[deviceKey('disk', index, 'name')]" /><button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker(deviceKey('disk', index, 'name'))"><i class="fa-solid fa-folder-open"></i></button></div><input v-else v-model="config[deviceKey('disk', index, 'name')]" /></div>
               <div class="form-row"><label class="form-row-label">{{ fieldLabel('opts') }}<FieldHelp :text="fieldHint('opts')" /></label><input v-model="config[deviceKey('disk', index, 'opts')]" placeholder="direct,nocache,ro" /></div>
             </template>
           </div>
@@ -313,12 +330,9 @@ onMounted(load);
           <div v-if="!networkIndexes.length" class="empty">{{ t('bhyve.noNetworks') }}</div>
           <div v-for="index in networkIndexes" :key="index" class="card" style="margin-bottom:12px;">
             <div class="flex" style="margin-bottom:12px;"><h3 style="margin:0;">{{ t('common.network') }} {{ index }}</h3><button type="button" class="btn-danger btn-sm" style="margin-left:auto;" @click="removeDevice('network', index)"><i class="fa-solid fa-trash"></i></button></div>
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('type') }}</label><select v-model="config[deviceKey('network', index, 'type')]"><option v-for="value in networkTypeOptions" :key="value" :value="value">{{ value }}</option></select></div>
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('switch') }}<FieldHelp :text="fieldHint('switch')" /></label><select v-model="config[deviceKey('network', index, 'switch')]"><option value=""></option><option v-for="sw in switches" :key="sw.name" :value="sw.name">{{ sw.name }}</option></select></div>
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('device') }}<FieldHelp :text="fieldHint('device')" /></label><input v-model="config[deviceKey('network', index, 'device')]" placeholder="tap0" /></div>
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('name') }}</label><input v-model="config[deviceKey('network', index, 'name')]" /></div>
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('mac') }}<FieldHelp :text="fieldHint('mac')" /></label><input v-model="config[deviceKey('network', index, 'mac')]" placeholder="58:9c:fc:00:00:01" /></div>
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('span') }}<FieldHelp :text="fieldHint('span')" /></label><input type="checkbox" :checked="boolValue(deviceKey('network', index, 'span'))" @change="setBool(deviceKey('network', index, 'span'), $event.target.checked)" /></div>
+            <div class="form-row"><label class="form-row-label">{{ t('bhyve.fieldNetworkAdapter') }}</label><select v-model="config[deviceKey('network', index, 'type')]"><option v-for="value in networkTypeOptions" :key="value" :value="value">{{ networkTypeLabel(value) }}</option></select></div>
+            <div class="form-row"><label class="form-row-label">{{ t('bhyve.fieldSwitch') }}<FieldHelp :text="fieldHint('switch')" /></label><select v-model="config[deviceKey('network', index, 'switch')]"><option value=""></option><option v-for="sw in switches" :key="sw.name" :value="sw.name">{{ sw.name }}</option></select></div>
+            <div class="form-row"><label class="form-row-label">{{ t('bhyve.fieldMacAddress') }}<FieldHelp :text="fieldHint('mac')" /></label><input v-model="config[deviceKey('network', index, 'mac')]" placeholder="58:9c:fc:00:00:01" /></div>
           </div>
           <button type="button" class="btn-secondary" @click="addNetwork"><i class="fa-solid fa-plus"></i> {{ t('bhyve.addNetwork') }}</button>
         </template>
