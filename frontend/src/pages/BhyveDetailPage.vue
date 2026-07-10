@@ -34,9 +34,22 @@ function stateBadge() {
   return { cls: 'badge-dim', text: t('bhyve.stateStopped') };
 }
 
+const VNC_KEYS = new Set([
+  'graphics', 'graphics_port', 'graphics_res', 'graphics_wait', 'xhci_mouse',
+]);
+
 const configEntries = computed(() => {
   if (!d.value?.config) return [];
-  return Object.entries(d.value.config).map(([k, v]) => ({ key: k, value: v }));
+  return Object.entries(d.value.config)
+    .filter(([k]) => !VNC_KEYS.has(k))
+    .map(([k, v]) => ({ key: k, value: v }));
+});
+
+const vncEntries = computed(() => {
+  if (!d.value?.config) return [];
+  return Object.entries(d.value.config)
+    .filter(([k]) => VNC_KEYS.has(k))
+    .map(([k, v]) => ({ key: k, value: v }));
 });
 
 async function reload() {
@@ -169,6 +182,23 @@ onMounted(reload);
             <td class="mono"><strong>{{ snap.name }}</strong></td>
             <td class="mono">{{ snap.size }}</td>
             <td class="mono">{{ snap.date }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- VNC / Graphics -->
+    <div class="card" v-if="vncEntries.length">
+      <h3>{{ t('bhyve.vncInfo') }}</h3>
+      <table>
+        <thead><tr>
+          <th>{{ t('common.key') }}</th>
+          <th>{{ t('common.value') }}</th>
+        </tr></thead>
+        <tbody>
+          <tr v-for="e in vncEntries" :key="e.key">
+            <td class="mono">{{ e.key }}</td>
+            <td class="mono">{{ e.value }}</td>
           </tr>
         </tbody>
       </table>

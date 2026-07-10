@@ -195,6 +195,7 @@ export const en = {
     memoryResident: 'Resident Memory',
     console: 'Console',
     vncConnecting: 'Connecting…',
+    vncInfo: 'VNC / Graphics',
   },
   topbar: {
     settings: 'Settings',
@@ -1139,6 +1140,7 @@ export const zh = {
     memoryResident: '实际内存',
     console: '控制台',
     vncConnecting: '连接中…',
+    vncInfo: 'VNC / 图形',
   },
   topbar: {
     settings: '设置',
