@@ -19,8 +19,8 @@
 | `boot_time()` | `Ctl::value()` → Struct 字节 | `i64`（Unix 秒） | `kern.boottime`（struct timeval） |
 | `read_loadavg()` | `libc::getloadavg()` | `[f64; 3]` | 1/5/15 分钟负载 |
 | `read_core_temps(ncpu)` | `Ctl::value()` → `Temperature` | `Vec<(usize, f32)>` | 各核摄氏温度 |
-| `read_net_counters()` | `netstat -ibn` 解析 `<Link#>` 行 | `HashMap<String, NetCounters>` | 各接口累计收发字节/包（排除 lo*） |
-| `read_net_info()` | `ifconfig -a` 逐行解析 | `Vec<NetIfaceInfo>` | 各接口状态/MAC/MTU/IPv4/介质（排除 lo*） |
+| `read_net_counters()` | `getifaddrs(3)` 取 `AF_LINK` 的 `if_data` | `HashMap<String, NetCounters>` | 各接口累计收发字节/包（排除噪音伪接口） |
+| `read_net_info()` | `getifaddrs(3)` 聚合 AF_LINK/AF_INET/AF_INET6 | `Vec<NetIfaceInfo>` | 各接口状态/MAC/MTU/IPv4/IPv6/介质，按活跃度降序排序 |
 
 ## 关键实现细节
 
@@ -44,19 +44,40 @@ FreeBSD 温度 sysctl 用 `IK` 格式字符串（deciKelvin 等）。`sysctl` cr
 
 ### 网络接口读取
 
-网络流量与接口元数据无对应 sysctl 节点，仍走子进程解析。仅返回**物理网卡**，虚拟/伪接口通过 `is_physical_iface()` denylist 过滤掉（loopback、jail epair、bridge、tap、tun、VPN 隧道、netgraph、vm-bhyve 桥 `vm-*` 等），避免仪表盘充斥虚拟接口流量。
+网络流量与接口元数据走 `getifaddrs(3)` 系统调用（与 `netstat`/`ifconfig` 内部相同），避免每轮采样 fork/exec 子进程。
 
-- **`read_net_counters()`**：`netstat -ibn`（`-b` 显示字节计数，`-n` 跳过反向解析）。只取 `<Link#N>` 行（携带原始字节/包总计）。
-  - **列索引从表头解析**（非硬编码），以适配不同 FreeBSD 版本的列差异——例如 FreeBSD 15.x 在 `Ierrs` 与 `Ibytes` 之间多了一列 `Idrop`，若用固定下标会把 Idrop（恒 0）当 Ibytes、把 Oerrs（桥接口上因泛洪可能很大）当 Obytes，导致物理网卡显示零流量、虚拟桥显示假流量。
-  - 返回 `HashMap<接口名, NetCounters{rx_bytes, tx_bytes, rx_packets, tx_packets}>`。
-- **`read_net_info()`**：`ifconfig -a` 逐行解析。顶格行（首字符非空白）为接口定义（提取 name、`<UP...>` 判定 up、`mtu N`），缩进行为属性（`inet`/`ether`/`media:`/`status:`）。同样用 `is_physical_iface()` 过滤。返回 `Vec<NetIfaceInfo{name, mtu, mac, up, status, media, ipv4}>`。
+- **`read_net_counters()`**：单次遍历 `getifaddrs` 链表，从每个 `AF_LINK` 项的 `ifa_data`（指向 `struct if_data`）读取累计 `ifi_ibytes`/`ifi_obytes`/`ifi_ipackets`/`ifi_opackets`，按接口名聚合为 `HashMap<接口名, NetCounters>`。
+- **`read_net_info()`**：同样单次遍历 `getifaddrs`，按接口名聚合多个地址族：`AF_LINK` 取 MTU/UP/RUNNING 标志与 MAC（从 `sockaddr_dl` 解析），`AF_INET` 取 IPv4，`AF_INET6` 取 **全局单播** IPv6（`2000::/3`，跳过 `::1`/`fe80::/10`/`ff00::/8` 等链路本地与组播）。返回 `Vec<NetIfaceInfo{name, mtu, mac, up, running, status, media, ipv4, ipv6}>`。
+
+#### 过滤：最小噪音黑名单
+
+旧实现通过 `is_physical_iface()` 大黑名单（排除 epair、bridge、tap、tun、vm-*、wg、tailscale 等）仅保留"物理网卡"——但这在面板**运行在 Jail 内**（主网卡是 `epair*b`）或**某些虚拟化场景**下会显示"无网络接口"。
+
+新实现把过滤职责拆成两个辅助函数：
+
+- `is_noise_iface()`：只排除**任何场景下都不会承载用户流量**的伪设备：`lo`（loopback）、`pflog`、`pfsync`、`ipfw`、`enc`、`disc`、`edsc`。`read_net_info()` 与 `read_net_counters()` 都用它过滤。
+- `is_hardware_iface()`：基于常见 FreeBSD 网卡驱动前缀（bge/em/igb/ix/ixl/ice/mlx/re/vtnet/vmx/hn/axge/cdce/ue/wlan/lagg/vlan/carp）的 allowlist。**仅**供 `handlers::network` 标记 `NetworkInterface.is_physical` 字段使用，不参与仪表盘/监控的数据过滤。
+
+epair、bridge、tap、tun、wg、tailscale、vale、ng、vm-bhyve 桥、gif、gre、stf、faith 等**不再过滤**——它们在某些场景下是主网络出口，直接交给下面的排序权重处理。
+
+#### 排序：按活跃度置顶
+
+`read_net_info()` 返回前按 `iface_rank()` 降序排序（相同权重按名字字典序稳定）：
+
+| 条件 | 加分 |
+|---|---|
+| `IFF_RUNNING` | +4 |
+| `IFF_UP`（但非 RUNNING） | +2 |
+| 有 IPv4 地址 | +2 |
+| 有全局 IPv6 地址 | +1 |
+
+`handlers::system::collect_network()` 用同样的权重函数（`net_iface_rank`）对仪表盘快照重新排序——这样无论是宿主硬件网卡 `bge0`、Jail 内的 `epair0b`、还是 bhyve 的 `vtnet0`，只要是当前**真正活跃**的口，就会自动出现在仪表盘顶部。仪表盘快照与监控采集都会额外 **`retain` 过滤掉 `!UP` 或没有任何 IP 地址的接口**：bridge、tap、lagg 成员、jail 宿主侧 epair*a 等 UP 但无 IP，以及 DHCP 续约失败/手动 `ifconfig down` 后残留 IP 但已 DOWN 的口都排除；这些口留在"网络"整页看即可。
 
 实时速率（bytes/sec）由调用方基于累计计数器做两次采样差值计算，sysinfo 仅提供瞬时计数器快照（见 [04-system-metrics.md](04-system-metrics.md) 与 [05-monitoring.md](05-monitoring.md)）。
 
 ## 外部依赖
 
-- crate：`sysctl`（0.7，sysctl(3) 安全封装）、`libc`（getloadavg、sysctlbyname）
-- 系统命令：`/usr/bin/netstat`（网络流量计数器）、`/sbin/ifconfig`（网络接口元数据）
+- crate：`sysctl`（0.7，sysctl(3) 安全封装）、`libc`（getloadavg、sysctlbyname、getifaddrs/freeifaddrs）
 
 ## 测试
 
@@ -66,11 +87,15 @@ FreeBSD 温度 sysctl 用 `IK` 格式字符串（deciKelvin 等）。`sysctl` cr
 - boot_time 是过去的有效时间戳
 - loadavg 合理范围
 - 温度读取不 panic
-- 网络计数器/接口信息均仅含物理网卡（`is_physical_iface` 过滤）
-- 活跃物理网卡的 RX 字节总和 > 0（验证列解析正确，未误读 Idrop）
+- 网络计数器/接口信息均不含噪音接口（`is_noise_iface` 过滤）
+- `read_net_info()` 返回结果满足"rank 降序、同 rank 名字字典序"
+- `is_noise_iface` 与 `is_hardware_iface` 对典型样本无交集
+- `format_ipv6` 输出规范冒号分隔格式
+- `iface_rank` 对 UP+IPv4+IPv6 > UP+IPv4 > UP > DOWN 的排序符合预期
+- 活跃接口的 RX 字节总和 > 0（验证 `if_data` 字段读取正确）
 
 ## 已知限制
 
 - `read_cp_times` 假设 `long` 为 8 字节（仅 amd64；若未来支持 arm64/i386 需按 `std::mem::size_of::<libc::c_long>()` 动化）
 - swap 仍走 `/usr/sbin/swapinfo` 子进程（无对应 sysctl 节点；可用 `kvm_getswapinfo` 但需链 `-lkvm`，暂不引入）
-- 网络数据走子进程（无对应 sysctl 节点）；`netstat`/`ifconfig` 输出格式解析依赖表头列名（`netstat`）和行首缩进/关键字（`ifconfig`），若未来 FreeBSD 调整输出格式需同步维护
+- `format_ipv6` 输出完整 8 组冒号分隔格式（如 `2001:db8:0:0:0:0:0:1`），未实现 RFC 5952 的零组压缩（`2001:db8::1`）；前端目前直接显示原始格式，若需要压缩可在 Rust 或前端各加一个格式化函数

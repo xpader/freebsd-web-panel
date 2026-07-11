@@ -39,17 +39,16 @@ CPU delta 使用 `MONITOR_CPU`（独立的 `LazyLock<Mutex<Option<CpuState>>>`�
 ### 网络流量速率 delta
 
 `net_rate_delta(now)` 计算各接口收发速率（bytes/sec），逻辑同 CPU delta：
-1. `sysinfo::read_net_counters()` 取当前累计计数器（仅物理网卡，已过滤虚拟接口；接口名已剥离 netstat 的 `*` 后缀）
+1. `sysinfo::read_net_counters()` 取当前累计计数器（仅排除噪音伪接口；接口名已剥离 `*` 后缀）
 2. 与 `MONITOR_NET`（`LazyLock<Mutex<Option<NetState>>>`）中上次计数器+时间戳做差：`rate = (cur - prev) / (now - prev_ts)`
 3. 每个接口生成两条采样：`{iface}.rx`（下载）、`{iface}.tx`（上传），分类 `net`
 
-物理网卡过滤由 `sysinfo::read_net_counters()` 内部的 `is_physical_iface()` 完成（见 [13-sysinfo.md](13-sysinfo.md)），采集器自动继承，无需重复实现。
+噪音过滤由 `sysinfo::read_net_counters()` 内部的 `is_noise_iface()` 完成（见 [13-sysinfo.md](13-sysinfo.md)），采集器自动继承。在此基础上 `net_rate_delta()` 再做一次 **UP + IP 过滤**（与仪表盘 `collect_network` 一致）：只有当前 `IFF_UP` 置位、且至少拥有一个 IPv4 或全局 IPv6 地址的接口才会写入 `net`/`net_bytes` 采样。bridge、tap、lagg 成员、jail 宿主侧 epair*a 等 UP 但无 IP 的口，以及 DHCP 续约失败/手动 `ifconfig down` 后残留 IP 配置但已 DOWN 的口，都不再进入监控时序库——它们仍可在"网络"页实时查看。
 
 `MONITOR_NET` 与仪表盘的 `LAST_NET` 独立，避免互相干扰 delta。
 
 > **旧数据残留与清理**：
-> - **虚拟接口**（epair/tap/vm-* 等）：修复 `is_physical_iface` 过滤前曾写入历史采样，随 `retention_days` 自然过期。前端 `monitor.js` 的网络接口发现逻辑同步复制了同一份 denylist（`isPhysicalIface`）做防御性过滤。
-> - **停用接口的 `*` 后缀**：`netstat -i` 输出中接口名后的 `*` 表示该接口未 UP（如 `bge0*`）。早期 `read_net_counters()` 未剥离该后缀，导致 DB 同时存在 `bge0*` 与 `bge0` 两套序列，前端画出重复曲线。`read_net_counters()` 已修正为 `trim_end_matches('*')`；`db.rs::migrate()` 中设有一次性迁移（meta key `migration_net_star_purged`），首次启动时删除 `name LIKE '%*%'` 的 net 采样，从根上清除残留。
+> - **`*` 后缀**：`netstat -i` 输出中接口名后的 `*` 表示该接口未 UP（如 `bge0*`）。早期 `read_net_counters()` 未剥离该后缀，导致 DB 同时存在 `bge0*` 与 `bge0` 两套序列，前端画出重复曲线。`read_net_counters()` 已修正为 `trim_end_matches('*')`；`db.rs::migrate()` 中设有一次性迁移（meta key `migration_net_star_purged`），首次启动时删除 `name LIKE '%*%'` 的 net 采样，从根上清除残留。
 
 ### 写入
 

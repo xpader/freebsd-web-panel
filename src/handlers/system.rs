@@ -114,9 +114,11 @@ pub struct NetIface {
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub up: bool,
+    pub running: bool,
     pub status: String,
     pub media: String,
     pub ipv4: Vec<String>,
+    pub ipv6: Vec<String>,
     pub mac: Option<String>,
     pub mtu: u32,
 }
@@ -299,6 +301,9 @@ fn collect_network(now: i64) -> Vec<NetIface> {
 
     // Merge counters with interface metadata. Interfaces present in counters
     // but missing from ifconfig (unlikely) still appear with empty metadata.
+    // `infos` arrives pre-sorted by rank from read_net_info(); we re-sort the
+    // merged output because counter-only entries (rank 0) are appended below
+    // and we want a single stable ordering for the dashboard.
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(infos.len());
     for info in &infos {
@@ -312,9 +317,11 @@ fn collect_network(now: i64) -> Vec<NetIface> {
             rx_packets: c.map(|c| c.rx_packets).unwrap_or(0),
             tx_packets: c.map(|c| c.tx_packets).unwrap_or(0),
             up: info.up,
+            running: info.running,
             status: info.status.clone(),
             media: info.media.clone(),
             ipv4: info.ipv4.clone(),
+            ipv6: info.ipv6.clone(),
             mac: info.mac.clone(),
             mtu: info.mtu,
             name: info.name.clone(),
@@ -332,15 +339,39 @@ fn collect_network(now: i64) -> Vec<NetIface> {
                 rx_packets: c.rx_packets,
                 tx_packets: c.tx_packets,
                 up: false,
+                running: false,
                 status: String::new(),
                 media: String::new(),
                 ipv4: Vec::new(),
+                ipv6: Vec::new(),
                 mac: None,
                 mtu: 0,
             });
         }
     }
+    // Dashboard-only filter: drop interfaces that are either DOWN or carry
+    // no IP address.  Bridges, taps, bond/vlan members, and jail-side epair
+    // host-ends are often UP but addressless; a stale-IP interface that's
+    // been administratively DOWNed is equally uninteresting at dashboard
+    // scale — they're still visible on the full Network page.
+    out.retain(|i| i.up && (!i.ipv4.is_empty() || !i.ipv6.is_empty()));
+    out.sort_by(|a, b| {
+        let ra = net_iface_rank(a);
+        let rb = net_iface_rank(b);
+        rb.cmp(&ra).then_with(|| a.name.cmp(&b.name))
+    });
     out
+}
+
+/// Same ranking weight as `sysinfo::iface_rank`, applied to the snapshot
+/// struct that the dashboard endpoint returns.
+fn net_iface_rank(i: &NetIface) -> u32 {
+    let mut r = 0u32;
+    if i.running { r += 4; }
+    else if i.up { r += 2; }
+    if !i.ipv4.is_empty() { r += 2; }
+    if !i.ipv6.is_empty() { r += 1; }
+    r
 }
 
 fn read_swap() -> (u64, u64) {

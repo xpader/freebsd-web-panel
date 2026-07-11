@@ -258,7 +258,7 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
             flags: flags_to_strings(ifa.ifa_flags as libc::c_int),
             is_up: ifa.ifa_flags & (libc::IFF_UP as u32) != 0,
             is_loopback: ifa.ifa_flags & (libc::IFF_LOOPBACK as u32) != 0,
-            is_physical: crate::sysinfo::is_physical_iface(&name),
+            is_physical: crate::sysinfo::is_hardware_iface(&name),
             mtu: 0,
             metric: 0,
             mac: None,

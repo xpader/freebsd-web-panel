@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { Chart, palette, baseOptions, dataIsEmpty, isPhysicalIface, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
+import { Chart, palette, baseOptions, dataIsEmpty, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
 import { fmtTooltipTime } from '../lib/format.js';
 
 const { t } = useI18n();

@@ -117,11 +117,14 @@ function formatRateTick(v) {
   return v + 'B/s';
 }
 
-export const VIRTUAL_IFACE_PREFIXES = [
-  'lo', 'epair', 'bridge', 'tap', 'vale', 'tun', 'gif', 'gre', 'ipfw',
-  'pflog', 'pfsync', 'enc', 'stf', 'faith', 'ng', 'vm-', 'tailscale', 'wg', 'disc', 'edsc',
+export const NOISE_IFACE_PREFIXES = [
+  'lo', 'pflog', 'pfsync', 'ipfw', 'enc', 'disc', 'edsc',
 ];
 
-export function isPhysicalIface(name) {
-  return !VIRTUAL_IFACE_PREFIXES.some((p) => name.startsWith(p));
+export function isNotNoiseIface(name) {
+  return !NOISE_IFACE_PREFIXES.some((p) => name.startsWith(p));
 }
+
+// Back-compat alias — older callers still import `isPhysicalIface`.
+// Semantically it's now "visible in the monitor chart", not "silicon NIC".
+export const isPhysicalIface = isNotNoiseIface;

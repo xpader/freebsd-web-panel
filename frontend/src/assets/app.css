@@ -433,8 +433,6 @@ tr.row-clickable { cursor: pointer; }
 /* ---- Network interfaces (dashboard) ---- */
 .dash-net-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .dash-net-item:last-child { border-bottom: none; }
-.dash-net-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
-.dash-net-item:last-child { border-bottom: none; }
 .dash-net-head { display: flex; align-items: center; gap: 10px; }
 .dash-net-name { font-weight: 600; font-size: 14px; }
 .dash-net-name .fa-ethernet { color: var(--text-dim); opacity: 0.6; }
@@ -442,7 +440,7 @@ tr.row-clickable { cursor: pointer; }
 .dash-net-rate { font-weight: 600; font-size: 13px; }
 .dash-net-rx { color: #3b82f6; }
 .dash-net-tx { color: #f59e0b; }
-.dash-net-bottom { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.dash-net-bottom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 6px; }
 .dash-net-ip { font-size: 12px; }
 .dash-net-total { font-size: 12px; color: var(--text-dim); margin-left: auto; }
 /* ---- Badges ---- */

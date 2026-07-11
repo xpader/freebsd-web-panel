@@ -161,7 +161,9 @@ extern "C" {
 
 const AF_LINK: libc::c_int = 18;
 const AF_INET: libc::c_int = 2;
+const AF_INET6: libc::c_int = 28;
 const IFF_UP: libc::c_uint = 0x1;
+const IFF_RUNNING: libc::c_uint = 0x40;
 
 /// Per-interface traffic counters (cumulative since boot).
 #[derive(Debug, Clone, Default)]
@@ -179,16 +181,21 @@ pub struct NetIfaceInfo {
     pub mtu: u32,
     pub mac: Option<String>,
     pub up: bool,
+    pub running: bool,
     pub status: String,
     pub media: String,
     pub ipv4: Vec<String>,
+    pub ipv6: Vec<String>,
 }
 
 /// Read per-interface traffic counters via `getifaddrs(3)`.
 ///
 /// Walks the interface address list; for each `AF_LINK` entry the `ifa_data`
 /// pointer references a `struct if_data` containing cumulative byte/packet
-/// counters.  Virtual/pseudo interfaces are excluded via `is_physical_iface`.
+/// counters.  Only pure-noise pseudo interfaces are excluded via
+/// `is_noise_iface` — everything else (hardware NICs, epairs in jails,
+/// bridges, tunnels, VPNs) is reported, and sorted by activity in the
+/// dashboard.
 pub fn read_net_counters() -> HashMap<String, NetCounters> {
     let mut map = HashMap::new();
     let mut head: *mut Ifaddrs = std::ptr::null_mut();
@@ -203,7 +210,7 @@ pub fn read_net_counters() -> HashMap<String, NetCounters> {
             let family = unsafe { (*entry.ifa_addr).sa_family as libc::c_int };
             if family == AF_LINK && !entry.ifa_data.is_null() {
                 let name = iface_name(entry.ifa_name);
-                if is_physical_iface(&name) {
+                if !is_noise_iface(&name) {
                     let data = unsafe { &*(entry.ifa_data as *const libc::if_data) };
                     map.insert(name, NetCounters {
                         rx_bytes: data.ifi_ibytes,
@@ -220,12 +227,15 @@ pub fn read_net_counters() -> HashMap<String, NetCounters> {
     map
 }
 
-/// Read interface metadata (flags, MTU, MAC, IPv4) via `getifaddrs(3)`.
+/// Read interface metadata (flags, MTU, MAC, IPv4, IPv6) via `getifaddrs(3)`.
 ///
 /// A single `getifaddrs` call returns multiple entries per interface (one per
 /// address family).  We accumulate data across entries: `AF_LINK` provides
-/// flags/MTU/MAC, `AF_INET` provides IPv4 addresses.  Virtual/pseudo
-/// interfaces are excluded.
+/// flags/MTU/MAC, `AF_INET` provides IPv4 addresses, `AF_INET6` provides
+/// global-scope IPv6 addresses.  Only pure-noise pseudo interfaces are
+/// excluded.  Results are sorted by activity rank (UP + IP-bearing first)
+/// so callers such as the dashboard can display the most relevant interface
+/// at the top regardless of whether it's a hardware NIC or a jail epair.
 pub fn read_net_info() -> Vec<NetIfaceInfo> {
     let mut ifaces: HashMap<String, NetIfaceInfo> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
@@ -240,7 +250,7 @@ pub fn read_net_info() -> Vec<NetIfaceInfo> {
         if !entry.ifa_addr.is_null() {
             let family = unsafe { (*entry.ifa_addr).sa_family as libc::c_int };
             let name = iface_name(entry.ifa_name);
-            if !is_physical_iface(&name) {
+            if is_noise_iface(&name) {
                 cur = entry.ifa_next;
                 continue;
             }
@@ -251,9 +261,11 @@ pub fn read_net_info() -> Vec<NetIfaceInfo> {
                     mtu: 0,
                     mac: None,
                     up: false,
+                    running: false,
                     status: String::new(),
                     media: String::new(),
                     ipv4: Vec::new(),
+                    ipv6: Vec::new(),
                 });
             }
             let iface = ifaces.get_mut(&name).unwrap();
@@ -261,6 +273,7 @@ pub fn read_net_info() -> Vec<NetIfaceInfo> {
                 let data = unsafe { &*(entry.ifa_data as *const libc::if_data) };
                 iface.mtu = data.ifi_mtu;
                 iface.up = entry.ifa_flags & IFF_UP != 0;
+                iface.running = entry.ifa_flags & IFF_RUNNING != 0;
                 // Extract MAC from sockaddr_dl.
                 let sdl = entry.ifa_addr as *const libc::sockaddr_dl;
                 let nlen = unsafe { (*sdl).sdl_nlen } as usize;
@@ -278,14 +291,33 @@ pub fn read_net_info() -> Vec<NetIfaceInfo> {
                 let addr = unsafe { (*sin).sin_addr };
                 let ip = u32::from_be(addr.s_addr);
                 iface.ipv4.push(format!("{}.{}.{}.{}", ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff));
+            } else if family == AF_INET6 {
+                let sin6 = entry.ifa_addr as *const libc::sockaddr_in6;
+                let bytes = unsafe { (*sin6).sin6_addr.s6_addr };
+                // Skip non-global addresses (loopback ::1, link-local fe80::/10,
+                // multicast ff00::/8) — they're noise on a dashboard that just
+                // wants to show "what IPs does this box have".
+                if bytes[0] & 0xe0 == 0x20 {
+                    iface.ipv6.push(format_ipv6(&bytes));
+                }
             }
         }
         cur = entry.ifa_next;
     }
     unsafe { freeifaddrs(head) };
 
-    // Return in the order interfaces were first seen.
-    order.into_iter().filter_map(|n| ifaces.remove(&n)).collect()
+    // Return in rank-descending order (most "active" first); alphabetical
+    // within the same rank for stability.
+    let mut list: Vec<NetIfaceInfo> = order
+        .into_iter()
+        .filter_map(|n| ifaces.remove(&n))
+        .collect();
+    list.sort_by(|a, b| {
+        let ra = iface_rank(a);
+        let rb = iface_rank(b);
+        rb.cmp(&ra).then_with(|| a.name.cmp(&b.name))
+    });
+    list
 }
 
 /// Extract the interface name from a C string pointer.
@@ -297,36 +329,80 @@ fn iface_name(ptr: *const libc::c_char) -> String {
     }
 }
 
-/// Whether an interface name refers to a physical NIC.
+/// Whether an interface name refers to a real (hardware or hypervisor-backed)
+/// NIC, as opposed to a software pseudo interface.
 ///
-/// Uses a denylist of well-known virtual/pseudo-interface name prefixes used
-/// by FreeBSD: loopback, jail epairs, bridges, taps, tunnels, VPN, netgraph,
-/// vm-bhyve switches, etc.  Everything else (bge, em, igb, ix, ixl, vmx,
-/// vtnet, re, wlan, vlan, ...) is treated as physical.
-pub fn is_physical_iface(name: &str) -> bool {
-    const VIRTUAL: &[&str] = &[
-        "lo",         // loopback
-        "epair",      // jail vnet pair
-        "bridge",     // software bridge
-        "tap",        // bhyve / qemu tap
-        "vale",       // netmap vale (bhyve)
-        "tun",        // tunnel
-        "gif",        // GIF tunnel
-        "gre",        // GRE tunnel
-        "ipfw",       // ipfw pseudo-dev
-        "pflog",      // pf logging
-        "pfsync",     // pf state sync
-        "enc",        // IPsec enc
-        "stf",        // 6to4
-        "faith",      // IPv6-to-IPv4 relay
-        "ng",         // netgraph node
-        "vm-",        // vm-bhyve switch bridge (hyphen avoids matching vmx)
-        "tailscale",  // Tailscale VPN
-        "wg",         // WireGuard VPN
-        "disc",       // discard
-        "edsc",       // Ethernet discard
+/// Uses an allowlist of common FreeBSD NIC driver prefixes: bge, em, igb, ix,
+/// ixl, ice, mlx, re, vtnet, vmx, hn (Hyper-V), axge, cdce, ue (USB Ethernet),
+/// wlan, lagg, vlan, carp.  Used by the network handler to set the
+/// `is_physical` flag on interface records; NOT used to filter what the
+/// dashboard shows — see [`is_noise_iface`] for that.
+pub fn is_hardware_iface(name: &str) -> bool {
+    const DRIVERS: &[&str] = &[
+        "bge", "em", "igb", "ix", "ixl", "ice",
+        "mlx", "re", "vtnet", "vmx", "hn",
+        "axge", "cdce", "ue",
+        "wlan", "lagg", "vlan", "carp",
     ];
-    !VIRTUAL.iter().any(|p| name.starts_with(p))
+    DRIVERS.iter().any(|p| name.starts_with(p))
+}
+
+/// Whether an interface name is pure noise that should never appear in
+/// dashboards or metric collections.
+///
+/// Keep this list tiny: only pseudo devices that never carry real user
+/// traffic, under any deployment scenario (bare metal, VM, jail).  Anything
+/// ambiguous (epair, bridge, tap, tun, wg, tailscale, vm-bhyve switches,
+/// gif, gre, ng, stf, faith, vale, ...) is intentionally *not* filtered —
+/// those interfaces can be the primary carrier in some environments (e.g.
+/// `epair*b` inside a jail), and the dashboard ranks by activity so
+/// idle ones naturally sink to the bottom instead of being hidden.
+pub fn is_noise_iface(name: &str) -> bool {
+    const NOISE: &[&str] = &[
+        "lo",       // loopback — always present, never interesting
+        "pflog",    // pf packet-logging pseudo dev
+        "pfsync",   // pf state-sync pseudo dev
+        "ipfw",     // ipfw pseudo dev
+        "enc",      // IPsec encapsulation pseudo dev
+        "disc",     // discard
+        "edsc",     // Ethernet discard
+    ];
+    NOISE.iter().any(|p| name.starts_with(p))
+}
+
+/// Format an IPv6 address from a 16-byte `s6_addr`.
+///
+/// Produces the canonical 8-group colon-separated form.  We don't collapse
+/// runs of zeros here — the frontend and JSON consumers are expected to
+/// render as-is, and the full form is unambiguous.
+fn format_ipv6(bytes: &[u8; 16]) -> String {
+    format!(
+        "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+        u16::from_be_bytes([bytes[0], bytes[1]]),
+        u16::from_be_bytes([bytes[2], bytes[3]]),
+        u16::from_be_bytes([bytes[4], bytes[5]]),
+        u16::from_be_bytes([bytes[6], bytes[7]]),
+        u16::from_be_bytes([bytes[8], bytes[9]]),
+        u16::from_be_bytes([bytes[10], bytes[11]]),
+        u16::from_be_bytes([bytes[12], bytes[13]]),
+        u16::from_be_bytes([bytes[14], bytes[15]]),
+    )
+}
+
+/// Ranking weight for dashboard ordering.
+///
+/// Higher = more likely to be the user's "main" interface.  An interface
+/// that's UP and has both IPv4 and global IPv6 beats one that's UP with
+/// only IPv4, which beats an UP-but-addressless bridge, which beats a
+/// DOWN interface.  Used by `read_net_info` (sort order) and by
+/// `handlers::system::collect_network` (dashboard snapshot order).
+pub fn iface_rank(info: &NetIfaceInfo) -> u32 {
+    let mut r = 0u32;
+    if info.running { r += 4; }
+    else if info.up { r += 2; }
+    if !info.ipv4.is_empty() { r += 2; }
+    if !info.ipv6.is_empty() { r += 1; }
+    r
 }
 
 #[cfg(test)]
@@ -372,27 +448,100 @@ mod tests {
     }
 
     #[test]
-    fn net_counters_only_physical() {
+    fn net_counters_exclude_noise() {
         let c = read_net_counters();
         for name in c.keys() {
-            assert!(is_physical_iface(name), "virtual interface should be excluded: {name}");
+            assert!(!is_noise_iface(name), "noise interface should be excluded: {name}");
         }
     }
 
     #[test]
-    fn net_info_only_physical() {
+    fn net_info_excludes_noise() {
         let infos = read_net_info();
         for i in &infos {
-            assert!(is_physical_iface(&i.name), "virtual interface should be excluded: {}", i.name);
+            assert!(!is_noise_iface(&i.name), "noise interface should be excluded: {}", i.name);
+        }
+    }
+
+    #[test]
+    fn net_info_sorted_by_rank() {
+        // Results must be non-increasing in rank; equal ranks alphabetical.
+        let infos = read_net_info();
+        for w in infos.windows(2) {
+            let ra = iface_rank(&w[0]);
+            let rb = iface_rank(&w[1]);
+            assert!(
+                ra > rb || (ra == rb && w[0].name <= w[1].name),
+                "read_net_info should return rank-desc then name-asc: {:?} vs {:?}",
+                w[0].name, w[1].name
+            );
         }
     }
 
     #[test]
     fn net_counters_nonzero_on_active_link() {
-        // At least one physical interface should have received real traffic.
+        // At least one interface should have received real traffic.
         let c = read_net_counters();
         let total_rx: u64 = c.values().map(|v| v.rx_bytes).sum();
-        assert!(total_rx > 0, "expected non-zero RX on physical NICs, got {c:?}");
+        assert!(total_rx > 0, "expected non-zero RX on visible interfaces, got {c:?}");
+    }
+
+    #[test]
+    fn noise_and_hardware_are_disjoint() {
+        // The two helpers must agree on nothing — a name can't be both.
+        let samples = ["lo0", "pflog0", "epair0b", "bridge0", "bge0", "em1",
+                       "vtnet0", "tap0", "tun1", "wg0", "vm-public"];
+        for s in samples {
+            assert!(
+                !(is_noise_iface(s) && is_hardware_iface(s)),
+                "{s} should not be both noise and hardware"
+            );
+        }
+        // Sanity on each side.
+        assert!(is_noise_iface("lo0"));
+        assert!(is_noise_iface("pflog0"));
+        assert!(!is_noise_iface("epair0b"));
+        assert!(!is_noise_iface("bridge0"));
+        assert!(!is_noise_iface("vm-public"));
+        assert!(is_hardware_iface("bge0"));
+        assert!(is_hardware_iface("vtnet0"));
+        assert!(!is_hardware_iface("epair0b"));
+        assert!(!is_hardware_iface("bridge0"));
+        assert!(!is_hardware_iface("vm-public"));
+    }
+
+    #[test]
+    fn ipv6_format_is_canonical() {
+        // 2001:db8::1
+        let mut bytes = [0u8; 16];
+        bytes[0] = 0x20; bytes[1] = 0x01; bytes[2] = 0x0d; bytes[3] = 0xb8;
+        bytes[15] = 0x01;
+        assert_eq!(format_ipv6(&bytes), "2001:db8:0:0:0:0:0:1");
+        // All zeros → :: in collapsed form; we emit the long form.
+        let z = [0u8; 16];
+        assert_eq!(format_ipv6(&z), "0:0:0:0:0:0:0:0");
+    }
+
+    #[test]
+    fn iface_rank_orders_expectedly() {
+        let mk = |up: bool, running: bool, ipv4: bool, ipv6: bool| NetIfaceInfo {
+            name: "x".into(),
+            mtu: 1500,
+            mac: None,
+            up,
+            running,
+            status: String::new(),
+            media: String::new(),
+            ipv4: if ipv4 { vec!["1.2.3.4".into()] } else { vec![] },
+            ipv6: if ipv6 { vec!["2001:db8::1".into()] } else { vec![] },
+        };
+        let up46 = mk(true, true, true, true);
+        let up4  = mk(true, true, true, false);
+        let up0  = mk(true, true, false, false);
+        let down = mk(false, false, false, false);
+        assert!(iface_rank(&up46) > iface_rank(&up4));
+        assert!(iface_rank(&up4) > iface_rank(&up0));
+        assert!(iface_rank(&up0) > iface_rank(&down));
     }
 }
 

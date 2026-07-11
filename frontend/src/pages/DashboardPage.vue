@@ -163,7 +163,8 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="dash-net-bottom">
-            <span v-if="(iface.ipv4 || []).length" class="dash-net-ip text-dim mono">{{ iface.ipv4.join(', ') }}</span>
+            <span v-if="(iface.ipv4 || []).length" class="dash-net-ip text-dim mono">IPv4 {{ iface.ipv4.join(', ') }}</span>
+            <span v-if="(iface.ipv6 || []).length" class="dash-net-ip text-dim mono">IPv6 {{ iface.ipv6.join(', ') }}</span>
             <span v-if="iface.media" class="text-dim" style="font-size:11px;">{{ iface.media }}</span>
             <span class="dash-net-total text-dim">{{ t('dash.netTotal', { rx: fmtBytes(iface.rx_bytes), tx: fmtBytes(iface.tx_bytes) }) }}</span>
           </div>

@@ -200,13 +200,29 @@ static MONITOR_NET: LazyLock<Mutex<Option<NetState>>> = LazyLock::new(|| Mutex::
 /// counters — rate = delta / dt, traffic = delta itself.
 /// Uses a monitoring-local static so it doesn't interfere with the
 /// live-metrics endpoint's own delta tracking.
+///
+/// Only interfaces that are currently UP and carry at least one IP address
+/// (IPv4 or global IPv6) are sampled — matches the dashboard's "show me
+/// the interfaces that are actually talking" policy.  Addressless bridges,
+/// taps, host-side epairs, lagg members, and administratively DOWNed
+/// interfaces are visible on the Network page but not worth a time series
+/// here.
 fn net_rate_delta(now: i64) -> Vec<(String, (f64, f64), u64, u64)> {
     let counters = sysinfo::read_net_counters();
+    let infos = sysinfo::read_net_info();
+    let eligible: std::collections::HashSet<&str> = infos
+        .iter()
+        .filter(|i| i.up && (!i.ipv4.is_empty() || !i.ipv6.is_empty()))
+        .map(|i| i.name.as_str())
+        .collect();
     let mut guard = MONITOR_NET.lock();
-    let mut out = Vec::with_capacity(counters.len());
+    let mut out = Vec::with_capacity(eligible.len());
     if let Some(ref prev) = *guard {
         let dt = (now - prev.ts).max(1) as f64;
         for (name, cur) in &counters {
+            if !eligible.contains(name.as_str()) {
+                continue;
+            }
             if let Some(p) = prev.counters.get(name) {
                 let rx_delta = cur.rx_bytes.saturating_sub(p.rx_bytes);
                 let tx_delta = cur.tx_bytes.saturating_sub(p.tx_bytes);

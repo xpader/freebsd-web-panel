@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { Chart, baseOptions, dataIsEmpty, isPhysicalIface, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
+import { Chart, baseOptions, dataIsEmpty, isNotNoiseIface, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
 import { formatBytesTick, formatRateTick, fmtBytes, fmtRate, fmtTooltipTime } from '../lib/format.js';
 
 const { t } = useI18n();
@@ -50,7 +50,7 @@ async function discoverIfaces() {
       .map((s) => s.name)
       .filter((n) => n.endsWith('.rx'))
       .map((n) => n.slice(0, -3))
-      .filter(isPhysicalIface)
+      .filter(isNotNoiseIface)
       .sort();
   } catch {
     return [];
