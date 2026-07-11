@@ -96,6 +96,15 @@ const graphicsVgaOptions = ['on', 'off', 'io'];
 const passthruIndexes = computed(() => numberedIndexes('passthru'));
 const consoleIndexes = computed(() => numberedIndexes('virt_console'));
 
+const basicKeyList = ['loader', 'uefi_vars', 'cpu', 'memory', 'wired_memory', 'ignore_msr', 'bhyve_options', 'utctime', 'debug', 'uuid', 'start_slot', 'install_slot', 'virt_random'];
+const graphicsKeyList = ['graphics', 'graphics_port', 'graphics_listen', 'graphics_res', 'graphics_wait', 'graphics_vga', 'vnc_password', 'xhci_mouse'];
+const soundKeyList = ['sound', 'sound_play', 'sound_rec'];
+
+function isOtherDeviceKey(key) {
+  if (/^passthru\d+$/.test(key) || /^virt_console\d+$/.test(key)) return true;
+  return soundKeyList.includes(key);
+}
+
 const fieldKeys = {
   bhyveload_loader: 'fieldBhyveloadLoader', bhyveload_args: 'fieldBhyveloadArgs',
   cpu_sockets: 'fieldCpuSockets', cpu_cores: 'fieldCpuCores', cpu_threads: 'fieldCpuThreads',
@@ -540,6 +549,7 @@ async function load() {
     ensure('loader', 'uefi');
     ensure('cpu', '1');
     ensure('memory', '512M');
+    ensure('graphics_vga', 'off');
   } catch (e) {
     error.value = e.message || '';
   } finally {
@@ -547,10 +557,48 @@ async function load() {
   }
 }
 
-async function saveConfig() {
+async function saveBasicConfig() {
   saving.value = true;
   try {
-    await api.put(`/api/bhyve/vms/${encodeURIComponent(name)}`, { config: { ...config } });
+    const configPayload = {};
+    const advancePayload = {};
+    for (const [key, value] of Object.entries(config)) {
+      if (basicKeyList.includes(key)) configPayload[key] = String(value ?? '');
+      else if (isAdvanced(key)) advancePayload[key] = String(value ?? '');
+    }
+    await api.put(`/api/bhyve/vms/${encodeURIComponent(name)}`, { config: configPayload, advance: advancePayload });
+    toast.toast(t('bhyve.configSaved'));
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function saveGraphicsConfig() {
+  saving.value = true;
+  try {
+    const payload = {};
+    for (const key of graphicsKeyList) {
+      if (key in config) payload[key] = String(config[key] ?? '');
+    }
+    await api.put(`/api/bhyve/vms/${encodeURIComponent(name)}`, { graphics: payload });
+    toast.toast(t('bhyve.configSaved'));
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function saveOtherDevicesConfig() {
+  saving.value = true;
+  try {
+    const payload = {};
+    for (const [key, value] of Object.entries(config)) {
+      if (isOtherDeviceKey(key)) payload[key] = String(value ?? '');
+    }
+    await api.put(`/api/bhyve/vms/${encodeURIComponent(name)}`, { other_devices: payload });
     toast.toast(t('bhyve.configSaved'));
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -581,7 +629,7 @@ onMounted(load);
         <!-- ── basic ── -->
         <template v-if="active === 'basic'">
           <div class="form-row"><label class="form-row-label">{{ t('bhyve.loader') }}</label><select v-model="config.loader"><option v-for="value in loaderOptions" :key="value" :value="value">{{ value }}</option></select></div>
-          <div class="form-row"><label class="form-row-label">{{ t('bhyve.cpuCores') }}</label><input v-model.number="config.cpu" type="number" min="1" /></div>
+          <div class="form-row"><label class="form-row-label">{{ t('bhyve.cpuCores') }}</label><input v-model="config.cpu" type="number" min="1" /></div>
           <div class="form-row"><label class="form-row-label">{{ t('bhyve.memory') }}</label><input v-model="config.memory" placeholder="1024M" /></div>
           <div class="form-row"><label class="form-row-label">{{ fieldLabel('uuid') }}</label><input v-model="config.uuid" /></div>
           <div class="form-row"><label class="form-row-label">{{ fieldLabel('bhyve_options') }}<FieldHelp :text="fieldHint('bhyve_options')" /></label><input v-model="config.bhyve_options" /></div>
@@ -602,7 +650,7 @@ onMounted(load);
           </div>
 
           <div class="form-actions-bar">
-            <button type="button" :disabled="saving" @click="saveConfig">{{ t('common.save') }}</button>
+            <button type="button" :disabled="saving" @click="saveBasicConfig">{{ t('common.save') }}</button>
           </div>
         </template>
 
@@ -682,7 +730,7 @@ onMounted(load);
         <template v-if="active === 'graphics'">
           <div class="form-row"><label class="form-row-label">{{ fieldLabel('graphics') }}</label><div><label class="checkbox-label"><input type="checkbox" :checked="boolValue('graphics')" @change="setBool('graphics', $event.target.checked)" /><span class="param-desc-inline">{{ fieldHint('graphics') }}</span></label></div></div>
           <template v-if="boolValue('graphics')">
-            <div class="form-row"><label class="form-row-label">{{ fieldLabel('graphics_port') }}<FieldHelp :text="fieldHint('graphics_port')" /></label><input v-model.number="config.graphics_port" type="number" min="1" max="65535" /></div>
+            <div class="form-row"><label class="form-row-label">{{ fieldLabel('graphics_port') }}<FieldHelp :text="fieldHint('graphics_port')" /></label><input v-model="config.graphics_port" type="number" min="1" max="65535" /></div>
             <div class="form-row"><label class="form-row-label">{{ fieldLabel('graphics_listen') }}<FieldHelp :text="fieldHint('graphics_listen')" /></label><input v-model="config.graphics_listen" placeholder="0.0.0.0" /></div>
             <div class="form-row"><label class="form-row-label">{{ fieldLabel('graphics_res') }}<FieldHelp :text="fieldHint('graphics_res')" /></label><select v-model="config.graphics_res"><option value=""></option><option v-for="value in resolutionOptions" :key="value" :value="value">{{ value }}</option></select></div>
             <div class="form-row"><label class="form-row-label">{{ fieldLabel('graphics_wait') }}<FieldHelp :text="fieldHint('graphics_wait')" /></label><select v-model="config.graphics_wait"><option v-for="value in graphicsWaitOptions" :key="value" :value="value">{{ value }}</option></select></div>
@@ -691,7 +739,7 @@ onMounted(load);
             <div class="form-row"><label class="form-row-label">{{ fieldLabel('xhci_mouse') }}</label><div><label class="checkbox-label"><input type="checkbox" :checked="boolValue('xhci_mouse')" @change="setBool('xhci_mouse', $event.target.checked)" /><span class="param-desc-inline">{{ fieldHint('xhci_mouse') }}</span></label></div></div>
           </template>
           <div class="form-actions-bar">
-            <button type="button" :disabled="saving" @click="saveConfig">{{ t('common.save') }}</button>
+            <button type="button" :disabled="saving" @click="saveGraphicsConfig">{{ t('common.save') }}</button>
           </div>
         </template>
 
@@ -724,7 +772,7 @@ onMounted(load);
             </template>
           </div>
           <div class="form-actions-bar">
-            <button type="button" :disabled="saving" @click="saveConfig">{{ t('common.save') }}</button>
+            <button type="button" :disabled="saving" @click="saveOtherDevicesConfig">{{ t('common.save') }}</button>
           </div>
         </template>
 

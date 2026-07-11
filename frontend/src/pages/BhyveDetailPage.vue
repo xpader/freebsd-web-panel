@@ -68,6 +68,7 @@ async function vmAction(action) {
     toast.toast(action === 'start'
       ? t('bhyve.startedToast', { name })
       : t('bhyve.stoppedToast', { name }));
+    await new Promise((r) => setTimeout(r, 1000));
     await reload();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -94,7 +95,7 @@ onMounted(reload);
         <i class="fa-solid fa-stop"></i> {{ t('common.stop') }}
       </button>
       <a v-if="isRunning" :href="`#/bhyve/console/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('common.console') }}</a>
-      <a v-if="d.vnc_port && isRunning" :href="`#/bhyve/vnc/${name}`" class="btn-sm"><i class="fa-solid fa-display"></i> VNC</a>
+      <a v-if="d.vnc_port && isRunning" :href="`#/bhyve/vnc/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-display"></i> VNC</a>
       <button class="btn-secondary btn-sm" :disabled="acting" @click="router.push(`/bhyve/edit/${name}`)"><i class="fa-solid fa-pen"></i> {{ t('common.edit') }}</button>
     </div>
   </div>

@@ -110,9 +110,18 @@ pub async fn disk_resources(
 }
 
 /// PUT /api/bhyve/vms/{name} — replace VM configuration key-values.
+/// The body is split into semantic sections; the backend merges them into one
+/// key-value map before writing.
 #[derive(Debug, Deserialize)]
 pub struct UpdateVmConfigBody {
+    #[serde(default)]
     pub config: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub advance: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub graphics: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub other_devices: std::collections::BTreeMap<String, String>,
 }
 
 pub async fn update_vm_config(
@@ -121,9 +130,22 @@ pub async fn update_vm_config(
     Json(body): Json<UpdateVmConfigBody>,
 ) -> ApiResult<StatusCode> {
     validate_vm_name(&name)?;
-    validate_vm_config(&body.config)?;
+
+    let mut merged = std::collections::BTreeMap::new();
+    for section in [&body.config, &body.advance, &body.graphics, &body.other_devices] {
+        for (k, v) in section {
+            merged.insert(k.clone(), v.clone());
+        }
+    }
+    if merged.is_empty() {
+        return Err(ApiError::BadRequest(
+            "at least one configuration section must not be empty".into(),
+        ));
+    }
+    validate_vm_config(&merged)?;
+
     let vm_name = name.clone();
-    tokio::task::spawn_blocking(move || bhyve::update_vm_config(&vm_name, &body.config))
+    tokio::task::spawn_blocking(move || bhyve::update_vm_config(&vm_name, &merged))
         .await
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
         .map_err(ApiError::Command)?;

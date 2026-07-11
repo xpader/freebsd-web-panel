@@ -900,11 +900,12 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
     // Read .conf file.
     let config = read_vm_config(vm_name);
 
-    // Extract VNC port from config: graphics="yes" + graphics_port="8010".
+    // Extract VNC port: prefer config value, fall back to runtime port from console file.
     let vnc_port = if config.get("graphics").map(|v| v.as_str()) == Some("yes") {
         config
             .get("graphics_port")
             .and_then(|p| p.parse::<u16>().ok())
+            .or_else(|| read_runtime_vnc_port(vm_name))
     } else {
         None
     };
@@ -1059,15 +1060,38 @@ pub fn delete_device(name: &str, prefix: &str, index: u32) -> Result<(), String>
     write_vm_config_file(name, &config)
 }
 
-/// Read the VNC port for a VM from its .conf file.
-/// Returns Some(port) only if graphics="yes" and graphics_port is set.
+/// Read the runtime VNC port from the VM's `console` file.
+/// vm-bhyve writes `vnc=<listen>:<port>` to this file when the VM starts.
+fn read_runtime_vnc_port(name: &str) -> Option<u16> {
+    let config_path = vm_config_path(name).ok()?;
+    let console_path = config_path.parent()?.join("console");
+    let content = std::fs::read_to_string(&console_path).ok()?;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("vnc=") {
+            // Format: <listen>:<port>
+            if let Some(port_str) = rest.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    return Some(port);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Read the VNC port for a VM.
+/// If `graphics_port` is explicitly set in config, use that.
+/// Otherwise, if graphics is enabled, try the runtime port from the console file
+/// (vm-bhyve auto-allocates a port starting at 5900).
 pub fn get_vnc_port(name: &str) -> Option<u16> {
     let config = read_vm_config(name);
-    if config.get("graphics").map(|v| v.as_str()) == Some("yes") {
-        config.get("graphics_port").and_then(|p| p.parse().ok())
-    } else {
-        None
+    if config.get("graphics").map(|v| v.as_str()) != Some("yes") {
+        return None;
     }
+    if let Some(port) = config.get("graphics_port").and_then(|p| p.parse().ok()) {
+        return Some(port);
+    }
+    read_runtime_vnc_port(name)
 }
 
 // ── Disk resources ────────────────────────────────────────────────

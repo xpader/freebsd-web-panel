@@ -78,6 +78,7 @@ async function vmAction(name, action) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   } finally {
     pendingActions.value.delete(`${name}:${action}`);
+    await new Promise((r) => setTimeout(r, 1000));
     await load();
   }
 }
