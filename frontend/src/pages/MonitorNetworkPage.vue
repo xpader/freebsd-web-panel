@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { Chart, baseOptions, dataIsEmpty, isNotNoiseIface, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
@@ -85,35 +85,58 @@ function ifaceOptions(aggregated) {
   };
 }
 
-async function drawNetCard(iface, chartId, isTraffic, state) {
-  if (!state) return;
+/// Fetch every (iface, direction) pair for a section in a single GET.
+/// Returns a map name → [[ts, value], ...].  Empty map on any failure —
+/// callers just skip drawing and no chart renders.
+async function fetchBatch(isTraffic, state) {
   const now = Math.floor(Date.now() / 1000);
   const from = now - state.range;
-  const datasets = [];
-  try {
-    for (const [dir, color] of [['rx', RX_COLOR], ['tx', TX_COLOR]]) {
-      const url = isTraffic
-        ? `/api/monitor/aggregate?category=net&name=${iface}.${dir}&from=${from}&to=${now}&bucket=${state.bucket}`
-        : state.bucket > 0
-          ? `/api/monitor/grouped?category=net&name=${iface}.${dir}&from=${from}&to=${now}&bucket=${state.bucket}&agg=${state.agg}`
-          : `/api/monitor/series?category=net&name=${iface}.${dir}&from=${from}&to=${now}`;
-      const res = await api.get(url);
-      datasets.push({
-        label: dir.toUpperCase(),
-        data: res.points.map(([ts, v]) => ({ x: ts * 1000, y: v })),
-        backgroundColor: color + 'cc',
-        borderColor: color,
-        borderWidth: 2,
-        pointRadius: 0,
-        tension: 0.3,
-        fill: false,
-      });
+  const namesParam = ifaces.value.flatMap((iface) => [`${iface}.rx`, `${iface}.tx`]).join(',');
+  let url;
+  if (isTraffic) {
+    if (state.bucket > 0) {
+      url = `/api/monitor/aggregate?category=net_bytes&from=${from}&to=${now}&bucket=${state.bucket}&names=${namesParam}`;
+    } else {
+      url = `/api/monitor/series?category=net_bytes&from=${from}&to=${now}&names=${namesParam}`;
     }
-  } catch (e) {
-    msg.value = t('monitor.queryFailed', { msg: e.message || '' });
-    return;
+  } else if (state.bucket > 0) {
+    url = `/api/monitor/grouped?category=net&from=${from}&to=${now}&bucket=${state.bucket}&agg=${state.agg}&names=${namesParam}`;
+  } else {
+    url = `/api/monitor/series?category=net&from=${from}&to=${now}&names=${namesParam}`;
   }
+  try {
+    const res = await api.get(url);
+    return res.series || {};
+  } catch {
+    return {};
+  }
+}
 
+function drawNetCard(iface, chartId, isTraffic, seriesMap) {
+  const rxPoints = seriesMap[`${iface}.rx`] || [];
+  const txPoints = seriesMap[`${iface}.tx`] || [];
+  const datasets = [
+    {
+      label: 'RX',
+      data: rxPoints.map(([ts, v]) => ({ x: ts * 1000, y: v })),
+      backgroundColor: RX_COLOR + 'cc',
+      borderColor: RX_COLOR,
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false,
+    },
+    {
+      label: 'TX',
+      data: txPoints.map(([ts, v]) => ({ x: ts * 1000, y: v })),
+      backgroundColor: TX_COLOR + 'cc',
+      borderColor: TX_COLOR,
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false,
+    },
+  ];
   if (charts[chartId]) { charts[chartId].destroy(); delete charts[chartId]; }
   const canvas = document.getElementById(chartId);
   if (!canvas || dataIsEmpty(datasets)) return;
@@ -121,14 +144,16 @@ async function drawNetCard(iface, chartId, isTraffic, state) {
 }
 
 async function drawAllRate() {
+  const seriesMap = await fetchBatch(false, rateState.value);
   for (const iface of ifaces.value) {
-    await drawNetCard(iface, `chart-rate-${iface}`, false, rateState.value);
+    drawNetCard(iface, `chart-rate-${iface}`, false, seriesMap);
   }
 }
 
 async function drawAllTraffic() {
+  const seriesMap = await fetchBatch(true, trafficState.value);
   for (const iface of ifaces.value) {
-    await drawNetCard(iface, `chart-traffic-${iface}`, true, trafficState.value);
+    drawNetCard(iface, `chart-traffic-${iface}`, true, seriesMap);
   }
 }
 
@@ -163,7 +188,7 @@ onMounted(async () => {
     msg.value = t('monitor.noNetData');
     return;
   }
-  await new Promise((r) => requestAnimationFrame(r));
+  await nextTick();
   drawAllRate();
   drawAllTraffic();
 });

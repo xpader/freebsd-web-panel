@@ -16,6 +16,7 @@ Thumbs.db
 # Environment / local config
 .env
 .env.local
+AGENTS.local.md
 
 # Crush
 .crush

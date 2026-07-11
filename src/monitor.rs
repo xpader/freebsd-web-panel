@@ -13,6 +13,18 @@ use crate::error::ApiResult;
 use crate::state::AppState;
 use crate::sysinfo;
 
+/// Serde helper — decode a comma-separated string (`a,b,c`) into
+/// `Vec<String>`.  Used on the `names` field of the GET series endpoints
+/// so the frontend can ask for several series in one request via
+/// `?names=total,core0,core1`.
+fn comma_list<'de, D>(d: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    Ok(s.split(',').map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect())
+}
+
 // ---- Collector ----
 
 /// Spawn the background collector task. Returns immediately.
@@ -238,19 +250,24 @@ fn net_rate_delta(now: i64) -> Vec<(String, (f64, f64), u64, u64)> {
 
 // ---- API handlers ----
 
+/// Shared response shape for the three series endpoints: a map from
+/// series name to its list of (timestamp, value) points.  The frontend
+/// asks for N names in one GET (`?names=a,b,c`) and iterates the map to
+/// build a chart with N datasets — no more per-name round trips.
+#[derive(Debug, Serialize)]
+pub struct SeriesResponse {
+    pub series: std::collections::HashMap<String, Vec<(i64, f64)>>,
+}
+
+// ---- Raw series ----
+
 #[derive(Debug, Deserialize)]
 pub struct SeriesQuery {
     pub category: String,
-    pub name: String,
     pub from: i64,
     pub to: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SeriesResponse {
-    pub category: String,
-    pub name: String,
-    pub points: Vec<(i64, f64)>,
+    #[serde(deserialize_with = "comma_list")]
+    pub names: Vec<String>,
 }
 
 pub async fn series(
@@ -258,25 +275,28 @@ pub async fn series(
     Query(q): Query<SeriesQuery>,
 ) -> ApiResult<Json<SeriesResponse>> {
     let conn = state.db.lock().await;
-    let samples = db::query_series(&conn, &q.category, &q.name, q.from, q.to)?;
-    let points: Vec<(i64, f64)> = samples.into_iter().map(|s| (s.ts, s.value)).collect();
-    Ok(Json(SeriesResponse {
-        category: q.category,
-        name: q.name,
-        points,
-    }))
+    let mut series = std::collections::HashMap::with_capacity(q.names.len());
+    for name in &q.names {
+        let samples = db::query_series(&conn, &q.category, name, q.from, q.to)?;
+        series.insert(name.clone(), samples.into_iter().map(|s| (s.ts, s.value)).collect());
+    }
+    Ok(Json(SeriesResponse { series }))
 }
 
-/// Aggregated series for network traffic totals.  Uses cumulative byte
-/// counters (`net_bytes` category) and computes MAX-MIN per bucket for
-/// exact bytes transferred — not interpolated from instantaneous rates.
+// ---- Counter aggregate ----
+
+/// Aggregated series for cumulative counters.  The category names the
+/// counter family — `net_bytes` is the only one we currently produce —
+/// and the SQL computes SUM(value) per time bucket (samples hold the
+/// per-interval delta, so SUM = exact bytes transferred).
 #[derive(Debug, Deserialize)]
 pub struct AggregateQuery {
     pub category: String,
-    pub name: String,
     pub from: i64,
     pub to: i64,
-    pub bucket: i64, // bucket size in seconds
+    pub bucket: i64,
+    #[serde(deserialize_with = "comma_list")]
+    pub names: Vec<String>,
 }
 
 pub async fn aggregate(
@@ -284,21 +304,17 @@ pub async fn aggregate(
     Query(q): Query<AggregateQuery>,
 ) -> ApiResult<Json<SeriesResponse>> {
     let conn = state.db.lock().await;
-    let buckets = db::query_counter_aggregate(
-        &conn,
-        "net_bytes",
-        &q.name,
-        q.from,
-        q.to,
-        q.bucket,
-    )?;
-    let points: Vec<(i64, f64)> = buckets.into_iter().collect();
-    Ok(Json(SeriesResponse {
-        category: q.category,
-        name: q.name,
-        points,
-    }))
+    let mut series = std::collections::HashMap::with_capacity(q.names.len());
+    for name in &q.names {
+        let buckets = db::query_counter_aggregate(
+            &conn, &q.category, name, q.from, q.to, q.bucket,
+        )?;
+        series.insert(name.clone(), buckets.into_iter().collect());
+    }
+    Ok(Json(SeriesResponse { series }))
 }
+
+// ---- Grouped (downsampled) ----
 
 /// Grouped (downsampled) series for instantaneous-value metrics (CPU,
 /// memory, net-rate).  Aggregates raw samples into fixed-size time
@@ -306,11 +322,12 @@ pub async fn aggregate(
 #[derive(Debug, Deserialize)]
 pub struct GroupedQuery {
     pub category: String,
-    pub name: String,
     pub from: i64,
     pub to: i64,
-    pub bucket: i64,  // bucket size in seconds
-    pub agg: String,  // "min", "avg", or "max"
+    pub bucket: i64,
+    pub agg: String,
+    #[serde(deserialize_with = "comma_list")]
+    pub names: Vec<String>,
 }
 
 pub async fn grouped(
@@ -318,20 +335,14 @@ pub async fn grouped(
     Query(q): Query<GroupedQuery>,
 ) -> ApiResult<Json<SeriesResponse>> {
     let conn = state.db.lock().await;
-    let points = db::query_series_grouped(
-        &conn,
-        &q.category,
-        &q.name,
-        q.from,
-        q.to,
-        q.bucket,
-        &q.agg,
-    )?;
-    Ok(Json(SeriesResponse {
-        category: q.category,
-        name: q.name,
-        points,
-    }))
+    let mut series = std::collections::HashMap::with_capacity(q.names.len());
+    for name in &q.names {
+        let points = db::query_series_grouped(
+            &conn, &q.category, name, q.from, q.to, q.bucket, &q.agg,
+        )?;
+        series.insert(name.clone(), points);
+    }
+    Ok(Json(SeriesResponse { series }))
 }
 
 #[derive(Debug, Serialize)]

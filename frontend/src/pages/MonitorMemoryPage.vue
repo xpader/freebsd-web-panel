@@ -35,29 +35,28 @@ let usageCanvas, bytesCanvas;
 async function drawSeries(canvas, category, nameOrNames, from, to, opts) {
   if (!canvas) return;
   const names = Array.isArray(nameOrNames) ? nameOrNames : [nameOrNames];
-  const datasets = [];
-  for (let i = 0; i < names.length; i++) {
-    let res;
-    try {
-      const url = selectedBucket.value > 0
-        ? `/api/monitor/grouped?category=${category}&name=${names[i]}&from=${from}&to=${to}&bucket=${selectedBucket.value}&agg=${selectedAgg.value}`
-        : `/api/monitor/series?category=${category}&name=${names[i]}&from=${from}&to=${to}`;
-      res = await api.get(url);
-    } catch (e) {
-      msg.value = t('monitor.queryFailed', { msg: e.message || '' });
-      return;
-    }
-    datasets.push({
-      label: opts.multi ? opts.labels[i] : opts.label,
-      data: res.points.map(([ts, v]) => ({ x: ts * 1000, y: v })),
-      borderColor: opts.multi ? opts.colors[i] : opts.color,
-      backgroundColor: opts.multi ? opts.colors[i] + '20' : opts.color + '20',
-      borderWidth: 2,
-      pointRadius: 0,
-      tension: 0.3,
-      fill: !opts.multi,
-    });
+  let seriesMap = {};
+  try {
+    const namesParam = names.join(',');
+    let url = selectedBucket.value > 0
+      ? `/api/monitor/grouped?category=${category}&from=${from}&to=${to}&bucket=${selectedBucket.value}&agg=${selectedAgg.value}&names=${namesParam}`
+      : `/api/monitor/series?category=${category}&from=${from}&to=${to}&names=${namesParam}`;
+    const res = await api.get(url);
+    seriesMap = res.series || {};
+  } catch (e) {
+    msg.value = t('monitor.queryFailed', { msg: e.message || '' });
+    return;
   }
+  const datasets = names.map((name, i) => ({
+    label: opts.multi ? opts.labels[i] : opts.label,
+    data: (seriesMap[name] || []).map(([ts, v]) => ({ x: ts * 1000, y: v })),
+    borderColor: opts.multi ? opts.colors[i] : opts.color,
+    backgroundColor: opts.multi ? opts.colors[i] + '20' : opts.color + '20',
+    borderWidth: 2,
+    pointRadius: 0,
+    tension: 0.3,
+    fill: !opts.multi,
+  }));
   if (dataIsEmpty(datasets)) {
     msg.value = t('monitor.noData');
     return;
