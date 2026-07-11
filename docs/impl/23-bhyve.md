@@ -11,7 +11,7 @@ Bhyve 模块封装 vm-bhyve（`/usr/local/sbin/vm`）CLI，提供虚拟机列表
 - VM 启动/停止（`vm start` / `vm stop`）
 - VM 串口控制台（WebSocket + PTY + xterm.js，通过 `cu -l` 连接 nmdm 设备）
 - VM VNC 代理（WebSocket→TCP 代理 + noVNC 前端）
-- vm-bhyve 镜像列表（`vm image list`）
+- vm-bhyve 镜像管理（`vm image list` / `vm image create` / `vm image provision` / `vm image destroy`）
 - 交换机列表/详情/创建/删除（`vm switch list` / `vm switch info` / `vm switch create` / `vm switch destroy`）
 - 数据存储列表（`vm datastore list`）
 - 数据存储添加/移除（`vm datastore add` / `vm datastore remove`）
@@ -200,6 +200,9 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | POST | `/api/bhyve/vms/{name}/start` | 启动 VM |
 | POST | `/api/bhyve/vms/{name}/stop` | 停止 VM |
 | GET | `/api/bhyve/images` | vm-bhyve 镜像列表 |
+| POST | `/api/bhyve/images` | 从虚拟机创建镜像（body: name/description/uncompressed，调用 `vm image create`） |
+| POST | `/api/bhyve/images/{uuid}/provision` | 从镜像创建虚拟机（body: new_name/datastore，调用 `vm image provision`） |
+| DELETE | `/api/bhyve/images/{uuid}` | 销毁镜像（调用 `vm image destroy`） |
 | GET | `/api/bhyve/switches` | 交换机列表 |
 | GET | `/api/bhyve/switches/{name}` | 交换机详情 |
 | POST | `/api/bhyve/switches` | 创建交换机（body: name/type/iface/vlan/bridge/address/mtu/private） |
@@ -231,7 +234,7 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | VM 配置 | `/bhyve/edit/:name` | `BhyveEditPage.vue` |
 | 串口控制台 | `/bhyve/console/:name` | `BhyveConsolePage.vue` |
 | VNC | `/bhyve/vnc/:name` | `BhyveVncPage.vue` |
-| 镜像列表 | `/bhyve/images` | `BhyveImagesPage.vue` |
+| 镜像管理 | `/bhyve/images` | `BhyveImagesPage.vue` |
 | 虚拟交换机 | `/bhyve/switches` | `BhyveSwitchesPage.vue` |
 | 交换机详情 | `/bhyve/switches/:name` | `BhyveSwitchDetailPage.vue` |
 | 存储池 | `/bhyve/datastores` | `BhyveDatastoresPage.vue` |

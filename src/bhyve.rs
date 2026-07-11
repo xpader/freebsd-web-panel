@@ -288,6 +288,68 @@ pub fn list_images() -> Result<Vec<VmImage>, String> {
     Ok(images)
 }
 
+// ── vm image create / provision / destroy ─────────────────────────
+
+/// Create a new image from an existing VM via `vm image create`.
+/// Returns the UUID assigned to the new image.
+pub fn create_image(
+    name: &str,
+    description: Option<&str>,
+    uncompressed: bool,
+) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["image", "create"];
+    if let Some(d) = description {
+        args.push("-d");
+        args.push(d);
+    }
+    if uncompressed {
+        args.push("-u");
+    }
+    args.push(name);
+
+    let output = vm_run(&args)?;
+    // vm-bhyve prints the UUID somewhere in stdout, e.g.:
+    //   "Image created with UUID: 8e658955-b404-11ef-970f-b8cb29bd45c1"
+    for line in output.lines() {
+        if let Some(rest) = line.to_lowercase().split("uuid:").nth(1) {
+            let uuid = rest.trim().to_string();
+            if !uuid.is_empty() {
+                return Ok(uuid);
+            }
+        }
+    }
+    // Fallback: try to find a bare UUID pattern anywhere in the output.
+    for token in output.split_whitespace() {
+        if token.len() == 36 && token.chars().filter(|&c| c == '-').count() == 4 {
+            return Ok(token.to_string());
+        }
+    }
+    Ok(String::new())
+}
+
+/// Provision (clone) a new VM from an existing image via `vm image provision`.
+pub fn provision_image(
+    uuid: &str,
+    new_name: &str,
+    datastore: Option<&str>,
+) -> Result<(), String> {
+    let mut args: Vec<&str> = vec!["image", "provision"];
+    if let Some(ds) = datastore {
+        args.push("-d");
+        args.push(ds);
+    }
+    args.push(uuid);
+    args.push(new_name);
+    vm_run(&args)?;
+    Ok(())
+}
+
+/// Destroy an image by UUID via `vm image destroy`.
+pub fn destroy_image(uuid: &str) -> Result<(), String> {
+    vm_run(&["image", "destroy", uuid])?;
+    Ok(())
+}
+
 // ── vm switch list ────────────────────────────────────────────────
 
 /// Parse the `vm switch list` table.
@@ -550,6 +612,31 @@ pub fn list_isos() -> Result<Vec<IsoImage>, String> {
     }
     isos.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(isos)
+}
+
+/// Download an ISO from a URL into the default datastore's `.iso` directory.
+/// Delegates to `vm iso <url>` which uses `fetch(1)` internally.
+/// This is a blocking, potentially long-running operation.
+pub fn fetch_iso(url: &str) -> Result<(), String> {
+    if url.is_empty() {
+        return Err("URL must not be empty".into());
+    }
+    vm_run(&["iso", url])?;
+    Ok(())
+}
+
+/// Delete an ISO file from the default datastore's `.iso` directory.
+pub fn delete_iso(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains("..") {
+        return Err("invalid ISO name".into());
+    }
+    let path = std::path::Path::new(&default_datastore_path()?)
+        .join(".iso")
+        .join(name);
+    if !path.is_file() {
+        return Err(format!("ISO not found: {name}"));
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("delete ISO failed: {e}"))
 }
 
 /// List disk image files from the default datastore `.img` directory.

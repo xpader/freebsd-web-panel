@@ -35,6 +35,7 @@ import BhyveImagesPage from '../pages/BhyveImagesPage.vue';
 import BhyveSwitchesPage from '../pages/BhyveSwitchesPage.vue';
 import BhyveSwitchDetailPage from '../pages/BhyveSwitchDetailPage.vue';
 import BhyveDatastoresPage from '../pages/BhyveDatastoresPage.vue';
+import BhyveIsosPage from '../pages/BhyveIsosPage.vue';
 import BhyveInitPage from '../pages/BhyveInitPage.vue';
 import JailsListPage from '../pages/JailsListPage.vue';
 import JailCreatePage from '../pages/JailCreatePage.vue';
@@ -89,6 +90,7 @@ const routes = [
       { path: 'bhyve/switches', name: 'bhyve-switches', component: BhyveSwitchesPage },
       { path: 'bhyve/switches/:name', name: 'bhyve-switch-detail', component: BhyveSwitchDetailPage },
       { path: 'bhyve/datastores', name: 'bhyve-datastores', component: BhyveDatastoresPage },
+      { path: 'bhyve/isos', name: 'bhyve-isos', component: BhyveIsosPage },
       { path: 'bhyve/init', name: 'bhyve-init', component: BhyveInitPage },
       { path: 'accounts/users', name: 'accounts-users', component: AccountsUsersPage },
       { path: 'accounts/groups', name: 'accounts-groups', component: AccountsGroupsPage },

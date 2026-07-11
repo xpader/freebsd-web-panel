@@ -348,6 +348,108 @@ pub async fn list_images() -> ApiResult<Json<Vec<bhyve::VmImage>>> {
     Ok(Json(images))
 }
 
+/// POST /api/bhyve/images — create a new image from an existing VM.
+#[derive(Debug, Deserialize)]
+pub struct CreateImageBody {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub uncompressed: bool,
+}
+
+pub async fn create_image(
+    State(state): State<AppState>,
+    Json(body): Json<CreateImageBody>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    validate_vm_name(&body.name)?;
+    let name = body.name.clone();
+    let desc = body.description.clone();
+    let unc = body.uncompressed;
+    let uuid = tokio::task::spawn_blocking(move || {
+        bhyve::create_image(&name, desc.as_deref(), unc)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+    .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        "/api/bhyve/images",
+        201,
+        Some(format!("created image {} from vm {}", uuid, body.name)),
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "uuid": uuid })),
+    ))
+}
+
+/// POST /api/bhyve/images/{uuid}/provision — provision a new VM from an image.
+#[derive(Debug, Deserialize)]
+pub struct ProvisionImageBody {
+    pub new_name: String,
+    pub datastore: Option<String>,
+}
+
+pub async fn provision_image(
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Json(body): Json<ProvisionImageBody>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&body.new_name)?;
+    if uuid.is_empty() {
+        return Err(ApiError::BadRequest("uuid is required".into()));
+    }
+    let u = uuid.clone();
+    let nn = body.new_name.clone();
+    let ds = body.datastore.clone();
+    tokio::task::spawn_blocking(move || bhyve::provision_image(&u, &nn, ds.as_deref()))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        &format!("/api/bhyve/images/{}/provision", uuid),
+        201,
+        Some(format!(
+            "provisioned vm {} from image {}",
+            body.new_name, uuid
+        )),
+    );
+    Ok(StatusCode::CREATED)
+}
+
+/// DELETE /api/bhyve/images/{uuid} — destroy an image.
+pub async fn destroy_image(
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> ApiResult<StatusCode> {
+    if uuid.is_empty() {
+        return Err(ApiError::BadRequest("uuid is required".into()));
+    }
+    let u = uuid.clone();
+    tokio::task::spawn_blocking(move || bhyve::destroy_image(&u))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "DELETE",
+        &format!("/api/bhyve/images/{}", uuid),
+        200,
+        Some(format!("destroyed image {}", uuid)),
+    );
+    Ok(StatusCode::OK)
+}
+
 /// GET /api/bhyve/img-files — list disk image files from .img directory.
 pub async fn list_img_files() -> ApiResult<Json<Vec<bhyve::IsoImage>>> {
     let files = bhyve::list_img_files().map_err(ApiError::Command)?;
@@ -579,6 +681,61 @@ pub async fn list_templates() -> ApiResult<Json<Vec<String>>> {
 pub async fn list_isos() -> ApiResult<Json<Vec<bhyve::IsoImage>>> {
     let isos = bhyve::list_isos().map_err(ApiError::Command)?;
     Ok(Json(isos))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FetchIsoBody {
+    pub url: String,
+}
+
+/// POST /api/bhyve/isos — download an ISO from a URL via `vm iso <url>`.
+pub async fn fetch_iso(
+    State(state): State<AppState>,
+    Json(body): Json<FetchIsoBody>,
+) -> ApiResult<StatusCode> {
+    let url = body.url.trim();
+    if url.is_empty() {
+        return Err(ApiError::BadRequest("url is required".into()));
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://") || url.starts_with("ftp://")) {
+        return Err(ApiError::BadRequest("url must start with http://, https://, or ftp://".into()));
+    }
+    if url.len() > 2048 {
+        return Err(ApiError::BadRequest("url is too long".into()));
+    }
+    let u = url.to_string();
+    tokio::task::spawn_blocking(move || bhyve::fetch_iso(&u))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state, None, "POST", "/api/bhyve/isos", 200,
+        Some(format!("downloaded ISO from {url}")),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// DELETE /api/bhyve/isos/{name} — remove an ISO file.
+pub async fn delete_iso(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name is required".into()));
+    }
+    let n = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::delete_iso(&n))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state, None, "DELETE",
+        &format!("/api/bhyve/isos/{name}"), 200,
+        Some(format!("deleted ISO {name}")),
+    );
+    Ok(StatusCode::OK)
 }
 
 /// Validate VM name: must match vm-bhyve rules (lowercase, [a-z0-9._-]).

@@ -95,9 +95,10 @@ export const MENU = [
         icon: 'fa-solid fa-server',
         children: [
           { path: '/bhyve/vms', labelKey: 'nav.bhyveVms', icon: 'fa-solid fa-list' },
-          { path: '/bhyve/images', labelKey: 'nav.bhyveImages', icon: 'fa-solid fa-compact-disc' },
           { path: '/bhyve/switches', labelKey: 'nav.bhyveSwitches', icon: 'fa-solid fa-network-wired' },
           { path: '/bhyve/datastores', labelKey: 'nav.bhyveDatastores', icon: 'fa-solid fa-hard-drive' },
+          { path: '/bhyve/images', labelKey: 'nav.bhyveImages', icon: 'fa-solid fa-copy' },
+          { path: '/bhyve/isos', labelKey: 'nav.bhyveIsos', icon: 'fa-solid fa-compact-disc' },
         ],
       },
     ],
