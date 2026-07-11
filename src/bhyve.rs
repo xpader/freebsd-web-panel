@@ -744,6 +744,45 @@ pub fn stop_vm(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Forcefully power off a VM via `vm poweroff -f`.
+pub fn poweroff_vm(name: &str) -> Result<(), String> {
+    let output = Command::new(VM)
+        .args(["poweroff", "-f", name])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if !stderr.is_empty() {
+            stderr
+        } else {
+            format!("vm poweroff -f {} failed (exit {})", name, output.status)
+        };
+        return Err(msg);
+    }
+    Ok(())
+}
+
+/// Destroy a VM via `vm destroy -f`.
+/// Deletes all disk images and configuration for the VM.
+pub fn destroy_vm(name: &str) -> Result<(), String> {
+    let output = Command::new(VM)
+        .args(["destroy", "-f", name])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if !stderr.is_empty() {
+            stderr
+        } else {
+            format!("vm destroy -f {} failed (exit {})", name, output.status)
+        };
+        return Err(msg);
+    }
+    Ok(())
+}
+
 /// Install OS to a VM via `vm install <name> <iso>`.
 /// This boots the VM with the ISO attached for OS installation.
 pub fn install_vm(name: &str, iso: &str) -> Result<(), String> {

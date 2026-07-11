@@ -309,6 +309,52 @@ pub async fn vm_stop(
     Ok(StatusCode::OK)
 }
 
+/// POST /api/bhyve/vms/{name}/poweroff — forcefully power off a VM.
+pub async fn vm_poweroff(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    let n = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::poweroff_vm(&n))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        &format!("/api/bhyve/vms/{}/poweroff", name),
+        200,
+        Some(format!("force powered off vm {}", name)),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// DELETE /api/bhyve/vms/{name} — destroy a VM and all its data.
+pub async fn destroy_vm(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    let n = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::destroy_vm(&n))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "DELETE",
+        &format!("/api/bhyve/vms/{}", name),
+        200,
+        Some(format!("destroyed vm {}", name)),
+    );
+    Ok(StatusCode::OK)
+}
+
 /// POST /api/bhyve/vms/{name}/install — boot VM with an ISO for OS installation.
 #[derive(Debug, Deserialize)]
 pub struct InstallBody {

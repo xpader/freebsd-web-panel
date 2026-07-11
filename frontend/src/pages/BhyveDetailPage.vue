@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { useToast, useAlert } from '../composables/useDialog.js';
+import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
 import { fmtBytesStr, fmtUptime } from '../lib/format.js';
 import BackButton from '../components/ui/BackButton.vue';
 
@@ -12,6 +12,7 @@ const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const alert = useAlert();
+const confirm = useConfirm();
 const name = route.params.name;
 
 const d = ref(null);
@@ -170,6 +171,35 @@ async function vmAction(action) {
   }
 }
 
+async function poweroffVm() {
+  if (!await confirm(t('bhyve.poweroff'), t('bhyve.poweroffConfirm', { name }))) return;
+  acting.value = true;
+  try {
+    await api.post(`/api/bhyve/vms/${encodeURIComponent(name)}/poweroff`);
+    toast.toast(t('bhyve.poweroffToast', { name }));
+    await new Promise((r) => setTimeout(r, 1000));
+    await reload();
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  } finally {
+    acting.value = false;
+  }
+}
+
+async function destroyVm() {
+  if (!await confirm(t('bhyve.destroyVm'), t('bhyve.destroyVmConfirm', { name }))) return;
+  acting.value = true;
+  try {
+    await api.del(`/api/bhyve/vms/${encodeURIComponent(name)}`);
+    toast.toast(t('bhyve.destroyedToast', { name }));
+    router.push('/bhyve/vms');
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  } finally {
+    acting.value = false;
+  }
+}
+
 onMounted(reload);
 </script>
 
@@ -186,9 +216,15 @@ onMounted(reload);
       <button v-if="isRunning" class="btn-secondary btn-sm" :disabled="acting" @click="vmAction('stop')">
         <i class="fa-solid fa-stop"></i> {{ t('common.stop') }}
       </button>
+      <button v-if="isRunning" class="btn-secondary btn-sm" :disabled="acting" @click="poweroffVm">
+        <i class="fa-solid fa-plug-circle-xmark"></i> {{ t('bhyve.poweroff') }}
+      </button>
       <a v-if="isRunning" :href="`#/bhyve/console/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-terminal"></i> {{ t('common.console') }}</a>
       <a v-if="d.vnc_port && isRunning" :href="`#/bhyve/vnc/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-display"></i> VNC</a>
       <a :href="`#/bhyve/edit/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-pen-to-square"></i> {{ t('common.edit') }}</a>
+      <button v-if="!isRunning" class="btn-sm btn-danger" :disabled="acting" @click="destroyVm">
+        <i class="fa-solid fa-trash"></i> {{ t('bhyve.destroyVm') }}
+      </button>
     </div>
   </div>
 
