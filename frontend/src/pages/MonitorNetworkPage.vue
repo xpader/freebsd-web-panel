@@ -36,6 +36,8 @@ const aggMethods = [
 
 const msg = ref('');
 const ifaces = ref([]);
+const rateIfaces = ref([]);
+const trafficIfaces = ref([]);
 const charts = {};
 const rateState = ref({ range: 86400, bucket: 300, agg: 'avg' });
 const trafficState = ref({ range: 86400, bucket: 300 });
@@ -145,14 +147,30 @@ function drawNetCard(iface, chartId, isTraffic, seriesMap) {
 
 async function drawAllRate() {
   const seriesMap = await fetchBatch(false, rateState.value);
+  const visible = [];
   for (const iface of ifaces.value) {
+    const rx = seriesMap[`${iface}.rx`] || [];
+    const tx = seriesMap[`${iface}.tx`] || [];
+    if (rx.length || tx.length) visible.push(iface);
+  }
+  rateIfaces.value = visible;
+  await nextTick();
+  for (const iface of visible) {
     drawNetCard(iface, `chart-rate-${iface}`, false, seriesMap);
   }
 }
 
 async function drawAllTraffic() {
   const seriesMap = await fetchBatch(true, trafficState.value);
+  const visible = [];
   for (const iface of ifaces.value) {
+    const rx = seriesMap[`${iface}.rx`] || [];
+    const tx = seriesMap[`${iface}.tx`] || [];
+    if (rx.length || tx.length) visible.push(iface);
+  }
+  trafficIfaces.value = visible;
+  await nextTick();
+  for (const iface of visible) {
     drawNetCard(iface, `chart-traffic-${iface}`, true, seriesMap);
   }
 }
@@ -230,7 +248,7 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-    <div v-for="iface in ifaces" :key="'rate-'+iface" class="card">
+    <div v-for="iface in rateIfaces" :key="'rate-'+iface" class="card">
       <div class="card-title">{{ iface }} — {{ t('monitor.viewRate') }}</div>
       <canvas :id="'chart-rate-'+iface" height="120"></canvas>
     </div>
@@ -250,7 +268,7 @@ onUnmounted(() => {
         >{{ b.label }}</button>
       </div>
     </div>
-    <div v-for="iface in ifaces" :key="'traffic-'+iface" class="card">
+    <div v-for="iface in trafficIfaces" :key="'traffic-'+iface" class="card">
       <div class="card-title">{{ iface }} — {{ t('monitor.viewTraffic') }}</div>
       <canvas :id="'chart-traffic-'+iface" height="120"></canvas>
     </div>
