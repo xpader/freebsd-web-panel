@@ -113,6 +113,7 @@ onMounted(reload);
         <span>{{ t('bhyve.datastore') }}: <strong>{{ d.datastore }}</strong></span>
         <span>CPU: <strong>{{ d.cpu }}</strong></span>
         <span>{{ t('bhyve.memory') }}: <strong>{{ d.memory }}</strong></span>
+        <span>{{ t('bhyve.autoStartBoot') }}: <strong>{{ d.auto_start ? t('common.yes') : t('common.no') }}</strong></span>
         <span v-if="d.memory_resident">{{ t('bhyve.memoryResident') }}: <strong class="mono">{{ d.memory_resident }}</strong></span>
         <span v-if="d.console_port">{{ t('common.console') }}: <strong class="mono">{{ d.console_port }}</strong></span>
       </div>

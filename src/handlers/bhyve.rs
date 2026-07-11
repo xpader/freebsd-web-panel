@@ -122,6 +122,8 @@ pub struct UpdateVmConfigBody {
     pub graphics: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub other_devices: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub auto_start: Option<bool>,
 }
 
 pub async fn update_vm_config(
@@ -137,18 +139,37 @@ pub async fn update_vm_config(
             merged.insert(k.clone(), v.clone());
         }
     }
-    if merged.is_empty() {
+    let has_config = !merged.is_empty();
+    if !has_config && body.auto_start.is_none() {
         return Err(ApiError::BadRequest(
             "at least one configuration section must not be empty".into(),
         ));
     }
-    validate_vm_config(&merged)?;
+    if has_config {
+        validate_vm_config(&merged)?;
+        let vm_name = name.clone();
+        tokio::task::spawn_blocking(move || bhyve::update_vm_config(&vm_name, &merged))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+            .map_err(ApiError::Command)?;
+    }
 
-    let vm_name = name.clone();
-    tokio::task::spawn_blocking(move || bhyve::update_vm_config(&vm_name, &merged))
-        .await
-        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
-        .map_err(ApiError::Command)?;
+    let mut audit_msgs = vec![];
+    if has_config {
+        audit_msgs.push(format!("updated VM configuration {name}"));
+    }
+    if let Some(want_auto) = body.auto_start {
+        let n = name.clone();
+        tokio::task::spawn_blocking(move || bhyve::set_vm_auto_start(&n, want_auto))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+            .map_err(ApiError::Command)?;
+        audit_msgs.push(format!(
+            "{} auto-start for vm {}",
+            if want_auto { "enabled" } else { "disabled" },
+            name
+        ));
+    }
 
     crate::audit::record(
         &state,
@@ -156,7 +177,7 @@ pub async fn update_vm_config(
         "PUT",
         &format!("/api/bhyve/vms/{name}"),
         200,
-        Some(format!("updated VM configuration {name}")),
+        Some(audit_msgs.join("; ")),
     );
     Ok(StatusCode::OK)
 }

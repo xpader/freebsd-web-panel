@@ -667,6 +667,7 @@ pub struct VmDetail {
     pub uuid: String,
     pub cpu: u32,
     pub memory: String,
+    pub auto_start: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_resident: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -716,7 +717,9 @@ pub struct VmSnapshot {
 /// `.conf` file for raw config key-values.
 pub fn get_vm_info(name: &str) -> Result<VmDetail, String> {
     let output = vm_run(&["info", name])?;
-    let info = parse_vm_info(&output, name)?;
+    let mut info = parse_vm_info(&output, name)?;
+    let vm_list = read_vm_list();
+    info.auto_start = vm_list.iter().any(|n| n == name);
     Ok(info)
 }
 
@@ -918,6 +921,7 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
         uuid,
         cpu,
         memory,
+        auto_start: false,
         memory_resident,
         console_port,
         networks,
@@ -1352,6 +1356,32 @@ fn sysrc_set(key: &str, value: &str) -> Result<(), String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!("sysrc {key}={value} failed: {stderr}"));
+    }
+    Ok(())
+}
+
+/// Read the `vm_list` variable from rc.conf (space-separated VM names).
+pub fn read_vm_list() -> Vec<String> {
+    sysrc_get("vm_list")
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// Add or remove a VM from the `vm_list` rc.conf variable (auto-start on boot).
+pub fn set_vm_auto_start(name: &str, enabled: bool) -> Result<(), String> {
+    let mut list = read_vm_list();
+    let was_in = list.iter().any(|n| n == name);
+    if enabled && !was_in {
+        list.push(name.to_string());
+        sysrc_set("vm_list", &list.join(" "))?;
+    } else if !enabled && was_in {
+        list.retain(|n| n != name);
+        let val = list.join(" ");
+        if val.is_empty() {
+            sysrc_set("vm_list", "")?;
+        } else {
+            sysrc_set("vm_list", &val)?;
+        }
     }
     Ok(())
 }

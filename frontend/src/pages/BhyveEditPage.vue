@@ -24,6 +24,7 @@ const loading = ref(true);
 const saving = ref(false);
 const error = ref('');
 const config = reactive({});
+const autoStart = ref(false);
 const disks = ref([]);
 const networks = ref([]);
 const switches = ref([]);
@@ -546,6 +547,7 @@ async function load() {
     }
     switches.value = switchList;
     diskResources.value = resources;
+    autoStart.value = !!detail.auto_start;
     ensure('loader', 'uefi');
     ensure('cpu', '1');
     ensure('memory', '512M');
@@ -566,7 +568,7 @@ async function saveBasicConfig() {
       if (basicKeyList.includes(key)) configPayload[key] = String(value ?? '');
       else if (isAdvanced(key)) advancePayload[key] = String(value ?? '');
     }
-    await api.put(`/api/bhyve/vms/${encodeURIComponent(name)}`, { config: configPayload, advance: advancePayload });
+    await api.put(`/api/bhyve/vms/${encodeURIComponent(name)}`, { config: configPayload, advance: advancePayload, auto_start: autoStart.value });
     toast.toast(t('bhyve.configSaved'));
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -628,6 +630,7 @@ onMounted(load);
 
         <!-- ── basic ── -->
         <template v-if="active === 'basic'">
+          <div class="form-row"><label class="form-row-label">{{ t('bhyve.autoStartBoot') }}</label><div><label class="checkbox-label"><input type="checkbox" v-model="autoStart" /><span class="param-desc-inline">{{ t('bhyve.autoStartBootHint') }}</span></label></div></div>
           <div class="form-row"><label class="form-row-label">{{ t('bhyve.loader') }}</label><select v-model="config.loader"><option v-for="value in loaderOptions" :key="value" :value="value">{{ value }}</option></select></div>
           <div class="form-row"><label class="form-row-label">{{ t('bhyve.cpuCores') }}</label><input v-model="config.cpu" type="number" min="1" /></div>
           <div class="form-row"><label class="form-row-label">{{ t('bhyve.memory') }}</label><input v-model="config.memory" placeholder="1024M" /></div>
