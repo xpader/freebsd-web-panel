@@ -672,6 +672,8 @@ pub struct VmDetail {
     pub memory_resident: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub console_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uptime: Option<u64>,
     pub networks: Vec<VmNetwork>,
     pub disks: Vec<VmDisk>,
     pub snapshots: Vec<VmSnapshot>,
@@ -900,6 +902,17 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
         i += 1;
     }
 
+    // Extract uptime from PID if running.
+    let uptime = if state.starts_with("running") {
+        state
+            .find('(')
+            .and_then(|s| state[s + 1..].find(')').map(|e| &state[s + 1..s + 1 + e]))
+            .and_then(|pid_str| pid_str.parse::<u32>().ok())
+            .and_then(read_uptime)
+    } else {
+        None
+    };
+
     // Read .conf file.
     let config = read_vm_config(vm_name);
 
@@ -924,6 +937,7 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
         auto_start: false,
         memory_resident,
         console_port,
+        uptime,
         networks,
         disks,
         snapshots,
@@ -940,6 +954,49 @@ fn get_kv<'a>(sub: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 fn get_kv_opt(sub: &[(String, String)], key: &str) -> Option<String> {
     get_kv(sub, key).map(|s| s.to_string())
+}
+
+/// Read process elapsed time via `ps -o etime= -p <pid>` and return total seconds.
+fn read_uptime(pid: u32) -> Option<u64> {
+    let output = Command::new("ps")
+        .args(["-o", "etime=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    parse_etime_to_secs(&s)
+}
+
+/// Parse `ps etime` format (`[[dd-]hh:]mm:ss`) into total seconds.
+fn parse_etime_to_secs(s: &str) -> Option<u64> {
+    let (days, rest) = if let Some((d, r)) = s.split_once('-') {
+        (d.parse::<u64>().ok()?, r)
+    } else {
+        (0, s)
+    };
+    let parts: Vec<&str> = rest.split(':').collect();
+    let (hours, mins, secs) = match parts.len() {
+        3 => (
+            parts[0].parse::<u64>().ok()?,
+            parts[1].parse::<u64>().ok()?,
+            parts[2].parse::<u64>().ok()?,
+        ),
+        2 => (
+            0,
+            parts[0].parse::<u64>().ok()?,
+            parts[1].parse::<u64>().ok()?,
+        ),
+        _ => return None,
+    };
+    Some(days * 86400 + hours * 3600 + mins * 60 + secs)
 }
 
 fn vm_config_path(name: &str) -> Result<std::path::PathBuf, String> {

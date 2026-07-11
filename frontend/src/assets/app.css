@@ -376,6 +376,7 @@ tr:hover td { background: var(--bg-elev2); }
 .kv-table { width: 100%; border-collapse: collapse; }
 .kv-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .kv-table td:first-child { width: 40%; color: var(--text-dim); white-space: nowrap; }
+.kv-table.four-col td:nth-child(odd) { width: 20%; color: var(--text-dim); white-space: nowrap; }
 .kv-table tr:last-child td { border-bottom: none; }
 
 /* ---- Repository config form ---- */
