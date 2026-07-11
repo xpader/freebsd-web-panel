@@ -1081,6 +1081,22 @@ fn read_vm_config(name: &str) -> std::collections::BTreeMap<String, String> {
     map
 }
 
+/// Build a sort key that orders diskN/networkN entries numerically
+/// (disk0, disk1, …, disk10) rather than lexicographically (disk0, disk10, disk1).
+fn config_sort_key(key: &str) -> String {
+    for prefix in &["disk", "network"] {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            if let Some(pos) = rest.find('_') {
+                if let Ok(n) = rest[..pos].parse::<u32>() {
+                    let suffix = &rest[pos..];
+                    return format!("{}{:010}{}", prefix, n, suffix);
+                }
+            }
+        }
+    }
+    key.to_string()
+}
+
 /// Serialize a full config map to the vm-bhyve .conf file format string.
 fn serialize_config(config: &std::collections::BTreeMap<String, String>) -> String {
     let priority: &[&str] = &[
@@ -1103,10 +1119,13 @@ fn serialize_config(config: &std::collections::BTreeMap<String, String>) -> Stri
         }
     }
 
-    for (key, value) in config {
-        if written.contains(key.as_str()) {
-            continue;
-        }
+    let mut remaining: Vec<(&String, &String)> = config
+        .iter()
+        .filter(|(k, _)| !written.contains(k.as_str()))
+        .collect();
+    remaining.sort_by(|a, b| config_sort_key(a.0).cmp(&config_sort_key(b.0)));
+
+    for (key, value) in remaining {
         let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
         content.push_str(key);
         content.push_str("=\"");
