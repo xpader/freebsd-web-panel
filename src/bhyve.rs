@@ -629,6 +629,33 @@ pub fn stop_vm(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Create and attach a new disk to a VM via `vm add -d disk -t <type> -s <size> <name>`.
+/// Valid types: `zvol`, `sparse-zvol`, `file`.
+pub fn add_disk(name: &str, disk_type: &str, size: &str) -> Result<(), String> {
+    let valid_types = ["zvol", "sparse-zvol", "file"];
+    if !valid_types.contains(&disk_type) {
+        return Err(format!("invalid disk type: {disk_type}"));
+    }
+    if size.is_empty() {
+        return Err("disk size must not be empty".to_string());
+    }
+    let output = Command::new(VM)
+        .args(["add", "-d", "disk", "-t", disk_type, "-s", size, name])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if !stderr.is_empty() {
+            stderr
+        } else {
+            format!("vm add failed (exit {})", output.status)
+        };
+        return Err(msg);
+    }
+    Ok(())
+}
+
 // ── vm info ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -948,23 +975,8 @@ fn read_vm_config(name: &str) -> std::collections::BTreeMap<String, String> {
     map
 }
 
-pub fn update_vm_config(
-    name: &str,
-    new_config: &std::collections::BTreeMap<String, String>,
-) -> Result<(), String> {
-    let path = vm_config_path(name)?;
-    let backup = path.with_extension("conf.fwp.bak");
-    std::fs::copy(&path, &backup).map_err(|e| format!("backup VM configuration failed: {e}"))?;
-
-    // Merge: start from the existing config, then overlay the submitted values.
-    // This preserves keys that exist in the file but are not shown in the UI
-    // (e.g. network0_span, hostbridge, comports, cpu_sockets, etc.).
-    let mut config = read_vm_config(name);
-    for (key, value) in new_config {
-        config.insert(key.clone(), value.clone());
-    }
-
-    // Write keys in a natural order: loader & boot, cpu, memory, then the rest.
+/// Serialize a full config map to the vm-bhyve .conf file format string.
+fn serialize_config(config: &std::collections::BTreeMap<String, String>) -> String {
     let priority: &[&str] = &[
         "loader", "bhyveload_loader", "bhyveload_args", "loader_timeout",
         "grub_install0", "grub_run0",
@@ -985,7 +997,7 @@ pub fn update_vm_config(
         }
     }
 
-    for (key, value) in &config {
+    for (key, value) in config {
         if written.contains(key.as_str()) {
             continue;
         }
@@ -995,11 +1007,56 @@ pub fn update_vm_config(
         content.push_str(&escaped);
         content.push_str("\"\n");
     }
+    content
+}
 
+/// Write the config map back to the .conf file atomically (with backup).
+fn write_vm_config_file(name: &str, config: &std::collections::BTreeMap<String, String>) -> Result<(), String> {
+    let path = vm_config_path(name)?;
+    let backup = path.with_extension("conf.fwp.bak");
+    std::fs::copy(&path, &backup).map_err(|e| format!("backup VM configuration failed: {e}"))?;
+
+    let content = serialize_config(config);
     let tmp = path.with_extension("conf.fwp.tmp");
     std::fs::write(&tmp, content).map_err(|e| format!("write VM configuration failed: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("replace VM configuration failed: {e}"))?;
     Ok(())
+}
+
+pub fn update_vm_config(
+    name: &str,
+    new_config: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    // Merge: start from the existing config, then overlay the submitted values.
+    // Empty string values mean "delete this key".
+    let mut config = read_vm_config(name);
+    for (key, value) in new_config {
+        if value.is_empty() {
+            config.remove(key);
+        } else {
+            config.insert(key.clone(), value.clone());
+        }
+    }
+    write_vm_config_file(name, &config)
+}
+
+/// Remove a device's configuration keys (disk{index}_* or network{index}_*) from the .conf file.
+/// Does NOT delete any physical resources.
+pub fn delete_device(name: &str, prefix: &str, index: u32) -> Result<(), String> {
+    let mut config = read_vm_config(name);
+    let dev_prefix = format!("{prefix}{index}_");
+    let keys_to_remove: Vec<String> = config
+        .keys()
+        .filter(|k| k.starts_with(&dev_prefix))
+        .cloned()
+        .collect();
+    if keys_to_remove.is_empty() {
+        return Ok(());
+    }
+    for key in &keys_to_remove {
+        config.remove(key);
+    }
+    write_vm_config_file(name, &config)
 }
 
 /// Read the VNC port for a VM from its .conf file.
@@ -1011,6 +1068,82 @@ pub fn get_vnc_port(name: &str) -> Option<u16> {
     } else {
         None
     }
+}
+
+// ── Disk resources ────────────────────────────────────────────────
+
+/// Supported file extensions for `file`-type disk images.
+const DISK_FILE_EXTENSIONS: &[&str] = &["img", "iso", "raw", "qcow2", "vmdk", "vhd"];
+
+/// Disk resources available for a VM: files in the VM directory and ZVOLs under the VM's dataset.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskResources {
+    /// Filenames in the VM directory with supported extensions (e.g. disk0.img).
+    pub files: Vec<String>,
+    /// ZVOL names under the VM's dataset (relative names, e.g. disk1).
+    pub zvols: Vec<String>,
+}
+
+/// List disk resources for a VM.
+/// - Files: scans `<datastore.path>/<vm_name>/` for files with known disk extensions.
+/// - ZVOLs: runs `zfs list -H -o name -t volume -r <dataset>/<vm_name>` to find ZVOLs under the VM's dataset.
+pub fn list_disk_resources(name: &str) -> Result<DiskResources, String> {
+    let config_path = vm_config_path(name)?;
+    let vm_dir = config_path
+        .parent()
+        .ok_or("cannot resolve VM directory")?;
+
+    // ── files ──
+    let mut files = Vec::new();
+    if let Ok(dir) = std::fs::read_dir(vm_dir) {
+        for entry in dir.flatten() {
+            let entry_path = entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with('.') {
+                continue;
+            }
+            if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                if DISK_FILE_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
+                    files.push(fname);
+                }
+            }
+        }
+    }
+    files.sort();
+
+    // ── zvols ──
+    let mut zvols = Vec::new();
+    // Find the datastore that contains this VM to get the ZFS dataset.
+    let vm_dir_str = vm_dir.to_string_lossy().to_string();
+    for datastore in list_datastores()? {
+        if vm_dir_str.starts_with(&datastore.path) {
+            if let Some(dataset) = &datastore.zfs_dataset {
+                let child_dataset = format!("{dataset}/{name}");
+                let output = Command::new(ZFS)
+                    .args(["list", "-H", "-o", "name", "-t", "volume", "-r", &child_dataset])
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output()
+                    .map_err(|e| format!("zfs list failed: {e}"))?;
+                if output.status.success() {
+                    let prefix = format!("{child_dataset}/");
+                    for line in String::from_utf8_lossy(&output.stdout).lines() {
+                        let line = line.trim();
+                        if let Some(rel) = line.strip_prefix(&prefix) {
+                            zvols.push(rel.to_string());
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    zvols.sort();
+
+    Ok(DiskResources { files, zvols })
 }
 
 // ── vm-bhyve initialization ───────────────────────────────────────

@@ -11,6 +11,15 @@ export function fmtBytes(b) {
   return `${v.toFixed(i < 2 ? 0 : 1)} ${u[i]}`;
 }
 
+export function fmtBytesStr(s) {
+  if (!s) return '';
+  const match = String(s).match(/^\s*(\d+)/);
+  if (!match) return '';
+  const n = Number(match[1]);
+  if (!n) return '';
+  return fmtBytes(n);
+}
+
 export function fmtRate(bps) {
   if (!bps || bps < 1) return '0 B/s';
   const u = ['B/s', 'KB/s', 'MB/s', 'GB/s'];

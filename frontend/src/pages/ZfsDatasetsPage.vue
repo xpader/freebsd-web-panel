@@ -60,7 +60,7 @@ async function snapshotDataset(name) {
   if (!result) return;
   try {
     await api.post('/api/zfs/snapshots', { dataset: name, name: result.name });
-    toast.toast(t('zfs.snapCreated', { name, snap: result.name }));
+    toast.toast(t('zfs.snapCreated', { name: `${name}@${result.name}` }));
   } catch (e) {
     await alert(t('zfs.snapCreateFailed'), e.message || t('zfs.snapCreateFailed'));
   }

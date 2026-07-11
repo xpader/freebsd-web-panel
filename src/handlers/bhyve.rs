@@ -96,6 +96,19 @@ pub async fn vm_detail(
     Ok(Json(detail))
 }
 
+/// GET /api/bhyve/vms/{name}/disk-resources — list available disk files and ZVOLs.
+pub async fn disk_resources(
+    Path(name): Path<String>,
+) -> ApiResult<Json<bhyve::DiskResources>> {
+    validate_vm_name(&name)?;
+    let name_clone = name.clone();
+    let resources = tokio::task::spawn_blocking(move || bhyve::list_disk_resources(&name_clone))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+    Ok(Json(resources))
+}
+
 /// PUT /api/bhyve/vms/{name} — replace VM configuration key-values.
 #[derive(Debug, Deserialize)]
 pub struct UpdateVmConfigBody {
@@ -145,6 +158,84 @@ pub async fn vm_start(
         &format!("/api/bhyve/vms/{}/start", name),
         200,
         Some(format!("started vm {}", name)),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/bhyve/vms/{name}/disks — create and attach a new disk.
+#[derive(Debug, Deserialize)]
+pub struct AddDiskBody {
+    pub disk_type: String,
+    pub size: String,
+}
+
+pub async fn add_disk(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<AddDiskBody>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    let n = name.clone();
+    let dt = body.disk_type.clone();
+    let sz = body.size.clone();
+    tokio::task::spawn_blocking(move || bhyve::add_disk(&n, &dt, &sz))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        &format!("/api/bhyve/vms/{}/disks", name),
+        200,
+        Some(format!("created disk (type={}, size={}) for vm {}", body.disk_type, body.size, name)),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// DELETE /api/bhyve/vms/{name}/disks/{index} — remove a disk from config (does not delete data).
+pub async fn delete_disk(
+    State(state): State<AppState>,
+    Path((name, index)): Path<(String, u32)>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    let n = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::delete_device(&n, "disk", index))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "DELETE",
+        &format!("/api/bhyve/vms/{}/disks/{}", name, index),
+        200,
+        Some(format!("removed disk {} from vm {}", index, name)),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// DELETE /api/bhyve/vms/{name}/networks/{index} — remove a network interface from config.
+pub async fn delete_network(
+    State(state): State<AppState>,
+    Path((name, index)): Path<(String, u32)>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    let n = name.clone();
+    tokio::task::spawn_blocking(move || bhyve::delete_device(&n, "network", index))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "DELETE",
+        &format!("/api/bhyve/vms/{}/networks/{}", name, index),
+        200,
+        Some(format!("removed network {} from vm {}", index, name)),
     );
     Ok(StatusCode::OK)
 }

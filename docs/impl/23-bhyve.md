@@ -193,6 +193,10 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | POST | `/api/bhyve/vms` | 创建 VM（body: name/template/datastore/size/cpu/memory） |
 | GET | `/api/bhyve/vms/{name}` | VM 详情（vm info + .conf） |
 | PUT | `/api/bhyve/vms/{name}` | 替换 VM 配置（body: config 键值映射） |
+| GET | `/api/bhyve/vms/{name}/disk-resources` | 磁盘可选资源（VM 目录文件 + 数据集 ZVOL） |
+| POST | `/api/bhyve/vms/{name}/disks` | 创建并附加新磁盘（body: disk_type/size，调用 `vm add`） |
+| DELETE | `/api/bhyve/vms/{name}/disks/{index}` | 从配置中移除磁盘（不删除物理数据） |
+| DELETE | `/api/bhyve/vms/{name}/networks/{index}` | 从配置中移除网络适配器 |
 | POST | `/api/bhyve/vms/{name}/start` | 启动 VM |
 | POST | `/api/bhyve/vms/{name}/stop` | 停止 VM |
 | GET | `/api/bhyve/images` | vm-bhyve 镜像列表 |
@@ -247,3 +251,54 @@ VNC 按钮仅在 `vm.vnc`（列表）或 `vm.vnc_port`（详情）存在且 VM �
 - `vm start` 使用 `.status()` — 如果 bhyve 启动失败，错误信息可能不够详细（stderr 未捕获到 spawn 端）
 - VNC 无密码认证（bhyve fbuf 不支持），依赖面板 token 认证保护 WS 端点
 - `vm info` 的 snapshots 段解析依赖制表符分隔格式，未来 vm-bhyve 版本变更可能需适配
+
+## 磁盘配置：diskX_dev 与 diskX_name 的关系
+
+vm-bhyve 中 `diskX_dev`（存储后端类型）和 `diskX_name`（磁盘名称/路径）配合使用，`name` 的含义随 `dev` 类型而变：
+
+| `dev` | `name` 含义 | 示例 |
+|---|---|---|
+| `file` | guest 目录下的文件名 | `disk0.img` |
+| `zvol` | guest 数据集下创建的 ZVOL 名称（仅名称，非完整路径） | `disk1` → `<dataset>/<vm>/disk1` |
+| `custom` | 任意完整路径，包括 `/dev/zvol/...` 设备路径 | `/dev/zvol/zroot/disks/disk1` |
+| `iscsi` | iSCSI 会话目标 `session[/lun]` | `1/0` |
+
+关键点：
+- `zvol` 的 `name` 只能是相对名称，vm-bhyve 会自动拼接为 `<VM_DS_ZFS_DATASET>/<vm_name>/<name>`。
+- 如需使用 guest 数据集之外的 ZVOL，必须使用 `custom` 类型并在 `name` 中填写完整的 `/dev/zvol/...` 路径。
+- 编辑界面已移除 `sparse-zvol` 选项（`zvol` 和 `sparse-zvol` 在运行时完全等价，区别仅在 `vm create` 创建磁盘时是否使用 `zfs create -s`）。如果配置文件中已有 `sparse-zvol`，加载时自动归一化为 `zvol`。
+- `diskX_dev` 值为 `file` 时不写入配置文件（`file` 是 vm-bhyve 的默认值），加载时缺少该字段的磁盘自动补为 `file`。
+- `diskX_opts` 为空时不写入配置文件，避免产生无意义的空配置项。
+
+### 磁盘管理架构（独立即时操作）
+
+磁盘与其它配置（基础设置、网络、图形等）完全解耦，采用独立的即时操作模式：
+
+- **磁盘列表视图**：磁盘以只读卡片列表展示（索引、模拟设备、数据类型、名称/路径、选项），每项右侧有编辑和删除按钮。
+- **编辑磁盘**：点击编辑弹出模态框，修改后即时 PUT 保存该磁盘的配置键（不影响其它未保存的配置）。
+- **导入磁盘**：点击导入弹出模态框（与编辑相同的表单），选择已有文件/ZVOL 进行关联，保存后即时生效。
+- **创建磁盘**：弹出表单（类型：ZVol/稀疏 ZVol/文件 + 大小），调用 `POST /api/bhyve/vms/{name}/disks`（`vm add -d disk -t <type> -s <size> <name>`），物理创建磁盘镜像并附加到配置。
+- **删除磁盘**：确认后调用 `DELETE /api/bhyve/vms/{name}/disks/{index}`，从配置文件中移除该磁盘的所有键（`disk{N}_*`），不删除物理磁盘文件或 ZVol。
+- 所有磁盘操作后自动刷新磁盘列表和可选资源，不影响其它标签页的未保存配置。
+
+磁盘名称字段根据 `dev` 类型约束：
+  - `file`：下拉选择 VM 目录下已有的磁盘文件（`.img`/`.iso`/`.raw`/`.qcow2`/`.vmdk`/`.vhd`），已被其它 file 磁盘选中的文件不可重复选择。
+  - `zvol`：下拉选择 VM 数据集下的 ZVOL（通过 `zfs list -t volume -r <dataset>/<vm>` 查询），已被其它 zvol 磁盘选中的不可重复选择。
+  - `custom`：文件选择器，可选任意路径。
+  - `iscsi`：文本输入，保持不变。
+
+### 网络管理架构（独立即时操作）
+
+网络与磁盘一样，采用独立的即时操作模式，与基础设置等标签页完全解耦：
+
+- **网络列表视图**：表格展示（编号、适配器类型、交换机、MAC 地址），右侧编辑/删除按钮。
+- **编辑/添加网络**：弹出模态框修改（编号可编辑、适配器类型、交换机、MAC），保存后即时 PUT。
+- **删除网络**：确认后调用 `DELETE /api/bhyve/vms/{name}/networks/{index}`，即时生效。
+- 所有操作后自动刷新网络列表，不影响其它标签页。
+
+### 配置保存架构
+
+- 基础设置/图形/其它设备标签页各有独立的保存按钮，调用 `PUT /api/bhyve/vms/{name}` 保存所有非磁盘、非网络配置键。
+- 磁盘和网络操作均为即时保存，不依赖保存按钮。
+- 后端 `update_vm_config` 采用合并写入：读取现有配置 → 覆盖提交的键（空值删除）→ 原子写入（先写临时文件再 rename，写入前自动备份 `.conf.fwp.bak`）。
+- `delete_device`（通用函数）读取完整配置 → 移除指定 `{prefix}{N}_*` 键（支持 `disk` 和 `network` 前缀）→ 原子写入。
