@@ -39,7 +39,6 @@ const props = defineProps({
 <style scoped>
 .section-card {
   padding: 0;
-  overflow: hidden;
 }
 
 /* ---- Tab mode ---- */

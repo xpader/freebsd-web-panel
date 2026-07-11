@@ -32,6 +32,7 @@ pub struct CreateVmBody {
     pub size: Option<String>,
     pub cpu: Option<u32>,
     pub memory: Option<String>,
+    pub image: Option<String>,
 }
 
 pub async fn create_vm(
@@ -51,6 +52,7 @@ pub async fn create_vm(
     let size = body.size.clone();
     let cpu = body.cpu;
     let memory = body.memory.clone();
+    let image = body.image.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         bhyve::create_vm(
@@ -60,6 +62,7 @@ pub async fn create_vm(
             size.as_deref(),
             cpu,
             memory.as_deref(),
+            image.as_deref(),
         )
     })
     .await
@@ -306,10 +309,49 @@ pub async fn vm_stop(
     Ok(StatusCode::OK)
 }
 
+/// POST /api/bhyve/vms/{name}/install — boot VM with an ISO for OS installation.
+#[derive(Debug, Deserialize)]
+pub struct InstallBody {
+    pub iso: String,
+}
+
+pub async fn vm_install(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<InstallBody>,
+) -> ApiResult<StatusCode> {
+    validate_vm_name(&name)?;
+    if body.iso.is_empty() {
+        return Err(ApiError::BadRequest("iso is required".into()));
+    }
+    let n = name.clone();
+    let iso = body.iso.clone();
+    tokio::task::spawn_blocking(move || bhyve::install_vm(&n, &iso))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        &format!("/api/bhyve/vms/{}/install", name),
+        200,
+        Some(format!("installing vm {} from iso {}", name, body.iso)),
+    );
+    Ok(StatusCode::OK)
+}
+
 /// GET /api/bhyve/images — list vm-bhyve images.
 pub async fn list_images() -> ApiResult<Json<Vec<bhyve::VmImage>>> {
     let images = bhyve::list_images().map_err(ApiError::Command)?;
     Ok(Json(images))
+}
+
+/// GET /api/bhyve/img-files — list disk image files from .img directory.
+pub async fn list_img_files() -> ApiResult<Json<Vec<bhyve::IsoImage>>> {
+    let files = bhyve::list_img_files().map_err(ApiError::Command)?;
+    Ok(Json(files))
 }
 
 /// GET /api/bhyve/switches — list virtual switches.

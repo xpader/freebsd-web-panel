@@ -552,6 +552,29 @@ pub fn list_isos() -> Result<Vec<IsoImage>, String> {
     Ok(isos)
 }
 
+/// List disk image files from the default datastore `.img` directory.
+pub fn list_img_files() -> Result<Vec<IsoImage>, String> {
+    let path = std::path::Path::new(&default_datastore_path()?).join(".img");
+    let mut imgs = Vec::new();
+    if let Ok(dir) = std::fs::read_dir(path) {
+        for entry in dir {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            imgs.push(IsoImage { name, size });
+        }
+    }
+    imgs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(imgs)
+}
+
 // ── vm create ─────────────────────────────────────────────────────
 
 /// Create a new virtual machine via `vm create`.
@@ -562,6 +585,7 @@ pub fn create_vm(
     size: Option<&str>,
     cpu: Option<u32>,
     memory: Option<&str>,
+    image: Option<&str>,
 ) -> Result<(), String> {
     let cpu_str;
     let mut args: Vec<&str> = vec!["create"];
@@ -584,6 +608,10 @@ pub fn create_vm(
     if let Some(m) = memory {
         args.push("-m");
         args.push(m);
+    }
+    if let Some(img) = image {
+        args.push("-i");
+        args.push(img);
     }
     args.push(name);
 
@@ -625,6 +653,22 @@ pub fn stop_vm(name: &str) -> Result<(), String> {
             format!("vm stop {} failed (exit {})", name, output.status)
         };
         return Err(msg);
+    }
+    Ok(())
+}
+
+/// Install OS to a VM via `vm install <name> <iso>`.
+/// This boots the VM with the ISO attached for OS installation.
+pub fn install_vm(name: &str, iso: &str) -> Result<(), String> {
+    let status = Command::new(VM)
+        .args(["install", name, iso])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("vm install {} {} failed (exit {})", name, iso, status));
     }
     Ok(())
 }

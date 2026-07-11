@@ -87,6 +87,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/bhyve/vms/{name}/networks/{index}", delete(handlers::bhyve::delete_network))
         .route("/api/bhyve/vms/{name}/start", post(handlers::bhyve::vm_start))
         .route("/api/bhyve/vms/{name}/stop", post(handlers::bhyve::vm_stop))
+        .route("/api/bhyve/vms/{name}/install", post(handlers::bhyve::vm_install))
         .route("/api/bhyve/images", get(handlers::bhyve::list_images))
         .route("/api/bhyve/switches", get(handlers::bhyve::list_switches).post(handlers::bhyve::create_switch))
         .route("/api/bhyve/switches/{name}", get(handlers::bhyve::switch_detail).delete(handlers::bhyve::delete_switch))
@@ -94,6 +95,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/bhyve/datastores/{name}", delete(handlers::bhyve::delete_datastore))
         .route("/api/bhyve/templates", get(handlers::bhyve::list_templates))
         .route("/api/bhyve/isos", get(handlers::bhyve::list_isos))
+        .route("/api/bhyve/img-files", get(handlers::bhyve::list_img_files))
         // --- ZFS ---
         .route("/api/zfs/pools", get(handlers::zfs::pool_list))
         .route("/api/zfs/pools/{name}", get(handlers::zfs::pool_status))
