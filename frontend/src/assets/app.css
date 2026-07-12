@@ -160,6 +160,9 @@ a:hover { color: var(--accent-hover); }
   border-right: 1px solid var(--border);
   flex-shrink: 0;
   overflow-y: auto;
+  position: sticky;
+  top: 52px;
+  height: calc(100vh - 52px);
 }
 .sidebar-nav { padding: 12px 0; }
 .sidebar-nav a {
