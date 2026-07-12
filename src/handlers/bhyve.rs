@@ -211,6 +211,20 @@ pub async fn vm_start(
     Ok(StatusCode::OK)
 }
 
+/// GET /api/bhyve/vms/{name}/state — lightweight state-only query.
+///
+/// Uses `pgrep` + file checks instead of spawning `vm list`/`vm info`.
+/// Intended for polling after start/stop actions.
+pub async fn vm_state(Path(name): Path<String>) -> ApiResult<Json<bhyve::VmState>> {
+    validate_vm_name(&name)?;
+    let n = name.clone();
+    let state = tokio::task::spawn_blocking(move || bhyve::get_vm_state(&n))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+    Ok(Json(state))
+}
+
 /// POST /api/bhyve/vms/{name}/disks — create and attach a new disk.
 #[derive(Debug, Deserialize)]
 pub struct AddDiskBody {

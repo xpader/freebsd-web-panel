@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import { pollUntil } from '../lib/poll.js';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -67,6 +68,20 @@ async function load() {
   }
 }
 
+/** Update a single VM's state in the local list using the lightweight endpoint. */
+async function pollVmState(name) {
+  try {
+    const st = await api.get(`/api/bhyve/vms/${encodeURIComponent(name)}/state`);
+    const vm = vms.value.find((v) => v.name === name);
+    if (vm) {
+      vm.state = st.state;
+      vm.pid = st.pid ?? null;
+      vm.locked_by = st.locked_by ?? null;
+    }
+    return st.state;
+  } catch { return null; }
+}
+
 async function vmAction(name, action) {
   pendingActions.value.add(`${name}:${action}`);
   try {
@@ -75,12 +90,17 @@ async function vmAction(name, action) {
       ? t('bhyve.startedToast', { name })
       : t('bhyve.stoppedToast', { name }));
   } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  } finally {
     pendingActions.value.delete(`${name}:${action}`);
-    await new Promise((r) => setTimeout(r, 1000));
-    await load();
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    return;
   }
+  // Poll the lightweight state endpoint until target state (or timeout).
+  const targetState = action === 'start' ? 'running' : 'stopped';
+  await pollUntil(async () => {
+    const st = await pollVmState(name);
+    return st === targetState;
+  });
+  pendingActions.value.delete(`${name}:${action}`);
 }
 
 onMounted(async () => {

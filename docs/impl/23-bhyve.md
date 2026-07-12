@@ -9,6 +9,7 @@ Bhyve 模块封装 vm-bhyve（`/usr/local/sbin/vm`）CLI，提供虚拟机列表
 - VM 详情（`vm info` + `.conf` 配置文件，含网络接口/磁盘/快照/控制台端口）与完整 VM 配置编辑
 - VM 创建（`vm create`，可选模板/数据存储/CPU/内存/磁盘大小 + 安装 ISO）
 - VM 启动/停止（`vm start` / `vm stop`）
+- VM 轻量状态查询（`pgrep` + 文件检查，用于前端轮询）
 - VM 串口控制台（WebSocket + PTY + xterm.js，通过 `cu -l` 连接 nmdm 设备）
 - VM VNC 代理（WebSocket→TCP 代理 + noVNC 前端）
 - vm-bhyve 镜像管理（`vm image list` / `vm image create` / `vm image provision` / `vm image destroy`）
@@ -213,6 +214,7 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | DELETE | `/api/bhyve/vms/{name}/networks/{index}` | 从配置中移除网络适配器 |
 | POST | `/api/bhyve/vms/{name}/start` | 启动 VM |
 | POST | `/api/bhyve/vms/{name}/stop` | 停止 VM |
+| GET | `/api/bhyve/vms/{name}/state` | 轻量状态查询（pgrep，不 spawn `vm` 命令，返回 `{state, pid, locked_by}`） |
 | GET | `/api/bhyve/images` | vm-bhyve 镜像列表 |
 | POST | `/api/bhyve/images` | 从虚拟机创建镜像（body: name/description/uncompressed，调用 `vm image create`） |
 | POST | `/api/bhyve/images/{uuid}/provision` | 从镜像创建虚拟机（body: new_name/datastore，调用 `vm image provision`） |

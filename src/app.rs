@@ -83,6 +83,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/bhyve/status", get(handlers::bhyve::status))
         .route("/api/bhyve/init", post(handlers::bhyve::init))
         .route("/api/bhyve/vms/{name}", get(handlers::bhyve::vm_detail).put(handlers::bhyve::update_vm_config).delete(handlers::bhyve::destroy_vm))
+        .route("/api/bhyve/vms/{name}/state", get(handlers::bhyve::vm_state))
         .route("/api/bhyve/vms/{name}/disk-resources", get(handlers::bhyve::disk_resources))
         .route("/api/bhyve/vms/{name}/disks", post(handlers::bhyve::add_disk))
         .route("/api/bhyve/vms/{name}/disks/{index}", delete(handlers::bhyve::delete_disk))

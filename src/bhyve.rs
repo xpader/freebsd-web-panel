@@ -108,6 +108,13 @@ pub struct VmSwitch {
     pub ports: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct VmState {
+    pub state: String,
+    pub pid: Option<u32>,
+    pub locked_by: Option<String>,
+}
+
 // ── vm list ───────────────────────────────────────────────────────
 
 /// Parse the `vm list` table into structured data.
@@ -798,6 +805,102 @@ pub fn poweroff_vm(name: &str) -> Result<(), String> {
 /// Deletes all disk images and configuration for the VM.
 pub fn destroy_vm(name: &str) -> Result<(), String> {
     crate::cmd::run_sync_str(VM, &["destroy", "-f", name]).map(|_| ())
+}
+
+/// Lightweight state check for a single VM.
+///
+/// Replicates vm-bhyve's own state logic without spawning the full `vm list`
+/// or `vm info` pipeline. Uses `pgrep` to find the bhyve/loader process, then
+/// checks `run.lock` / `<name>.save` files for locked/suspended states.
+///
+/// State values: `"running"`, `"bootloader"`, `"stopped"`, `"locked"`,
+/// `"suspended"`.
+pub fn get_vm_state(name: &str) -> Result<VmState, String> {
+    // 1. Running: look for a `bhyve: <name>` process.
+    if let Some(pid) = pgrep_bhyve_pid(name) {
+        return Ok(VmState {
+            state: "running".into(),
+            pid: Some(pid),
+            locked_by: None,
+        });
+    }
+
+    // 2. Bootloader: look for `bhyveload`/`grub-bhyve` process for this VM.
+    if let Some(pid) = pgrep_loader_pid(name) {
+        return Ok(VmState {
+            state: "bootloader".into(),
+            pid: Some(pid),
+            locked_by: None,
+        });
+    }
+
+    // Resolve the VM directory for file checks.
+    let vm_dir = match vm_config_path(name) {
+        Ok(p) => p.parent().map(|p| p.to_path_buf()),
+        Err(_) => None,
+    };
+
+    if let Some(dir) = vm_dir {
+        // 3. Locked: run.lock exists but no running process on this host.
+        let run_lock = dir.join("run.lock");
+        if run_lock.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&run_lock) {
+                let host = content.trim();
+                if !host.is_empty() {
+                    return Ok(VmState {
+                        state: "locked".into(),
+                        pid: None,
+                        locked_by: Some(host.into()),
+                    });
+                }
+            }
+        }
+
+        // 4. Suspended: `<name>.save` file exists.
+        let save_file = dir.join(format!("{name}.save"));
+        if save_file.is_file() {
+            return Ok(VmState {
+                state: "suspended".into(),
+                pid: None,
+                locked_by: None,
+            });
+        }
+    }
+
+    // 5. Default.
+    Ok(VmState {
+        state: "stopped".into(),
+        pid: None,
+        locked_by: None,
+    })
+}
+
+/// Run `pgrep -f "bhyve: <name>$"` and return the PID if found.
+fn pgrep_bhyve_pid(name: &str) -> Option<u32> {
+    let pattern = format!("bhyve: {name}$");
+    pgrep_first(&pattern)
+}
+
+/// Run `pgrep -fl "bhyveload|grub-bhyve"` and return the PID of the entry
+/// whose last command-line word matches `name`.
+fn pgrep_loader_pid(name: &str) -> Option<u32> {
+    let out = crate::cmd::run_sync_str("pgrep", &["-fl", "bhyveload|grub-bhyve"]).ok()?;
+    for line in out.lines() {
+        let mut parts = line.splitn(2, ' ');
+        let pid_str = parts.next()?;
+        let cmdline = parts.next()?.trim();
+        // vm-bhyve matches the last whitespace-delimited word as the guest name.
+        if cmdline.split_whitespace().next_back() == Some(name) {
+            return pid_str.parse().ok();
+        }
+    }
+    None
+}
+
+/// Run `pgrep -f <pattern>` and return the first PID found.
+fn pgrep_first(pattern: &str) -> Option<u32> {
+    let out = crate::cmd::run_sync_str("pgrep", &["-f", pattern]).ok()?;
+    out.lines().next()?.trim().parse().ok()
 }
 
 /// Install OS to a VM via `vm install <name> <iso>`.

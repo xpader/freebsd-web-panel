@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
 import { fmtBytesStr, fmtUptime } from '../lib/format.js';
+import { pollUntil } from '../lib/poll.js';
 import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
@@ -18,6 +19,8 @@ const name = route.params.name;
 const d = ref(null);
 const error = ref('');
 const acting = ref(false);
+const transitioning = ref('');  // '' | 'start' | 'stop'
+const refreshing = ref(false);
 
 const isRunning = computed(() => {
   if (!d.value) return false;
@@ -28,6 +31,10 @@ const isLocked = computed(() => d.value?.state === 'locked');
 
 function stateBadge() {
   if (!d.value) return { cls: '', text: '' };
+  if (transitioning.value === 'start')
+    return { cls: 'badge-warn', text: t('bhyve.starting') };
+  if (transitioning.value === 'stop')
+    return { cls: 'badge-warn', text: t('bhyve.stopping') };
   const st = d.value.state;
   if (st === 'running' || st.startsWith('running') || st.startsWith('bootloader'))
     return { cls: 'badge-success', text: t('bhyve.stateRunning') };
@@ -147,43 +154,71 @@ const graphicsEntries = computed(() => {
 
 
 async function reload() {
+  refreshing.value = true;
   error.value = '';
   try {
     d.value = await api.get(`/api/bhyve/vms/${encodeURIComponent(name)}`);
   } catch (err) {
     error.value = err.message || '';
+  } finally {
+    refreshing.value = false;
   }
 }
 
 async function vmAction(action) {
   acting.value = true;
+  transitioning.value = action === 'start' ? 'start' : 'stop';
   try {
     await api.post(`/api/bhyve/vms/${encodeURIComponent(name)}/${action}`);
     toast.toast(action === 'start'
       ? t('bhyve.startedToast', { name })
       : t('bhyve.stoppedToast', { name }));
-    await new Promise((r) => setTimeout(r, 1000));
-    await reload();
   } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  } finally {
     acting.value = false;
+    transitioning.value = '';
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    return;
   }
+  // Poll the lightweight state endpoint until target state (or timeout).
+  await pollUntil(async () => {
+    try {
+      const st = await api.get(`/api/bhyve/vms/${encodeURIComponent(name)}/state`);
+      if (d.value) d.value.state = st.state;
+      return action === 'start'
+        ? st.state === 'running' || st.state === 'bootloader'
+        : st.state === 'stopped';
+    } catch { return false; }
+  });
+  // Final full reload to get fresh runtime data (uptime, memory, network stats).
+  await reload();
+  acting.value = false;
+  transitioning.value = '';
 }
 
 async function poweroffVm() {
   if (!await confirm(t('bhyve.poweroff'), t('bhyve.poweroffConfirm', { name }))) return;
   acting.value = true;
+  transitioning.value = 'stop';
   try {
     await api.post(`/api/bhyve/vms/${encodeURIComponent(name)}/poweroff`);
     toast.toast(t('bhyve.poweroffToast', { name }));
-    await new Promise((r) => setTimeout(r, 1000));
-    await reload();
   } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  } finally {
     acting.value = false;
+    transitioning.value = '';
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    return;
   }
+  // Poll the lightweight state endpoint until stopped (or timeout).
+  await pollUntil(async () => {
+    try {
+      const st = await api.get(`/api/bhyve/vms/${encodeURIComponent(name)}/state`);
+      if (d.value) d.value.state = st.state;
+      return st.state === 'stopped';
+    } catch { return false; }
+  });
+  await reload();
+  acting.value = false;
+  transitioning.value = '';
 }
 
 async function destroyVm() {
@@ -224,6 +259,9 @@ onMounted(reload);
       <a :href="`#/bhyve/edit/${name}`" class="btn-secondary btn-sm"><i class="fa-solid fa-pen-to-square"></i> {{ t('common.edit') }}</a>
       <button v-if="!isRunning" class="btn-sm btn-danger" :disabled="acting" @click="destroyVm">
         <i class="fa-solid fa-trash"></i> {{ t('bhyve.destroyVm') }}
+      </button>
+      <button class="btn-secondary btn-sm" :disabled="acting" @click="reload">
+        <i :class="['fa-solid fa-rotate-right', { 'fa-spin': refreshing }]"></i> {{ t('common.refresh') }}
       </button>
     </div>
   </div>
