@@ -312,6 +312,27 @@ input[type="checkbox"], input[type="radio"] {
 }
 .btn-loading { pointer-events: none; opacity: 0.6; }
 
+/* ---- Network config modal ---- */
+.checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; }
+.checkbox-row span { color: var(--text); font-size: 14px; }
+.config-section { margin-bottom: 1.25rem; }
+.config-section h4 { margin-bottom: 8px; }
+.config-section > .form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  grid-template-columns: none;
+}
+.config-section > .form-row .input { flex: 1; }
+.config-section > .form-row > button { flex-shrink: 0; }
+.config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.config-grid .kv { display: flex; flex-direction: column; gap: 4px; }
+.config-grid .kv-key { font-size: 12px; }
+.config-grid .input { padding: 6px 10px; }
+@media (max-width: 600px) { .config-grid { grid-template-columns: 1fr; } }
+
 button, .btn, .btn-secondary, .btn-danger {
   display: inline-flex;
   align-items: center;

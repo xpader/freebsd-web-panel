@@ -1,17 +1,24 @@
-# 17 — 网络接口管理（只读）
+# 17 — 网络接口管理
 
 ## 概述
 
-网络接口管理模块提供接口列表、路由表和默认网关的只读查询。
-P1 阶段实现，所有数据通过 FreeBSD 原生 API 获取（`getifaddrs(3)`、`sysctl(NET_RT_DUMP)`），不 spawn `ifconfig`/`netstat` 子进程。
+网络接口管理模块提供接口列表、路由表、默认网关的查询，以及基于 rc.conf 的接口配置管理（读/写/应用）、虚拟接口创建与销毁。
+
+所有核心数据通过 FreeBSD 原生 API 获取（`getifaddrs(3)`、`sysctl(NET_RT_DUMP)`、各种 ioctl），不 spawn `ifconfig`/`netstat` 子进程。仅 `sysrc` 用于 rc.conf 读写，`ifconfig` 用于配置应用和接口创建/销毁。
 
 ## 数据获取方式
 
 | 数据 | API | 子进程？ |
 |---|---|---|
-| 接口名/flags/IP地址/MAC/MTU/metric/link_state | `getifaddrs(3)` — 遍历 `ifaddrs` 链表 | ❌ |
+| 接口名/flags/IP地址/MAC/MTU/metric/link_state/baudrate | `getifaddrs(3)` — 遍历 `ifaddrs` 链表 | ❌ |
+| 接口分组 | `SIOCGIFGROUP` ioctl（`fill_iface_ioctl`） | ❌ |
+| 接口描述 | `SIOCGIFDESCR` ioctl（`fill_iface_ioctl`） | ❌ |
+| 驱动状态文本 | `SIOCGIFSTATUS` ioctl（`fill_iface_ioctl`） | ❌ |
+| Bridge 成员 | `SIOCGDRVSPEC(BRDGGIFS)` ioctl（`fill_iface_ioctl`） | ❌ |
 | 路由表 | `sysctl([CTL_NET, PF_ROUTE, 0, 0, NET_RT_DUMP, 0])` | ❌ |
-| rc.conf 中的 `defaultrouter` | `sysrc -n defaultrouter` | ✅（唯一子进程） |
+| rc.conf `defaultrouter` / `ifconfig_*` / `cloned_interfaces` | `sysrc` | ✅ |
+| DNS 配置 | 直接读写 `/etc/resolv.conf` | ❌ |
+| 配置应用/接口创建/销毁 | `ifconfig` 命令 | ✅ |
 
 ### getifaddrs 解析
 
@@ -20,63 +27,187 @@ P1 阶段实现，所有数据通过 FreeBSD 原生 API 获取（`getifaddrs(3)`
 
 - **AF_INET**: IPv4 地址 (`sockaddr_in`)，含 netmask (`ifa_netmask`) 和 broadcast (`ifa_dstaddr`)
 - **AF_INET6**: IPv6 地址 (`sockaddr_in6`)，含 prefix_len（从 netmask 计算）
-- **AF_LINK**: `sockaddr_dl` 提供 MAC 地址（`sdl_data[sdl_nlen..]`）和 `struct if_data`（MTU/metric/link_state）
+- **AF_LINK**: `sockaddr_dl` 提供 MAC 地址（`sdl_data[sdl_nlen..]`）和 `struct if_data`（MTU/metric/link_state/baudrate）
 
 flags 从任意记录的 `ifa_flags` 读取（同一接口所有记录的 flags 相同）。
+
+### fill_iface_ioctl — 4 合 1 ioctl 填充
+
+单个 socket fd 上依次执行 4 个 ioctl，填充每接口的额外信息：
+
+1. **SIOCGIFGROUP** → `iface.groups`（两次调用模式：先取长度，再取数据）
+2. **SIOCGIFDESCR** → `iface.description`（256 字节缓冲区）
+3. **SIOCGIFSTATUS** → `iface.status`（801 字节缓冲区，清理 tab/空白）
+4. **SIOCGDRVSPEC(BRDGGIFS)** → `iface.members`（256 条目缓冲区，格式化 info 字符串）
+
+需手动定义的常量（libc crate 未提供）：
+- `SIOCGIFGROUP = 0xc0286988`
+- `SIOCGIFDESCR = 0xc020692a`
+- `SIOCGIFSTATUS = 0xc331693b`
+- `SIOCGDRVSPEC = 0xc028697b`
+- `BRDGGIFS = 6`
 
 ### 路由表解析
 
 通过 `libc::sysctl` 获取 `NET_RT_DUMP` 二进制缓冲区，按 `rtm_msglen` 遍历每条消息。
 
 **关键发现（FreeBSD 15）**：部分路由设置了 `RTA_NETMASK` 位但缓冲区中不包含 netmask sockaddr（占 0 字节）。
-这导致基于 RTA 位的顺序扫描会将后续 sockaddr 错位读取。
+遇到 `sa_len == 0` 的 NETMASK 槽位时跳过不前进。
 
-**解决方案**：遇到 `sa_len == 0` 的 NETMASK 槽位时跳过不前进。对于 DST/GATEWAY 的零长度 sockaddr，
-按 `sizeof(long)` 前进（这些在 IPv6 路由中确实占据 8 字节）。
-
-需自定义的结构体和常量（libc crate 未提供）：
-- `RtMsghdr`（168 字节）+ `RtMetrics`（128 字节）
+需自定义的结构体和常量：
+- `RtMsghdr`（152 字节）+ `RtMetrics`（112 字节，`_filler: [u64; 2]`）
 - `RTM_GET`、`RTA_DST/GATEWAY/NETMASK/IFP/IFA` 等常量
 - `RTF_UP/GATEWAY/HOST/STATIC/BLACKHOLE` 等常量
 
 ## API
 
+### 只读查询
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/network/interfaces` | 全部接口列表 |
+| GET | `/api/network/interfaces` | 全部接口列表（含 groups/description/status/members） |
 | GET | `/api/network/interfaces/{name}` | 单接口详情（404 if not found） |
 | GET | `/api/network/routes` | 完整路由表（IPv4 + IPv6） |
 | GET | `/api/network/gateway` | 默认网关（运行时值 + rc.conf 持久值） |
+| GET | `/api/network/dns` | DNS 配置（解析 `/etc/resolv.conf`） |
+
+### 接口配置管理
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/network/interfaces/{name}/rcconf` | 读取 rc.conf 中该接口的解析配置 |
+| PUT | `/api/network/interfaces/{name}/rcconf` | 保存配置：先 ifconfig 应用，成功后写 rc.conf |
+| POST | `/api/network/interfaces/{name}/apply` | 手动重新应用 rc.conf 配置到运行时 |
+
+### 接口生命周期
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/network/interfaces` | 创建虚拟接口（`ifconfig <name> create` + `cloned_interfaces`） |
+| DELETE | `/api/network/interfaces/{name}` | 销毁虚拟接口（`ifconfig <name> destroy` + 清理 rc.conf） |
+
+### DNS 管理
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| PUT | `/api/network/dns/nameservers` | 设置 nameservers（原子写 + 备份） |
 
 全部需要认证。
 
 ## 数据结构
 
+### 运行时接口信息
+
 ```rust
-NetworkInterface { name, flags: Vec<String>, is_up, is_loopback, mtu, metric,
-                   mac: Option<String>, link_state, ipv4: Vec<IpConfig>, ipv6: Vec<IpConfig> }
+NetworkInterface {
+    name, description: Option<String>, status: Option<String>,
+    flags: Vec<String>, is_up, is_loopback, is_physical,
+    mtu: u32, metric: u32, mac: Option<String>,
+    link_state: String, baudrate: u64,
+    groups: Vec<String>,           // SIOCGIFGROUP
+    members: Vec<BridgeMember>,    // SIOCGDRVSPEC(BRDGGIFS)
+    ipv4: Vec<IpConfig>, ipv6: Vec<IpConfig>,
+}
+BridgeMember { name: String, info: String }
 IpConfig { address, netmask, prefix_len, broadcast, is_alias }
-Route { destination, gateway, flags, interface }
+Route { destination, gateway, flags, interface, expire }
 DefaultGateway { gateway: Option, interface: Option, configured: Option }
 ```
 
-## 文件变更
+### rc.conf 解析配置
 
-| 文件 | 动作 |
+```rust
+IfaceRcConfConfig {
+    interface: String, is_bridge: bool, is_lagg: bool, is_up: bool,
+    ipv4: Option<String>, ipv4_netmask: Option<String>,
+    ipv4_aliases: Vec<RcIpv4Alias>,     // { address, netmask }
+    ipv6: Vec<RcIpv6Entry>,             // { address, prefixlen }
+    bridge_members: Vec<String>,
+    lagg_proto: Option<String>, lagg_ports: Vec<String>,
+    mtu: Option<u32>, description: Option<String>,
+    media: Option<String>, mediaopt: Option<String>,
+}
+```
+
+### rc.conf 解析与写入
+
+**解析**（`parse_iface_rcconf`）：从 `sysrc -e -a` 输出提取 `ifconfig_<name>`、`ifconfig_<name>_aliases`、`ifconfig_<name>_ipv6` 三个键，用 `parse_ifconfig_tokens` 将值字符串解析为结构化字段。
+
+**写入**（`build_primary_value` 等）：将结构化配置重建为 ifconfig 值字符串，通过 `sysrc KEY=VALUE` 写入。description 用单引号包裹（`description 'Hello World'`）以区分空格分隔的其他参数。
+
+**配置应用**（`apply_ifconfig`）：
+1. 先用 `read_interfaces()` 读取当前运行时状态
+2. 应用非结构性属性（IP/MTU/description/media/UP）
+3. 应用 LAGG 协议和端口（跳过已有端口）
+4. 应用 bridge 成员（跳过已有成员、其他 bridge 的成员）
+5. 应用 IPv4 别名（跳过已有地址）
+6. 应用 IPv6 条目（跳过已有地址）
+
+**PUT 流程**：先 ifconfig 应用 → 成功后写 rc.conf。ifconfig 失败则不写 rc.conf，返回错误。
+
+## 配置按钮可见性规则
+
+以下接口不显示"配置"按钮：
+- 有 driver status 文本的接口（如 tap/tun 的 "Opened by PID"、fwe 的 "ch N dma N"）
+- 接口名不匹配 `^[a-zA-Z0-9_.]{1,15}$` 的接口
+
+以下接口额外显示"销毁"按钮（红色）：
+- 非物理、非 loopback 的虚拟接口（需同时满足配置按钮的条件）
+
+## cloned_interfaces 管理
+
+- **创建接口**：自动将接口名添加到 `cloned_interfaces`（epair 用基名，如 `epair0a` → `epair0`）
+- **销毁接口**：从 `cloned_interfaces` 移除对应条目
+
+## Bridge / LAGG 成员选择
+
+前端配置弹窗中，bridge 成员和 LAGG 端口使用下拉选择而非自由输入。候选列表自动过滤：
+- 排除接口自身、loopback、其他 bridge/lagg 接口
+- bridge 成员排除已在其他 bridge 中的接口（当前 bridge 的成员保留为可选项）
+
+## 前端
+
+- **页面**：`frontend/src/pages/NetworkPage.vue`（Vue 3 SFC）
+- **API 客户端**：`frontend/src/lib/api.js`
+- **i18n**：`frontend/src/i18n/translations.js` 中 `net.*` 命名空间
+
+### 前端布局
+
+1. 工具栏：创建接口按钮 + 刷新按钮
+2. 物理接口卡片网格（含详情/配置/销毁按钮）
+3. 虚拟接口卡片网格（同上）
+4. 默认网关卡片
+5. 路由表（IPv4/IPv6 分段）
+
+### 配置弹窗
+
+- 接口属性：描述、MTU、Media、Mediaopt
+- UP 勾选框
+- IPv4 配置（地址 + 子网掩码）
+- IPv4 别名列表（可增删）
+- IPv6 配置列表（可增删）
+- LAGG 配置（仅 lagg 接口）：协议下拉 + 端口下拉列表
+- Bridge 成员（仅 bridge 接口）：成员下拉列表
+- 保存按钮：先应用后持久化
+
+### 创建接口弹窗
+
+- 类型选择：Bridge / LAGG / VLAN / TAP / Epair / 自定义
+- 编号输入（自定义类型时为名称输入）
+- 名称预览（epair 显示 `epair0a epair0b`）
+
+## 文件清单
+
+| 文件 | 说明 |
 |---|---|
-| `src/handlers/network.rs` | 新建 — 全部 handler + getifaddrs/sysctl 解析逻辑 |
-| `src/handlers/mod.rs` | 加 `pub mod network;` |
-| `src/app.rs` | 替换 stub 路由为 4 条真实路由 |
-| `src/handlers/mod_stubs.rs` | 删除 `status!(network, ...)` |
-| `web/js/pages/network.js` | 新建 — 接口卡片 + 路由表 + 网关 + 详情弹窗 |
-| `web/js/main.js` | `/network` 从 `makePlannedPage` 改为 `renderNetwork` |
-| `web/js/i18n/translations.js` | 新增 `net.*` 命名空间（en + zh） |
-| `web/css/app.css` | 新增 `.card-grid`、`.net-iface`、`.kv` 等样式 |
+| `src/handlers/network.rs` | 全部 handler + getifaddrs/sysctl/ioctl 解析 + rc.conf 解析/写入/应用 |
+| `src/app.rs` | 路由注册（11 条 network 路由） |
+| `frontend/src/pages/NetworkPage.vue` | 接口卡片 + 路由表 + 网关 + 详情弹窗 + 配置弹窗 + 创建弹窗 |
+| `frontend/src/i18n/translations.js` | `net.*` 命名空间（en + zh） |
+| `frontend/src/assets/app.css` | `.net-iface`、`.config-section`、`.config-grid`、`.checkbox-row` 等样式 |
 
 ## 已知限制
 
-- **media/description/groups** 未实现（需 SIOCGIFMEDIA/SIOCGIFDESC/SIOCGIFGROUP ioctl，P2）
-- **接口修改**（up/down、改 IP、别名增删）未实现（P2）
-- **DNS 管理**未实现（P2）
+- DHCP/SYNCDHCP 配置在 ifconfig apply 时跳过（由 dhclient 管理）
+- 删除别名/成员需手动销毁后重建（ifconfig 无原子"替换"语义）
 - 部分边缘路由的 gateway 显示为空（IPv6 零长度网关地址）
-- 路由表中的 link 层路由显示为 `link:ifname` 而非 netstat 的 `link#N` 格式

@@ -5,11 +5,13 @@
 //! Only `defaultrouter` from rc.conf uses `sysrc`.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Command;
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
@@ -225,6 +227,40 @@ pub struct DnsConfig {
     pub domain: Option<String>,
     pub options: Vec<String>,
     pub sortlist: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RcIpv4Alias {
+    pub address: String,
+    pub netmask: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RcIpv6Entry {
+    pub address: String,
+    pub prefixlen: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct IfaceRcConfConfig {
+    pub interface: String,
+    pub is_bridge: bool,
+    pub is_lagg: bool,
+    pub is_up: bool,
+    pub ipv4: Option<String>,
+    pub ipv4_netmask: Option<String>,
+    pub ipv4_aliases: Vec<RcIpv4Alias>,
+    pub ipv6: Vec<RcIpv6Entry>,
+    pub bridge_members: Vec<String>,
+    pub lagg_proto: Option<String>,
+    pub lagg_ports: Vec<String>,
+    pub mtu: Option<u32>,
+    pub description: Option<String>,
+    pub media: Option<String>,
+    pub mediaopt: Option<String>,
 }
 
 // ─── Interface reading via getifaddrs(3) ───────────────────────────────────
@@ -868,6 +904,77 @@ fn route_flags_to_string(flags: i32) -> String {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize)]
+pub struct CreateIfaceBody {
+    pub name: String,
+}
+
+/// POST `/api/network/interfaces` — create a virtual interface via `ifconfig <name> create`.
+pub async fn interface_create(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateIfaceBody>,
+) -> ApiResult<(StatusCode, Json<NetworkInterface>)> {
+    validate_iface_name(&body.name)?;
+
+    // Reject names that look like physical interfaces.
+    if crate::sysinfo::is_hardware_iface(&body.name) {
+        return Err(ApiError::BadRequest(
+            "interface name conflicts with a physical interface".into(),
+        ));
+    }
+
+    // Create via ifconfig.
+    let output = Command::new(IFCONFIG)
+        .args([&body.name, "create"])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(ApiError::Command(if stderr.is_empty() {
+            stdout
+        } else {
+            stderr
+        }));
+    }
+
+    // Read back the created interface.
+    // epair is special: `ifconfig epair0 create` produces epair0a + epair0b,
+    // not an interface named "epair0".
+    let interfaces = read_interfaces().map_err(ApiError::Io)?;
+    let lookup_name = if body.name.starts_with("epair")
+        && !body.name.ends_with('a')
+        && !body.name.ends_with('b')
+    {
+        format!("{}a", body.name)
+    } else {
+        body.name.clone()
+    };
+    let iface = interfaces
+        .into_iter()
+        .find(|i| i.name == lookup_name)
+        .ok_or_else(|| {
+            ApiError::Internal(format!(
+                "interface '{}' created but not found on re-read",
+                body.name
+            ))
+        })?;
+
+    // Persist to cloned_interfaces in rc.conf.
+    add_cloned_interface(&body.name);
+
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        "/api/network/interfaces",
+        201,
+        Some(format!("created interface {}", body.name)),
+    );
+
+    Ok((StatusCode::CREATED, Json(iface)))
+}
+
 /// GET `/api/network/interfaces` — list all network interfaces.
 pub async fn list_interfaces() -> ApiResult<Json<Vec<NetworkInterface>>> {
     let interfaces = read_interfaces().map_err(ApiError::Io)?;
@@ -883,6 +990,465 @@ pub async fn interface_detail(Path(name): Path<String>) -> ApiResult<Json<Networ
         .find(|iface| iface.name == name)
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("interface '{name}' not found")))
+}
+
+/// GET `/api/network/interfaces/{name}/rcconf` — parsed rc.conf ifconfig config for an interface.
+pub async fn interface_rcconf(Path(name): Path<String>) -> ApiResult<Json<IfaceRcConfConfig>> {
+    validate_iface_name(&name)?;
+    let mut cfg = parse_iface_rcconf(&name);
+    cfg.interface = name.clone();
+    cfg.is_bridge = name.starts_with("bridge");
+    cfg.is_lagg = name.starts_with("lagg");
+    Ok(Json(cfg))
+}
+
+/// PUT `/api/network/interfaces/{name}/rcconf` — save structured ifconfig config to rc.conf.
+pub async fn interface_rcconf_save(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+    Json(cfg): Json<IfaceRcConfConfig>,
+) -> ApiResult<Json<IfaceRcConfConfig>> {
+    validate_iface_name(&name)?;
+
+    // Validate string fields — reject null bytes / newlines.
+    let validate_str = |s: &str| -> ApiResult<()> {
+        if s.contains('\0') || s.contains('\n') || s.contains('\r') {
+            return Err(ApiError::BadRequest(
+                "value must not contain newlines or null bytes".into(),
+            ));
+        }
+        Ok(())
+    };
+    if let Some(ref ip) = cfg.ipv4 {
+        validate_str(ip)?;
+    }
+    if let Some(ref nm) = cfg.ipv4_netmask {
+        validate_str(nm)?;
+    }
+    for a in &cfg.ipv4_aliases {
+        validate_str(&a.address)?;
+        validate_str(&a.netmask)?;
+    }
+    for e in &cfg.ipv6 {
+        validate_str(&e.address)?;
+        validate_str(&e.prefixlen)?;
+    }
+    for m in &cfg.bridge_members {
+        validate_str(m)?;
+        validate_iface_name(m)?;
+    }
+    for p in &cfg.lagg_ports {
+        validate_str(p)?;
+        validate_iface_name(p)?;
+    }
+    if let Some(ref d) = cfg.description {
+        validate_str(d)?;
+    }
+    if let Some(ref m) = cfg.media {
+        validate_str(m)?;
+    }
+    if let Some(ref m) = cfg.mediaopt {
+        validate_str(m)?;
+    }
+    if let Some(ref p) = cfg.lagg_proto {
+        validate_str(p)?;
+    }
+
+    let primary_key = format!("ifconfig_{name}");
+    let aliases_key = format!("ifconfig_{name}_aliases");
+    let ipv6_key = format!("ifconfig_{name}_ipv6");
+
+    // 1. Apply to live system first — if this fails, don't touch rc.conf.
+    apply_ifconfig(&name, &cfg).map_err(ApiError::Command)?;
+
+    // 2. Persist to rc.conf.
+    let primary_val = build_primary_value(&cfg);
+    if primary_val.is_empty() {
+        let _ = Command::new(SYSRC).args(["-x", &primary_key]).output();
+    } else {
+        let assignment = format!("{primary_key}={primary_val}");
+        run_sysrc(&assignment)?;
+    }
+
+    let aliases_val = build_aliases_value(&cfg.ipv4_aliases);
+    if aliases_val.is_empty() {
+        let _ = Command::new(SYSRC).args(["-x", &aliases_key]).output();
+    } else {
+        let assignment = format!("{aliases_key}={aliases_val}");
+        run_sysrc(&assignment)?;
+    }
+
+    let ipv6_val = build_ipv6_value(&cfg.ipv6);
+    if ipv6_val.is_empty() {
+        let _ = Command::new(SYSRC).args(["-x", &ipv6_key]).output();
+    } else {
+        let assignment = format!("{ipv6_key}={ipv6_val}");
+        run_sysrc(&assignment)?;
+    }
+
+    // Re-read to confirm what was stored.
+    let mut result = parse_iface_rcconf(&name);
+    result.interface = name.clone();
+    result.is_bridge = name.starts_with("bridge");
+    result.is_lagg = name.starts_with("lagg");
+
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "PUT",
+        &format!("/api/network/interfaces/{name}/rcconf"),
+        200,
+        Some(format!("updated rc.conf ifconfig_{name}")),
+    );
+
+    Ok(Json(result))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApplyResult {
+    pub success: bool,
+    pub output: String,
+}
+
+const IFCONFIG: &str = "/sbin/ifconfig";
+
+/// Run `ifconfig <name> <args>` and collect stdout+stderr.
+fn run_ifconfig(name: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd_args = vec![name];
+    cmd_args.extend_from_slice(args);
+    let output = Command::new(IFCONFIG)
+        .args(&cmd_args)
+        .output()
+        .map_err(|e| format!("ifconfig exec failed: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        return Err(if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        });
+    }
+    Ok(stdout)
+}
+
+/// Build ifconfig CLI args (excluding the interface name) from the primary
+/// structured config. Only includes non-structural properties (IP, MTU,
+/// description, media, UP). Bridge members and LAGG ports are handled
+/// separately by `apply_ifconfig` to avoid duplicate-add errors.
+fn build_ifconfig_args(cfg: &IfaceRcConfConfig) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+
+    // IPv4 (skip DHCP — applied by dhclient, not ifconfig)
+    if let Some(ref ipv4) = cfg.ipv4 {
+        let ip = ipv4.trim();
+        if !ip.is_empty()
+            && !ip.eq_ignore_ascii_case("DHCP")
+            && !ip.eq_ignore_ascii_case("SYNCDHCP")
+        {
+            args.push("inet".into());
+            args.push(ip.into());
+            if let Some(ref nm) = cfg.ipv4_netmask {
+                let nm = nm.trim();
+                if !nm.is_empty() {
+                    args.push("netmask".into());
+                    args.push(nm.into());
+                }
+            }
+        }
+    }
+
+    // MTU
+    if let Some(mtu) = cfg.mtu {
+        if mtu > 0 {
+            args.push("mtu".into());
+            args.push(mtu.to_string());
+        }
+    }
+
+    // Description — always emit, even if empty (to clear existing description).
+    if let Some(ref desc) = cfg.description {
+        args.push("description".into());
+        args.push(desc.trim().into());
+    }
+
+    // Media / Mediaopt
+    if let Some(ref media) = cfg.media {
+        let m = media.trim();
+        if !m.is_empty() {
+            args.push("media".into());
+            args.push(m.into());
+        }
+    }
+    if let Some(ref mediaopt) = cfg.mediaopt {
+        let m = mediaopt.trim();
+        if !m.is_empty() {
+            args.push("mediaopt".into());
+            args.push(m.into());
+        }
+    }
+
+    // UP
+    if cfg.is_up {
+        args.push("up".into());
+    }
+
+    args
+}
+
+/// Apply an interface's structured config to the live system via ifconfig.
+/// Reads the current live state first and skips properties already in effect
+/// (existing bridge members, lagg ports, IP aliases) to avoid duplicate-add errors.
+fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String> {
+    let mut output = String::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    // Read current live state.
+    let live = read_interfaces()
+        .map_err(|e| format!("failed to read live interfaces: {e}"))?
+        .into_iter()
+        .find(|i| i.name == name);
+
+    let existing_members: Vec<String> = live
+        .as_ref()
+        .map(|i| i.members.iter().map(|m| m.name.clone()).collect())
+        .unwrap_or_default();
+    let existing_v4: Vec<String> = live
+        .as_ref()
+        .map(|i| i.ipv4.iter().map(|ip| ip.address.clone()).collect())
+        .unwrap_or_default();
+    let existing_v6: Vec<String> = live
+        .as_ref()
+        .map(|i| i.ipv6.iter().map(|ip| ip.address.clone()).collect())
+        .unwrap_or_default();
+
+    // 1. Apply primary non-structural config (IP, MTU, description, media, UP).
+    let primary_args = build_ifconfig_args(cfg);
+    if !primary_args.is_empty() {
+        let refs: Vec<&str> = primary_args.iter().map(|s| s.as_str()).collect();
+        match run_ifconfig(name, &refs) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("ifconfig {name} {}: {e}", primary_args.join(" "))),
+        }
+    }
+
+    // 2. Apply LAGG protocol.
+    if let Some(ref proto) = cfg.lagg_proto {
+        let p = proto.trim();
+        if !p.is_empty() {
+            match run_ifconfig(name, &["laggproto", p]) {
+                Ok(o) => output.push_str(&o),
+                Err(e) => errors.push(format!("laggproto {p}: {e}")),
+            }
+        }
+    }
+
+    // 3. Add LAGG ports (skip existing).
+    for port in &cfg.lagg_ports {
+        let p = port.trim();
+        if p.is_empty() || existing_members.iter().any(|m| m == p) {
+            continue;
+        }
+        match run_ifconfig(name, &["laggport", p]) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("laggport {p}: {e}")),
+        }
+    }
+
+    // 4. Add bridge members (skip existing).
+    for m in &cfg.bridge_members {
+        let m = m.trim();
+        if m.is_empty() || existing_members.iter().any(|em| em == m) {
+            continue;
+        }
+        match run_ifconfig(name, &["addm", m]) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("addm {m}: {e}")),
+        }
+    }
+
+    // 5. Apply each IPv4 alias (skip existing).
+    for alias in &cfg.ipv4_aliases {
+        let addr = alias.address.trim();
+        if addr.is_empty() || existing_v4.iter().any(|a| a == addr) {
+            continue;
+        }
+        let nm = alias.netmask.trim();
+        let alias_args: Vec<&str> = if nm.is_empty() {
+            vec!["alias", addr]
+        } else {
+            vec!["alias", addr, "netmask", nm]
+        };
+        match run_ifconfig(name, &alias_args) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("alias {addr}: {e}")),
+        }
+    }
+
+    // 6. Apply each IPv6 entry (skip existing).
+    for entry in &cfg.ipv6 {
+        let addr = entry.address.trim();
+        if addr.is_empty() || existing_v6.iter().any(|a| a == addr) {
+            continue;
+        }
+        let pl = entry.prefixlen.trim();
+        let v6_args: Vec<&str> = if pl.is_empty() {
+            vec!["inet6", addr]
+        } else {
+            vec!["inet6", addr, "prefixlen", pl]
+        };
+        match run_ifconfig(name, &v6_args) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("inet6 {addr}: {e}")),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(output)
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// Read `cloned_interfaces` from rc.conf as a Vec of interface names.
+fn read_cloned_interfaces() -> Vec<String> {
+    let output = match Command::new(SYSRC).args(["-n", "cloned_interfaces"]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if val.is_empty() {
+        return Vec::new();
+    }
+    val.split_whitespace().map(|s| s.to_string()).collect()
+}
+
+/// Add a name to `cloned_interfaces` in rc.conf (idempotent).
+/// For epair, the base name (e.g. "epair0" from "epair0a") is used.
+fn add_cloned_interface(name: &str) {
+    let clone_name = epair_base_name(name).unwrap_or_else(|| name.to_string());
+    let mut list = read_cloned_interfaces();
+    if list.iter().any(|s| s == &clone_name) {
+        return;
+    }
+    list.push(clone_name);
+    let val = list.join(" ");
+    let assignment = format!("cloned_interfaces={val}");
+    let _ = Command::new(SYSRC).arg(&assignment).output();
+}
+
+/// Remove a name from `cloned_interfaces` in rc.conf.
+/// For epair, the base name is used.
+fn remove_cloned_interface(name: &str) {
+    let clone_name = epair_base_name(name).unwrap_or_else(|| name.to_string());
+    let list = read_cloned_interfaces();
+    let new_list: Vec<&String> = list.iter().filter(|s| s.as_str() != clone_name).collect();
+    if new_list.is_empty() {
+        let _ = Command::new(SYSRC).args(["-x", "cloned_interfaces"]).output();
+    } else {
+        let val = new_list.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+        let assignment = format!("cloned_interfaces={val}");
+        let _ = Command::new(SYSRC).arg(&assignment).output();
+    }
+}
+
+/// For epair interfaces like "epair0a" or "epair0b", return "epair0".
+fn epair_base_name(name: &str) -> Option<String> {
+    if !name.starts_with("epair") {
+        return None;
+    }
+    let suffix = &name[5..];
+    // Strip trailing 'a' or 'b'.
+    let base = suffix.trim_end_matches(|c| c == 'a' || c == 'b');
+    if base.is_empty() {
+        return None;
+    }
+    Some(format!("epair{base}"))
+}
+
+/// POST `/api/network/interfaces/{name}/apply` — apply rc.conf config via ifconfig.
+pub async fn interface_apply(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+) -> ApiResult<Json<ApplyResult>> {
+    validate_iface_name(&name)?;
+
+    let cfg = parse_iface_rcconf(&name);
+
+    let output = apply_ifconfig(&name, &cfg).map_err(ApiError::Command)?;
+
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        &format!("/api/network/interfaces/{name}/apply"),
+        200,
+        Some(format!("apply ifconfig_{name}: ok")),
+    );
+
+    Ok(Json(ApplyResult {
+        success: true,
+        output,
+    }))
+}
+
+/// DELETE `/api/network/interfaces/{name}` — destroy a virtual interface via `ifconfig <name> destroy`.
+/// Also removes any rc.conf entries for the interface.
+pub async fn interface_destroy(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    validate_iface_name(&name)?;
+
+    // Don't allow destroying physical interfaces or loopback.
+    let interfaces = read_interfaces().map_err(ApiError::Io)?;
+    let iface = interfaces
+        .iter()
+        .find(|i| i.name == name)
+        .ok_or_else(|| ApiError::NotFound(format!("interface '{name}' not found")))?;
+
+    if iface.is_physical || iface.is_loopback {
+        return Err(ApiError::BadRequest(
+            "cannot destroy a physical or loopback interface".into(),
+        ));
+    }
+
+    // Destroy via ifconfig.
+    let output = Command::new(IFCONFIG)
+        .args([&name, "destroy"])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(ApiError::Command(if stderr.is_empty() {
+            stdout
+        } else {
+            stderr
+        }));
+    }
+
+    // Clean up rc.conf entries.
+    let primary_key = format!("ifconfig_{name}");
+    let aliases_key = format!("ifconfig_{name}_aliases");
+    let ipv6_key = format!("ifconfig_{name}_ipv6");
+    for key in [&primary_key, &aliases_key, &ipv6_key] {
+        let _ = Command::new(SYSRC).args(["-x", key]).output();
+    }
+    remove_cloned_interface(&name);
+
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "DELETE",
+        &format!("/api/network/interfaces/{name}"),
+        200,
+        Some(format!("destroyed interface {name}")),
+    );
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET `/api/network/routes` — full routing table (IPv4 + IPv6).
@@ -982,6 +1548,506 @@ fn read_defaultrouter() -> Option<String> {
     } else {
         Some(val)
     }
+}
+
+/// Run `sysrc KEY=VALUE` and return an error on failure.
+fn run_sysrc(assignment: &str) -> ApiResult<()> {
+    let output = Command::new(SYSRC).arg(assignment).output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(ApiError::Command(if stderr.is_empty() {
+            "sysrc failed".into()
+        } else {
+            stderr
+        }));
+    }
+    Ok(())
+}
+
+/// Read all `ifconfig_<name>` rc.conf entries and parse into structured config.
+fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
+    let output = match Command::new(SYSRC).args(["-e", "-a"]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return IfaceRcConfConfig::default(),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let primary_key = format!("ifconfig_{name}");
+    let aliases_key = format!("ifconfig_{name}_aliases");
+    let ipv6_key = format!("ifconfig_{name}_ipv6");
+
+    let mut kv: std::collections::HashMap<String, String> = HashMap::new();
+    for line in stdout.lines() {
+        if let Some((k, v)) = parse_sysrc_export_line(line) {
+            kv.insert(k, v);
+        }
+    }
+
+    let mut cfg = IfaceRcConfConfig::default();
+
+    // Parse primary value.
+    if let Some(ref val) = kv.get(&primary_key) {
+        let parsed = parse_ifconfig_tokens(val);
+        cfg.is_up = parsed.is_up;
+        cfg.ipv4 = parsed.ipv4;
+        cfg.ipv4_netmask = parsed.ipv4_netmask;
+        cfg.bridge_members = parsed.bridge_members;
+        cfg.lagg_proto = parsed.lagg_proto;
+        cfg.lagg_ports = parsed.lagg_ports;
+        cfg.mtu = parsed.mtu;
+        cfg.description = parsed.description;
+        cfg.media = parsed.media;
+        cfg.mediaopt = parsed.mediaopt;
+        // Additional inet entries beyond the first become aliases.
+        if parsed.extra_inets.len() > 1 {
+            for inet in parsed.extra_inets.iter().skip(1) {
+                cfg.ipv4_aliases.push(RcIpv4Alias {
+                    address: inet.address.clone(),
+                    netmask: inet.netmask.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    // Parse aliases value.
+    if let Some(ref val) = kv.get(&aliases_key) {
+        let parsed = parse_ifconfig_tokens(val);
+        for inet in &parsed.extra_inets {
+            cfg.ipv4_aliases.push(RcIpv4Alias {
+                address: inet.address.clone(),
+                netmask: inet.netmask.clone().unwrap_or_default(),
+            });
+        }
+    }
+
+    // Parse IPv6 value.
+    if let Some(ref val) = kv.get(&ipv6_key) {
+        let parsed = parse_ifconfig_tokens(val);
+        for e in &parsed.inet6s {
+            cfg.ipv6.push(RcIpv6Entry {
+                address: e.address.clone(),
+                prefixlen: e.prefixlen.clone().unwrap_or_default(),
+            });
+        }
+    }
+
+    cfg
+}
+
+/// Intermediate parse result.
+struct ParsedIfConfig {
+    is_up: bool,
+    ipv4: Option<String>,
+    ipv4_netmask: Option<String>,
+    extra_inets: Vec<InetEntry>,
+    inet6s: Vec<Inet6Entry>,
+    bridge_members: Vec<String>,
+    lagg_proto: Option<String>,
+    lagg_ports: Vec<String>,
+    mtu: Option<u32>,
+    description: Option<String>,
+    media: Option<String>,
+    mediaopt: Option<String>,
+}
+
+struct InetEntry {
+    address: String,
+    netmask: Option<String>,
+}
+
+struct Inet6Entry {
+    address: String,
+    prefixlen: Option<String>,
+}
+
+impl Default for ParsedIfConfig {
+    fn default() -> Self {
+        Self {
+            is_up: false,
+            ipv4: None,
+            ipv4_netmask: None,
+            extra_inets: Vec::new(),
+            inet6s: Vec::new(),
+            bridge_members: Vec::new(),
+            lagg_proto: None,
+            lagg_ports: Vec::new(),
+            mtu: None,
+            description: None,
+            media: None,
+            mediaopt: None,
+        }
+    }
+}
+
+/// Check if a token is a known ifconfig keyword (not an interface name).
+fn is_ifconfig_keyword(token: &str) -> bool {
+    matches!(
+        token,
+        "inet" | "inet6"
+            | "up"
+            | "down"
+            | "addm"
+            | "deletem"
+            | "netmask"
+            | "prefixlen"
+            | "mtu"
+            | "metric"
+            | "DHCP"
+            | "dhcp"
+            | "SYNCDHCP"
+            | "syncdhcp"
+            | "WPA"
+            | "wpa"
+            | "polling"
+            | "-polling"
+            | "staticarp"
+            | "-staticarp"
+            | "description"
+            | "media"
+            | "mediaopt"
+            | "laggproto"
+            | "laggport"
+    )
+}
+
+/// Parse an ifconfig value string into structured tokens.
+fn parse_ifconfig_tokens(value: &str) -> ParsedIfConfig {
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    let mut result = ParsedIfConfig::default();
+
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            "inet" => {
+                i += 1;
+                if i >= tokens.len() {
+                    break;
+                }
+                if tokens[i].eq_ignore_ascii_case("dhcp") {
+                    result.ipv4 = Some("DHCP".into());
+                    i += 1;
+                } else if tokens[i].eq_ignore_ascii_case("syncdhcp") {
+                    result.ipv4 = Some("SYNCDHCP".into());
+                    i += 1;
+                } else {
+                    let addr = tokens[i];
+                    let (ip, mask_from_cidr) = if let Some((ip, cidr)) = addr.split_once('/') {
+                        (ip.to_string(), cidr_to_netmask(cidr))
+                    } else {
+                        (addr.to_string(), None)
+                    };
+                    i += 1;
+                    let mut netmask = mask_from_cidr;
+                    if i < tokens.len() && tokens[i] == "netmask" {
+                        i += 1;
+                        if i < tokens.len() {
+                            netmask = Some(tokens[i].to_string());
+                            i += 1;
+                        }
+                    }
+                    result.extra_inets.push(InetEntry { address: ip, netmask });
+                }
+            }
+            "inet6" => {
+                i += 1;
+                if i >= tokens.len() {
+                    break;
+                }
+                let addr = tokens[i].to_string();
+                i += 1;
+                let mut prefixlen = None;
+                if i < tokens.len() && tokens[i] == "prefixlen" {
+                    i += 1;
+                    if i < tokens.len() {
+                        prefixlen = Some(tokens[i].to_string());
+                        i += 1;
+                    }
+                }
+                result.inet6s.push(Inet6Entry { address: addr, prefixlen });
+            }
+            "up" => {
+                result.is_up = true;
+                i += 1;
+            }
+            "down" => {
+                result.is_up = false;
+                i += 1;
+            }
+            "addm" => {
+                i += 1;
+                while i < tokens.len() && !is_ifconfig_keyword(tokens[i]) {
+                    if !result.bridge_members.contains(&tokens[i].to_string()) {
+                        result.bridge_members.push(tokens[i].to_string());
+                    }
+                    i += 1;
+                }
+            }
+            "deletem" => {
+                i += 1;
+                while i < tokens.len() && !is_ifconfig_keyword(tokens[i]) {
+                    result.bridge_members.retain(|m| m != tokens[i]);
+                    i += 1;
+                }
+            }
+            "mtu" => {
+                i += 1;
+                if i < tokens.len() {
+                    result.mtu = tokens[i].parse().ok();
+                    i += 1;
+                }
+            }
+            "description" => {
+                i += 1;
+                if i >= tokens.len() {
+                    break;
+                }
+                if tokens[i].starts_with('\'') {
+                    // Single-quoted description — collect until closing quote.
+                    let mut words: Vec<&str> = Vec::new();
+                    while i < tokens.len() {
+                        words.push(tokens[i]);
+                        if tokens[i].ends_with('\'') && tokens[i].len() > 1 {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    let joined = words.join(" ");
+                    let cleaned = joined.trim_matches('\'').to_string();
+                    result.description = Some(cleaned);
+                } else if tokens[i].starts_with('"') {
+                    // Double-quoted (old format) — collect until closing quote.
+                    let mut words: Vec<&str> = Vec::new();
+                    while i < tokens.len() {
+                        words.push(tokens[i]);
+                        if tokens[i].ends_with('"') && tokens[i].len() > 1 {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    let joined = words.join(" ");
+                    let cleaned = joined.trim_matches('"').to_string();
+                    result.description = Some(cleaned);
+                } else {
+                    // Unquoted single word.
+                    result.description = Some(tokens[i].to_string());
+                    i += 1;
+                }
+            }
+            "media" => {
+                i += 1;
+                if i < tokens.len() && tokens[i] != "mediaopt" && !is_ifconfig_keyword(tokens[i]) {
+                    result.media = Some(tokens[i].to_string());
+                    i += 1;
+                }
+            }
+            "mediaopt" => {
+                i += 1;
+                if i < tokens.len() {
+                    result.mediaopt = Some(tokens[i].to_string());
+                    i += 1;
+                }
+            }
+            "laggproto" => {
+                i += 1;
+                if i < tokens.len() {
+                    result.lagg_proto = Some(tokens[i].to_string());
+                    i += 1;
+                }
+            }
+            "laggport" => {
+                i += 1;
+                if i < tokens.len() {
+                    result.lagg_ports.push(tokens[i].to_string());
+                    i += 1;
+                }
+            }
+            "DHCP" | "dhcp" => {
+                result.ipv4 = Some("DHCP".into());
+                i += 1;
+            }
+            "SYNCDHCP" | "syncdhcp" => {
+                result.ipv4 = Some("SYNCDHCP".into());
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    // Promote first inet entry to primary IPv4.
+    if result.ipv4.is_none() {
+        if let Some(first) = result.extra_inets.first() {
+            result.ipv4 = Some(first.address.clone());
+            result.ipv4_netmask = first.netmask.clone();
+        }
+    }
+
+    result
+}
+
+/// Convert CIDR prefix length to dotted-quad netmask.
+fn cidr_to_netmask(cidr: &str) -> Option<String> {
+    let prefix: u32 = cidr.parse().ok()?;
+    if prefix > 32 {
+        return None;
+    }
+    let mask: u32 = if prefix == 0 {
+        0
+    } else {
+        !0u32 << (32 - prefix)
+    };
+    Some(format!(
+        "{}.{}.{}.{}",
+        (mask >> 24) & 0xff,
+        (mask >> 16) & 0xff,
+        (mask >> 8) & 0xff,
+        mask & 0xff
+    ))
+}
+
+/// Build the primary `ifconfig_<name>` value from structured config.
+fn build_primary_value(cfg: &IfaceRcConfConfig) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // LAGG protocol + ports come first (must precede other config).
+    if let Some(ref proto) = cfg.lagg_proto {
+        let p = proto.trim();
+        if !p.is_empty() {
+            parts.push(format!("laggproto {p}"));
+        }
+    }
+    for port in &cfg.lagg_ports {
+        let p = port.trim();
+        if !p.is_empty() {
+            parts.push(format!("laggport {p}"));
+        }
+    }
+
+    if let Some(ref ipv4) = cfg.ipv4 {
+        let ip = ipv4.trim();
+        if !ip.is_empty() {
+            if ip.eq_ignore_ascii_case("DHCP") || ip.eq_ignore_ascii_case("SYNCDHCP") {
+                parts.push(ip.to_string());
+            } else {
+                let mut s = format!("inet {ip}");
+                if let Some(ref nm) = cfg.ipv4_netmask {
+                    let nm = nm.trim();
+                    if !nm.is_empty() {
+                        s.push_str(&format!(" netmask {nm}"));
+                    }
+                }
+                parts.push(s);
+            }
+        }
+    }
+
+    if !cfg.bridge_members.is_empty() {
+        let members: Vec<&str> = cfg.bridge_members.iter().map(|s| s.as_str()).collect();
+        parts.push(format!("addm {}", members.join(" ")));
+    }
+
+    if let Some(mtu) = cfg.mtu {
+        if mtu > 0 {
+            parts.push(format!("mtu {mtu}"));
+        }
+    }
+
+    if let Some(ref desc) = cfg.description {
+        let d = desc.trim();
+        if !d.is_empty() {
+            parts.push(format!("description '{d}'"));
+        }
+    }
+
+    if let Some(ref media) = cfg.media {
+        let m = media.trim();
+        if !m.is_empty() {
+            parts.push(format!("media {m}"));
+        }
+    }
+
+    if let Some(ref mediaopt) = cfg.mediaopt {
+        let m = mediaopt.trim();
+        if !m.is_empty() {
+            parts.push(format!("mediaopt {m}"));
+        }
+    }
+
+    if cfg.is_up {
+        parts.push("up".into());
+    }
+
+    parts.join(" ")
+}
+
+/// Build the `ifconfig_<name>_aliases` value.
+fn build_aliases_value(aliases: &[RcIpv4Alias]) -> String {
+    aliases
+        .iter()
+        .filter(|a| !a.address.trim().is_empty())
+        .map(|a| {
+            let addr = a.address.trim();
+            let nm = a.netmask.trim();
+            if nm.is_empty() {
+                format!("inet {addr}")
+            } else {
+                format!("inet {addr} netmask {nm}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Build the `ifconfig_<name>_ipv6` value.
+fn build_ipv6_value(entries: &[RcIpv6Entry]) -> String {
+    entries
+        .iter()
+        .filter(|e| !e.address.trim().is_empty())
+        .map(|e| {
+            let addr = e.address.trim();
+            let pl = e.prefixlen.trim();
+            if pl.is_empty() {
+                format!("inet6 {addr}")
+            } else {
+                format!("inet6 {addr} prefixlen {pl}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Reverse sysrc's shell-style export escaping (`\"` -> `"`, `\\` -> `\`).
+fn unescape_sysrc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(n) = chars.next() {
+                out.push(n);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parse one line of `sysrc -e` output (`KEY="VALUE"`) into a (key, value) pair.
+fn parse_sysrc_export_line(line: &str) -> Option<(String, String)> {
+    let eq = line.find('=')?;
+    let key = line[..eq].trim().to_string();
+    if key.is_empty() {
+        return None;
+    }
+    let raw = &line[eq + 1..];
+    let value = if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+        unescape_sysrc(&raw[1..raw.len() - 1])
+    } else {
+        raw.to_string()
+    };
+    Some((key, value))
 }
 
 /// Validate an interface name: `^[a-zA-Z0-9_.]+$`, 1–15 chars.
@@ -1259,6 +2325,33 @@ mod tests {
         assert_eq!(ipv4_mask_to_prefix("255.255.0.0"), 16);
         assert_eq!(ipv4_mask_to_prefix("255.255.255.255"), 32);
         assert_eq!(ipv4_mask_to_prefix("0.0.0.0"), 0);
+    }
+
+    #[test]
+    fn parse_description_single_quoted() {
+        // New format: single-quoted description.
+        let val = "description 'Hello World' up";
+        let parsed = parse_ifconfig_tokens(val);
+        assert_eq!(parsed.description.as_deref(), Some("Hello World"));
+        assert!(parsed.is_up);
+    }
+
+    #[test]
+    fn parse_description_double_quoted() {
+        // Old rc.conf may have double quotes.
+        let val = r#"description "with hello" up"#;
+        let parsed = parse_ifconfig_tokens(val);
+        assert_eq!(parsed.description.as_deref(), Some("with hello"));
+        assert!(parsed.is_up);
+    }
+
+    #[test]
+    fn parse_description_unquoted() {
+        // Single word, no quotes.
+        let val = "description WAN up";
+        let parsed = parse_ifconfig_tokens(val);
+        assert_eq!(parsed.description.as_deref(), Some("WAN"));
+        assert!(parsed.is_up);
     }
 
     #[test]
