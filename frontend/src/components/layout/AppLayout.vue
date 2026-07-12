@@ -12,20 +12,26 @@ const sidebarItems = computed(() => {
   const g = MENU.find((m) => m.key === activeGroup.value) || MENU[0];
   return g.items;
 });
+const standalone = computed(() => route.query.standalone === '1');
 </script>
 
 <template>
-  <div class="topbar">
-    <TopBar :active-group="activeGroup" />
-  </div>
-  <div class="body-wrap">
-    <aside class="sidebar">
-      <nav class="sidebar-nav">
-        <SideBar :items="sidebarItems" />
-      </nav>
-    </aside>
-    <main class="main">
-      <router-view />
-    </main>
-  </div>
+  <main v-if="standalone" class="main main-standalone">
+    <router-view />
+  </main>
+  <template v-else>
+    <div class="topbar">
+      <TopBar :active-group="activeGroup" />
+    </div>
+    <div class="body-wrap">
+      <aside class="sidebar">
+        <nav class="sidebar-nav">
+          <SideBar :items="sidebarItems" />
+        </nav>
+      </aside>
+      <main class="main">
+        <router-view />
+      </main>
+    </div>
+  </template>
 </template>

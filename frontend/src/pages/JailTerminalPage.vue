@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { Terminal } from '@xterm/xterm';
@@ -10,6 +10,7 @@ import BackButton from '../components/ui/BackButton.vue';
 const { t } = useI18n();
 const route = useRoute();
 const name = route.params.name;
+const isStandalone = computed(() => route.query.standalone === '1');
 
 const statusText = ref(t('common.loading'));
 const statusClass = ref('badge badge-dim');
@@ -106,6 +107,13 @@ function reconnect() {
   startSession();
 }
 
+function openStandalone() {
+  window.open(`#${route.path}?standalone=1`, '_blank', 'width=1024,height=768');
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) ws.close();
+  setStatus('badge-dim', t('term.disconnected'));
+  reconnectDisabled.value = false;
+}
+
 function cleanup() {
   document.body.classList.remove('term-active');
   try { dataDisposer?.dispose(); } catch {}
@@ -129,15 +137,16 @@ onUnmounted(() => {
 <template>
   <div class="page-header">
     <div class="flex">
-      <BackButton :href="`#/jails/detail/${name}`" />
+      <BackButton v-if="!isStandalone" :href="`#/jails/detail/${name}`" />
       <h1>{{ t('term.jailTitle') }}: {{ name }}</h1>
+    </div>
+    <div class="flex btn-group" style="margin-left:auto;">
+      <span :class="statusClass">{{ statusText }}</span>
+      <button v-if="!isStandalone" class="btn btn-sm" @click="openStandalone"><i class="fa-solid fa-up-right-from-square"></i> {{ t('term.openInNewWindow') }}</button>
+      <button class="btn btn-sm" :disabled="reconnectDisabled" @click="reconnect">{{ t('term.reconnect') }}</button>
     </div>
   </div>
   <div class="term-page">
-    <div class="term-toolbar">
-      <span :class="statusClass">{{ statusText }}</span>
-      <button class="btn btn-sm" :disabled="reconnectDisabled" @click="reconnect">{{ t('term.reconnect') }}</button>
-    </div>
     <div ref="termHostRef" class="term-host"></div>
   </div>
 </template>

@@ -1266,7 +1266,7 @@ fn parse_etime_to_secs(s: &str) -> Option<u64> {
     Some(days * 86400 + hours * 3600 + mins * 60 + secs)
 }
 
-fn vm_config_path(name: &str) -> Result<std::path::PathBuf, String> {
+pub fn vm_config_path(name: &str) -> Result<std::path::PathBuf, String> {
     for datastore in list_datastores()? {
         let path = std::path::Path::new(&datastore.path).join(name).join(format!("{name}.conf"));
         if path.is_file() {

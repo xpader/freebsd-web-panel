@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import RFB from '@novnc/novnc';
@@ -8,6 +8,7 @@ import BackButton from '../components/ui/BackButton.vue';
 const { t } = useI18n();
 const route = useRoute();
 const name = route.params.name;
+const isStandalone = computed(() => route.query.standalone === '1');
 
 const statusText = ref(t('bhyve.vncConnecting'));
 const statusClass = ref('badge badge-dim');
@@ -68,6 +69,12 @@ function reconnect() {
   connect();
 }
 
+function openStandalone() {
+  window.open(`#${route.path}?standalone=1`, '_blank', 'width=1024,height=768');
+  disconnect();
+  setStatus('badge-dim', t('term.disconnected'));
+}
+
 onMounted(connect);
 onUnmounted(disconnect);
 </script>
@@ -75,11 +82,12 @@ onUnmounted(disconnect);
 <template>
   <div class="page-header">
     <div class="flex">
-      <BackButton :href="`#/bhyve/detail/${name}`" />
+      <BackButton v-if="!isStandalone" :href="`#/bhyve/detail/${name}`" />
       <h1>VNC: {{ name }}</h1>
     </div>
     <div class="flex btn-group" style="margin-left:auto;">
       <span :class="statusClass">{{ statusText }}</span>
+      <button v-if="!isStandalone" class="btn btn-sm" @click="openStandalone"><i class="fa-solid fa-up-right-from-square"></i> {{ t('term.openInNewWindow') }}</button>
       <button class="btn btn-sm" @click="reconnect">{{ t('term.reconnect') }}</button>
     </div>
   </div>
@@ -97,7 +105,7 @@ onUnmounted(disconnect);
 }
 .vnc-screen {
   width: 100%;
-  height: calc(100vh - 180px);
+  height: calc(100vh - 120px);
   min-height: 400px;
 }
 .vnc-screen :deep(canvas) {

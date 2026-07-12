@@ -713,6 +713,10 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .term-host .terminal { height: 100%; padding: 5px; }
 .term-host .xterm-viewport { overflow-y: auto !important; }
 
+/* Standalone layout (console/VNC opened in a new window) */
+.main-standalone { height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 10px 14px; box-sizing: border-box; }
+.main-standalone .page-header { flex-shrink: 0; }
+
 /* Network interface cards */
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; overflow: visible; }
 .card-grid .card { margin-bottom: 0; }

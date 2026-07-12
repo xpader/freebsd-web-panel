@@ -272,11 +272,17 @@ fn setup_pty(target: &SpawnTarget) -> Result<(libc::c_int, CString, Shell), Stri
             (exec_path, argv, cwd, envp)
         }
         SpawnTarget::Bhyve { name } => {
-            // Read the console device from /vm/{name}/console (same as vm console).
+            // Resolve the VM directory by searching all datastores for <name>.conf,
+            // then read the console device from <vm_dir>/<name>/console.
             // Format: com1=/dev/nmdm-{name}.1B
-            let console_path = format!("/vm/{name}/console");
+            let vm_dir = crate::bhyve::vm_config_path(name)
+                .map_err(|e| format!("cannot find VM {name}: {e}"))?
+                .parent()                  // <ds_path>/<name>/
+                .map(|p| p.to_path_buf())
+                .ok_or_else(|| format!("cannot resolve VM directory for {name}"))?;
+            let console_path = vm_dir.join("console");
             let console_content = std::fs::read_to_string(&console_path)
-                .map_err(|e| format!("cannot read {console_path}: {e}"))?;
+                .map_err(|e| format!("cannot read {}: {e}", console_path.display()))?;
             let device = console_content
                 .lines()
                 .find_map(|l| {
@@ -288,7 +294,7 @@ fn setup_pty(target: &SpawnTarget) -> Result<(libc::c_int, CString, Shell), Stri
                     }
                     None
                 })
-                .ok_or_else(|| format!("no com port found in {console_path}"))?;
+                .ok_or_else(|| format!("no com port found in {}", console_path.display()))?;
             if device.is_empty() || !device.starts_with("/dev/nmdm-") {
                 return Err(format!("invalid console device: {device}"));
             }
