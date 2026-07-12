@@ -1,11 +1,12 @@
 //! Filesystem overview — disks, mounts, ZFS pools.
 
 use std::collections::HashMap;
-use std::process::Command;
+
 use axum::Json;
 use serde::Serialize;
 
-use crate::error::ApiResult;
+use crate::cmd;
+use crate::error::{ApiError, ApiResult};
 
 #[derive(Debug, Serialize)]
 pub struct FsOverview {
@@ -47,11 +48,14 @@ pub struct ZpoolSummary {
 }
 
 pub async fn overview() -> ApiResult<Json<FsOverview>> {
-    Ok(Json(FsOverview {
+    let result = tokio::task::spawn_blocking(|| FsOverview {
         disks: list_disks(),
         mounts: list_mounts(),
         zpools: list_zpools(),
-    }))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    Ok(Json(result))
 }
 
 /// Detailed disk information — physical disk + partition table.
@@ -92,18 +96,15 @@ pub struct Partition {
 }
 
 pub async fn disk_detail() -> ApiResult<Json<Vec<DiskDetail>>> {
-    Ok(Json(list_disk_details()))
+    let result = tokio::task::spawn_blocking(list_disk_details)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    Ok(Json(result))
 }
 
 /// Parse `geom disk list` for physical disks. Skips zero-size devices (cd0).
 fn list_disks() -> Vec<Disk> {
-    let out = Command::new("/sbin/geom")
-        .args(["disk", "list"])
-        .output();
-    let raw = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return vec![],
-    };
+    let raw = cmd::run_sync("/sbin/geom", &["disk", "list"]).unwrap_or_default();
 
     let mut disks = Vec::new();
     let mut name = String::new();
@@ -159,10 +160,8 @@ fn list_disks() -> Vec<Disk> {
 fn list_disk_details() -> Vec<DiskDetail> {
     // --- base disk fields from `geom disk list` ---
     let mut disks: std::collections::HashMap<String, DiskDetail> = HashMap::new();
-    let out = Command::new("/sbin/geom").args(["disk", "list"]).output();
-    if let Ok(o) = out {
-        if o.status.success() {
-            let raw = String::from_utf8_lossy(&o.stdout);
+    if let Ok(raw) = cmd::run_sync("/sbin/geom", &["disk", "list"]) {
+            let raw = raw.as_str();
             let mut cur = DiskDetail {
                 name: String::new(), descr: String::new(), size_bytes: 0,
                 sectorsize: 0, mode: String::new(), ident: String::new(),
@@ -215,16 +214,11 @@ fn list_disk_details() -> Vec<DiskDetail> {
             if have && cur.size_bytes > 0 {
                 disks.insert(cur.name.clone(), cur);
             }
-        }
     }
 
     // --- partition table from `geom part list` ---
-    let out = Command::new("/sbin/geom").args(["part", "list"]).output();
-    if let Ok(o) = out {
-        if o.status.success() {
-            let raw = String::from_utf8_lossy(&o.stdout);
-            parse_geom_part(&raw, &mut disks);
-        }
+    if let Ok(raw) = cmd::run_sync("/sbin/geom", &["part", "list"]) {
+        parse_geom_part(&raw, &mut disks);
     }
 
     // Preserve geom order: sort by name (ada0, ada1, da0, ...).
@@ -353,11 +347,7 @@ fn parse_geom_part(raw: &str, disks: &mut HashMap<String, DiskDetail>) {
 
 /// Parse `mount` for mounted filesystems.
 fn list_mounts() -> Vec<Mount> {
-    let out = Command::new("/sbin/mount").output();
-    let raw = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return vec![],
-    };
+    let raw = cmd::run_sync("/sbin/mount", &[]).unwrap_or_default();
     let mut mounts = Vec::new();
     for line in raw.lines() {
         // Format: "device on /mountpoint (fstype, options)"
@@ -398,11 +388,8 @@ fn list_mounts() -> Vec<Mount> {
 
 /// Parse `df -k` (1K-blocks) and fill in size/used/available for matching mounts.
 fn enrich_with_df(mounts: &mut [Mount]) {
-    let out = Command::new("/bin/df")
-        .args(["-k"])
-        .output();
-    let raw = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+    let raw = match cmd::run_sync("/bin/df", &["-k"]) {
+        Ok(s) => s,
         _ => return,
     };
     // Build a map of mountpoint → (size, used, avail, capacity)
@@ -432,13 +419,7 @@ fn enrich_with_df(mounts: &mut [Mount]) {
 
 /// Parse `zpool list -H -p` for ZFS pool summaries.
 fn list_zpools() -> Vec<ZpoolSummary> {
-    let out = Command::new("/sbin/zpool")
-        .args(["list", "-H", "-p"])
-        .output();
-    let raw = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return vec![],
-    };
+    let raw = cmd::run_sync("/sbin/zpool", &["list", "-H", "-p"]).unwrap_or_default();
     let mut pools = Vec::new();
     // Columns: NAME SIZE ALLOC FREE CKPOINT EXPANDSZ FRAG CAP DEDUP HEALTH ALTROOT
     for line in raw.lines() {

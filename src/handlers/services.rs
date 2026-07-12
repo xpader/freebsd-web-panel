@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::auth::AuthUser;
+use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
@@ -68,20 +69,6 @@ pub struct ServiceActionResponse {
     pub name: String,
     pub action: String,
     pub output: String,
-}
-
-/// Run a command and return its stdout, or an ApiError on failure.
-fn run(cmd: &str, args: &[&str]) -> ApiResult<String> {
-    let output = Command::new(cmd).args(args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            format!("{cmd} failed")
-        } else {
-            stderr
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Validate a service name: must match `[a-zA-Z0-9_.-]+`, 1–128 chars.
@@ -179,7 +166,7 @@ fn expand_vars(value: &str, vars: &HashMap<String, String>) -> Option<String> {
 
 /// Get a snapshot of all running processes via a single `ps` call.
 fn process_table() -> HashMap<i32, String> {
-    let raw = run(PS, &["-ax", "-o", "pid=", "-o", "command="]).unwrap_or_default();
+    let raw = cmd::run_sync(PS, &["-ax", "-o", "pid=", "-o", "command="]).unwrap_or_default();
     let mut procs = HashMap::new();
     for line in raw.lines() {
         let line = line.trim_start();
@@ -224,14 +211,7 @@ fn check_procname(procname: &str, procs: &HashMap<i32, String>) -> bool {
 
 /// Fallback: check via `service <name> status` (spawns a subprocess).
 fn check_via_service(name: &str) -> bool {
-    Command::new(SERVICE)
-        .arg(name)
-        .arg("status")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    cmd::status_sync(SERVICE, &[name, "status"])
 }
 
 /// Try to resolve running status from parsed script variables + process table.
@@ -288,7 +268,7 @@ pub async fn list() -> ApiResult<Json<Vec<ServiceInfo>>> {
 /// Synchronous implementation — runs on a blocking thread.
 fn collect_services() -> ApiResult<Vec<ServiceInfo>> {
     // All available service scripts (names only).
-    let available_raw = run(SERVICE, &["-l"])?;
+    let available_raw = cmd::run_sync(SERVICE, &["-l"])?;
     let mut names: Vec<String> = available_raw
         .lines()
         .map(|l| l.trim().to_string())

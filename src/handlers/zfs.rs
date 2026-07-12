@@ -5,7 +5,6 @@
 //! command arguments (no shell interpolation).
 
 use std::collections::HashMap;
-use std::process::Command;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -13,6 +12,7 @@ use axum::Json;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -49,19 +49,6 @@ pub struct NameQuery {
     pub name: String,
 }
 
-fn run(cmd: &str, args: &[&str]) -> ApiResult<String> {
-    let output = Command::new(cmd).args(args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            format!("{cmd} failed")
-        } else {
-            stderr
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
 // ===== Zpool =====
 
 #[derive(Debug, Serialize)]
@@ -91,7 +78,7 @@ pub struct Vdev {
 }
 
 pub async fn pool_list() -> ApiResult<Json<Vec<ZpoolSummary>>> {
-    let raw = run(ZPOOL, &["list", "-H", "-p"])?;
+    let raw = cmd::run(ZPOOL, &["list", "-H", "-p"]).await?;
     let pools: Vec<ZpoolSummary> = raw
         .lines()
         .filter(|l| !l.is_empty())
@@ -131,9 +118,9 @@ pub struct ZpoolSummary {
 
 pub async fn pool_status(Path(name): Path<String>) -> ApiResult<Json<ZpoolInfo>> {
     validate_name(&name)?;
-    let mut info = parse_zpool_status(&run(ZPOOL, &["status", &name])?, &name);
+    let mut info = parse_zpool_status(&cmd::run(ZPOOL, &["status", &name]).await?, &name);
     // Enrich with size/alloc/free/frag/cap/dedup from `zpool list`.
-    let list_raw = run(ZPOOL, &["list", "-H", "-p", &name])?;
+    let list_raw = cmd::run(ZPOOL, &["list", "-H", "-p", &name]).await?;
     if let Some(line) = list_raw.lines().next() {
         let cols: Vec<&str> = line.split('\t').collect();
         if cols.len() >= 10 {
@@ -295,10 +282,11 @@ pub struct Dataset {
 }
 
 pub async fn dataset_list() -> ApiResult<Json<Vec<Dataset>>> {
-    let raw = run(
+    let raw = cmd::run(
         ZFS,
         &["list", "-H", "-p", "-o", "name,used,avail,refer,mountpoint,type,compression,origin"],
-    )?;
+    )
+    .await?;
     let flat: Vec<Dataset> = raw
         .lines()
         .filter(|l| !l.is_empty())
@@ -394,7 +382,7 @@ pub async fn dataset_create(
     }
     args.push(body.name.clone());
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run(ZFS, &arg_refs)?;
+    cmd::run(ZFS, &arg_refs).await?;
     crate::audit::record(
         &state,
         None,
@@ -415,7 +403,7 @@ pub async fn dataset_destroy(
 ) -> ApiResult<StatusCode> {
     let name = &q.name;
     validate_name(name)?;
-    run(ZFS, &["destroy", "-r", name])?;
+    cmd::run(ZFS, &["destroy", "-r", name]).await?;
     crate::audit::record(
         &state,
         None,
@@ -441,7 +429,7 @@ pub async fn dataset_set(
     validate_name(name)?;
     for (k, v) in &body.properties {
         validate_prop_key(k)?;
-        run(ZFS, &["set", &format!("{k}={v}"), name])?;
+        cmd::run(ZFS, &["set", &format!("{k}={v}"), name]).await?;
     }
     crate::audit::record(
         &state, None, "PUT", "/api/zfs/dataset/properties", 200,
@@ -453,7 +441,7 @@ pub async fn dataset_set(
 pub async fn dataset_properties(Query(q): Query<NameQuery>) -> ApiResult<Json<Vec<Property>>> {
     let name = &q.name;
     validate_name(name)?;
-    let raw = run(ZFS, &["get", "-H", "-p", "-o", "property,value,source", "all", name])?;
+    let raw = cmd::run(ZFS, &["get", "-H", "-p", "-o", "property,value,source", "all", name]).await?;
     let props: Vec<Property> = raw
         .lines()
         .filter(|l| !l.is_empty())
@@ -518,7 +506,7 @@ pub async fn snapshot_list(
         .copied()
         .chain(owned_args.iter().map(|s| s.as_str()))
         .collect();
-    let raw = run(ZFS, &arg_refs)?;
+    let raw = cmd::run(ZFS, &arg_refs).await?;
     let snaps: Vec<Snapshot> = raw
         .lines()
         .filter(|l| !l.is_empty())
@@ -560,7 +548,7 @@ pub async fn snapshot_create(
         return Err(ApiError::BadRequest("invalid snapshot name".into()));
     }
     let full = format!("{}@{}", body.dataset, snap_name);
-    run(ZFS, &["snapshot", &full])?;
+    cmd::run(ZFS, &["snapshot", &full]).await?;
     crate::audit::record(
         &state,
         None,
@@ -589,9 +577,9 @@ pub async fn snapshot_destroy(
     }
     let recursive = q.recursive.unwrap_or(false);
     if recursive {
-        run(ZFS, &["destroy", "-R", full])?;
+        cmd::run(ZFS, &["destroy", "-R", full]).await?;
     } else {
-        run(ZFS, &["destroy", full])?;
+        cmd::run(ZFS, &["destroy", full]).await?;
     }
     crate::audit::record(
         &state, None, "DELETE", "/api/zfs/snapshot/destroy", 200,
@@ -619,7 +607,7 @@ pub async fn snapshot_rollback(
     if !body.confirm {
         return Err(ApiError::BadRequest("confirm=true required for rollback".into()));
     }
-    run(ZFS, &["rollback", "-r", full])?;
+    cmd::run(ZFS, &["rollback", "-r", full]).await?;
     crate::audit::record(
         &state, None, "POST", "/api/zfs/snapshot/rollback", 200,
         Some(format!("rolled back to {full}")),
@@ -651,9 +639,9 @@ pub async fn snapshot_clone(
     }
     if let Some(mp) = mountpoint {
         validate_mountpoint(mp)?;
-        run(ZFS, &["clone", "-o", &format!("mountpoint={mp}"), source, target])?;
+        cmd::run(ZFS, &["clone", "-o", &format!("mountpoint={mp}"), source, target]).await?;
     } else {
-        run(ZFS, &["clone", source, target])?;
+        cmd::run(ZFS, &["clone", source, target]).await?;
     }
     crate::audit::record(
         &state, None, "POST", "/api/zfs/snapshot/clone", 201,
@@ -666,7 +654,7 @@ pub async fn pool_scrub(
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
     validate_name(&name)?;
-    run(ZPOOL, &["scrub", &name])?;
+    cmd::run(ZPOOL, &["scrub", &name]).await?;
     crate::audit::record(
         &state,
         None,
@@ -683,7 +671,7 @@ pub async fn pool_scrub_stop(
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
     validate_name(&name)?;
-    run(ZPOOL, &["scrub", "-s", &name])?;
+    cmd::run(ZPOOL, &["scrub", "-s", &name]).await?;
     crate::audit::record(
         &state,
         None,

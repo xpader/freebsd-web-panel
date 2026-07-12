@@ -7,6 +7,7 @@ use axum::Json;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::cmd;
 use crate::error::ApiResult;
 use crate::sysinfo;
 
@@ -35,7 +36,7 @@ pub async fn system_info() -> ApiResult<Json<SystemInfo>> {
     let cpu_model = sysinfo::read_string("hw.model").unwrap_or_else(|| "unknown".into());
     let cpu_cores: u32 = sysinfo::read_u64("hw.ncpu").unwrap_or(1) as u32;
     let memory_total: u64 = sysinfo::read_u64("hw.physmem").unwrap_or(0);
-    let swap_total = read_swap_total();
+    let swap_total = read_swap_total().await;
 
     let boot_time = sysinfo::boot_time();
     let now = now_ts();
@@ -164,7 +165,7 @@ pub async fn system_metrics() -> ApiResult<Json<SystemMetrics>> {
     };
 
     // Swap
-    let (swap_total, swap_used) = read_swap();
+    let (swap_total, swap_used) = read_swap().await;
     let swap_usage = if swap_total > 0 {
         (swap_used as f32 / swap_total as f32) * 100.0
     } else {
@@ -374,13 +375,11 @@ fn net_iface_rank(i: &NetIface) -> u32 {
     r
 }
 
-fn read_swap() -> (u64, u64) {
+async fn read_swap() -> (u64, u64) {
     // swapinfo -k (1K-blocks)
-    let out = std::process::Command::new("/usr/sbin/swapinfo")
-        .arg("-k")
-        .output();
+    let result = cmd::run_output("/usr/sbin/swapinfo", &["-k"]).await;
     let (mut total, mut used) = (0u64, 0u64);
-    if let Ok(o) = out {
+    if let Ok(o) = result {
         for line in String::from_utf8_lossy(&o.stdout).lines().skip(1) {
             let cols: Vec<&str> = line.split_whitespace().collect();
             // Skip the "Total" summary row — its values are the sum of all
@@ -394,8 +393,8 @@ fn read_swap() -> (u64, u64) {
     (total, used)
 }
 
-fn read_swap_total() -> u64 {
-    read_swap().0
+async fn read_swap_total() -> u64 {
+    read_swap().await.0
 }
 
 fn now_ts() -> i64 {

@@ -4,6 +4,7 @@ mod app;
 mod audit;
 mod auth;
 mod bhyve;
+mod cmd;
 mod config;
 mod db;
 mod error;

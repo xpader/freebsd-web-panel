@@ -5,8 +5,6 @@
 //! deletes use `sysrc -x KEY`. Inputs are validated before being passed as
 //! command arguments (no shell interpolation).
 
-use std::process::Command;
-
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -15,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::auth::AuthUser;
+use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
@@ -43,20 +42,6 @@ fn validate_value(value: &str) -> ApiResult<()> {
         ));
     }
     Ok(())
-}
-
-/// Run a command and return its stdout, or an ApiError on failure.
-fn run(cmd: &str, args: &[&str]) -> ApiResult<String> {
-    let output = Command::new(cmd).args(args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            format!("{cmd} failed")
-        } else {
-            stderr
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -100,7 +85,7 @@ fn parse_export_line(line: &str) -> Option<RcVar> {
 /// GET /api/rcconf — list all non-default rc.conf variables (effective values),
 /// sorted by key.
 pub async fn list() -> ApiResult<Json<Vec<RcVar>>> {
-    let raw = run(SYSRC, &["-e", "-a"])?;
+    let raw = cmd::run(SYSRC, &["-e", "-a"]).await?;
     let mut vars: Vec<RcVar> = raw
         .lines()
         .filter(|l| !l.is_empty())
@@ -126,10 +111,10 @@ pub async fn set(
     validate_value(&body.value)?;
 
     let assignment = format!("{}={}", body.key, body.value);
-    run(SYSRC, &[&assignment])?;
+    cmd::run(SYSRC, &[&assignment]).await?;
 
     // Re-read the effective value so we echo back what sysrc actually stored.
-    let stored = run(SYSRC, &["-n", &body.key])
+    let stored = cmd::run(SYSRC, &["-n", &body.key]).await
         .map(|s| s.trim_end().to_string())
         .unwrap_or_else(|_| body.value.clone());
     let var = RcVar {
@@ -161,7 +146,7 @@ pub async fn delete(
     Query(q): Query<KeyQuery>,
 ) -> ApiResult<StatusCode> {
     validate_key(&q.key)?;
-    run(SYSRC, &["-x", &q.key])?;
+    cmd::run(SYSRC, &["-x", &q.key]).await?;
 
     audit::record(
         &state,

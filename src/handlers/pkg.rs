@@ -17,7 +17,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,6 +34,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::audit;
 use crate::auth::{validate_token, AuthUser};
+use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
@@ -260,19 +260,6 @@ pub struct PreviewRequest {
 
 // ---- Helpers ----
 
-fn run(args: &[&str]) -> ApiResult<String> {
-    let output = Command::new(PKG).args(args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            "pkg failed".to_string()
-        } else {
-            stderr
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
 fn validate_name(name: &str) -> ApiResult<()> {
     if name.is_empty() || name.len() > 256 {
         return Err(ApiError::BadRequest("invalid package name".into()));
@@ -339,9 +326,9 @@ fn parse_dep_list(output: &str) -> Vec<DepInfo> {
 pub async fn list_packages(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<PackageSummary>>> {
     let fmt = "%n\t%v\t%o\t%c\t%a\t%sh\t%w\t%m\t%t";
     let output = match q.filter.as_deref() {
-        Some("manual") => run(&["query", "-e", "%a = 0", fmt])?,
-        Some("automatic") => run(&["query", "-e", "%a = 1", fmt])?,
-        _ => run(&["query", fmt])?,
+        Some("manual") => cmd::run(PKG, &["query", "-e", "%a = 0", fmt]).await?,
+        Some("automatic") => cmd::run(PKG, &["query", "-e", "%a = 1", fmt]).await?,
+        _ => cmd::run(PKG, &["query", fmt]).await?,
     };
 
     let mut packages = Vec::new();
@@ -370,7 +357,7 @@ pub async fn package_detail(AxumPath(name): AxumPath<String>) -> ApiResult<Json<
     validate_name(&name)?;
 
     // 1. Raw manifest via JSON — contains desc, deps, categories, licenses, etc.
-    let raw_json = run(&["info", "-R", "--raw-format", "json-compact", &name])?;
+    let raw_json = cmd::run(PKG, &["info", "-R", "--raw-format", "json-compact", &name]).await?;
     let manifests: Vec<RawManifest> = serde_json::from_str(&raw_json).map_err(|e| {
         ApiError::NotFound(format!("package '{name}' not found: {e}"))
     })?;
@@ -379,7 +366,7 @@ pub async fn package_detail(AxumPath(name): AxumPath<String>) -> ApiResult<Json<
     })?;
 
     // 2. Fields absent from raw manifest: automatic, locked, vital, repository.
-    let extra = run(&["query", "%a\t%k\t%V\t%R", &name])?;
+    let extra = cmd::run(PKG, &["query", "%a\t%k\t%V\t%R", &name]).await?;
     let extra_line = extra.lines().next().unwrap_or("");
     let ef = parse_tsv(extra_line, 4)?;
     let (automatic, locked, vital, repository) = (
@@ -390,7 +377,7 @@ pub async fn package_detail(AxumPath(name): AxumPath<String>) -> ApiResult<Json<
     );
 
     // 3. Reverse dependencies (not available in raw manifest).
-    let rdep_out = run(&["query", "%rn\t%rv", &name])?;
+    let rdep_out = cmd::run(PKG, &["query", "%rn\t%rv", &name]).await?;
     let reverse_dependencies = parse_dep_list(&rdep_out);
 
     // 4. Dependencies from raw manifest (map → sorted vector).
@@ -434,7 +421,7 @@ pub async fn package_files(AxumPath(name): AxumPath<String>) -> ApiResult<Json<V
     validate_name(&name)?;
 
     let fmt = "%Fp\t%Fu\t%Fg\t%Fm";
-    let output = run(&["query", fmt, &name])?;
+    let output = cmd::run(PKG, &["query", fmt, &name]).await?;
 
     let mut files = Vec::new();
     for line in output.lines() {
@@ -460,7 +447,7 @@ pub async fn search(Query(q): Query<SearchQuery>) -> ApiResult<Json<Vec<SearchRe
     // Use glob matching with wildcards on both sides for substring search.
     let glob = format!("*{pattern}*");
     let fmt = "%n\t%v\t%o\t%c\t%sh";
-    let output = run(&["rquery", "-g", fmt, &glob])?;
+    let output = cmd::run(PKG, &["rquery", "-g", fmt, &glob]).await?;
 
     let mut results = Vec::new();
     for line in output.lines() {
@@ -497,18 +484,12 @@ pub struct PreviewResult {
 pub async fn preview(Json(req): Json<PreviewRequest>) -> ApiResult<Json<PreviewResult>> {
     validate_names(&req.packages)?;
 
-    let mut args = vec!["-n".to_string()];
+    let mut full_args: Vec<&str> = vec![&req.action, "-n"];
     if req.action == "delete" {
-        args.push("-R".to_string());
+        full_args.push("-R");
     }
-    for p in &req.packages {
-        args.push(p.clone());
-    }
-
-    let output = Command::new(PKG)
-        .arg(&req.action)
-        .args(&args)
-        .output()?;
+    full_args.extend(req.packages.iter().map(|s| s.as_str()));
+    let output = cmd::run_output(PKG, &full_args).await?;
 
     // dry-run may exit non-zero (e.g. "already installed"); parse stdout/stderr
     // regardless.

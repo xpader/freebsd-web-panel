@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::process::Command;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -17,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::auth::AuthUser;
+use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
@@ -924,44 +924,34 @@ pub async fn interface_create(
         ));
     }
 
-    // Create via ifconfig.
-    let output = Command::new(IFCONFIG)
-        .args([&body.name, "create"])
-        .output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            stdout
+    // Create via ifconfig + read back + persist to rc.conf.
+    let iface_name = body.name.clone();
+    let iface = tokio::task::spawn_blocking(move || -> ApiResult<NetworkInterface> {
+        cmd::run_sync(IFCONFIG, &[&iface_name, "create"])?;
+
+        let interfaces = read_interfaces().map_err(ApiError::Io)?;
+        let lookup_name = if iface_name.starts_with("epair")
+            && !iface_name.ends_with('a')
+            && !iface_name.ends_with('b')
+        {
+            format!("{}a", iface_name)
         } else {
-            stderr
-        }));
-    }
-
-    // Read back the created interface.
-    // epair is special: `ifconfig epair0 create` produces epair0a + epair0b,
-    // not an interface named "epair0".
-    let interfaces = read_interfaces().map_err(ApiError::Io)?;
-    let lookup_name = if body.name.starts_with("epair")
-        && !body.name.ends_with('a')
-        && !body.name.ends_with('b')
-    {
-        format!("{}a", body.name)
-    } else {
-        body.name.clone()
-    };
-    let iface = interfaces
-        .into_iter()
-        .find(|i| i.name == lookup_name)
-        .ok_or_else(|| {
-            ApiError::Internal(format!(
-                "interface '{}' created but not found on re-read",
-                body.name
-            ))
-        })?;
-
-    // Persist to cloned_interfaces in rc.conf.
-    add_cloned_interface(&body.name);
+            iface_name.clone()
+        };
+        let iface = interfaces
+            .into_iter()
+            .find(|i| i.name == lookup_name)
+            .ok_or_else(|| {
+                ApiError::Internal(format!(
+                    "interface '{}' created but not found on re-read",
+                    iface_name
+                ))
+            })?;
+        add_cloned_interface(&iface_name);
+        Ok(iface)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
@@ -995,11 +985,16 @@ pub async fn interface_detail(Path(name): Path<String>) -> ApiResult<Json<Networ
 /// GET `/api/network/interfaces/{name}/rcconf` — parsed rc.conf ifconfig config for an interface.
 pub async fn interface_rcconf(Path(name): Path<String>) -> ApiResult<Json<IfaceRcConfConfig>> {
     validate_iface_name(&name)?;
-    let mut cfg = parse_iface_rcconf(&name);
-    cfg.interface = name.clone();
-    cfg.is_bridge = name.starts_with("bridge");
-    cfg.is_lagg = name.starts_with("lagg");
-    Ok(Json(cfg))
+    let result = tokio::task::spawn_blocking(move || {
+        let mut cfg = parse_iface_rcconf(&name);
+        cfg.interface = name.clone();
+        cfg.is_bridge = name.starts_with("bridge");
+        cfg.is_lagg = name.starts_with("lagg");
+        cfg
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    Ok(Json(result))
 }
 
 /// PUT `/api/network/interfaces/{name}/rcconf` — save structured ifconfig config to rc.conf.
@@ -1059,39 +1054,47 @@ pub async fn interface_rcconf_save(
     let aliases_key = format!("ifconfig_{name}_aliases");
     let ipv6_key = format!("ifconfig_{name}_ipv6");
 
-    // 1. Apply to live system first — if this fails, don't touch rc.conf.
-    apply_ifconfig(&name, &cfg).map_err(ApiError::Command)?;
+    // Apply to live system + persist to rc.conf (all blocking subprocess work).
+    let save_name = name.clone();
+    let save_cfg = cfg.clone();
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<IfaceRcConfConfig> {
+        // 1. Apply to live system first — if this fails, don't touch rc.conf.
+        apply_ifconfig(&save_name, &save_cfg).map_err(ApiError::Command)?;
 
-    // 2. Persist to rc.conf.
-    let primary_val = build_primary_value(&cfg);
-    if primary_val.is_empty() {
-        let _ = Command::new(SYSRC).args(["-x", &primary_key]).output();
-    } else {
-        let assignment = format!("{primary_key}={primary_val}");
-        run_sysrc(&assignment)?;
-    }
+        // 2. Persist to rc.conf.
+        let primary_val = build_primary_value(&save_cfg);
+        if primary_val.is_empty() {
+            cmd::run_forget_sync(SYSRC, &["-x", &primary_key]);
+        } else {
+            let assignment = format!("{primary_key}={primary_val}");
+            cmd::run_sync(SYSRC, &[&assignment])?;
+        }
 
-    let aliases_val = build_aliases_value(&cfg.ipv4_aliases);
-    if aliases_val.is_empty() {
-        let _ = Command::new(SYSRC).args(["-x", &aliases_key]).output();
-    } else {
-        let assignment = format!("{aliases_key}={aliases_val}");
-        run_sysrc(&assignment)?;
-    }
+        let aliases_val = build_aliases_value(&save_cfg.ipv4_aliases);
+        if aliases_val.is_empty() {
+            cmd::run_forget_sync(SYSRC, &["-x", &aliases_key]);
+        } else {
+            let assignment = format!("{aliases_key}={aliases_val}");
+            cmd::run_sync(SYSRC, &[&assignment])?;
+        }
 
-    let ipv6_val = build_ipv6_value(&cfg.ipv6);
-    if ipv6_val.is_empty() {
-        let _ = Command::new(SYSRC).args(["-x", &ipv6_key]).output();
-    } else {
-        let assignment = format!("{ipv6_key}={ipv6_val}");
-        run_sysrc(&assignment)?;
-    }
+        let ipv6_val = build_ipv6_value(&save_cfg.ipv6);
+        if ipv6_val.is_empty() {
+            cmd::run_forget_sync(SYSRC, &["-x", &ipv6_key]);
+        } else {
+            let assignment = format!("{ipv6_key}={ipv6_val}");
+            cmd::run_sync(SYSRC, &[&assignment])?;
+        }
 
-    // Re-read to confirm what was stored.
-    let mut result = parse_iface_rcconf(&name);
-    result.interface = name.clone();
-    result.is_bridge = name.starts_with("bridge");
-    result.is_lagg = name.starts_with("lagg");
+        // Re-read to confirm what was stored.
+        let mut result = parse_iface_rcconf(&save_name);
+        result.interface = save_name.clone();
+        result.is_bridge = save_name.starts_with("bridge");
+        result.is_lagg = save_name.starts_with("lagg");
+        Ok(result)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
@@ -1117,20 +1120,7 @@ const IFCONFIG: &str = "/sbin/ifconfig";
 fn run_ifconfig(name: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd_args = vec![name];
     cmd_args.extend_from_slice(args);
-    let output = Command::new(IFCONFIG)
-        .args(&cmd_args)
-        .output()
-        .map_err(|e| format!("ifconfig exec failed: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
-        return Err(if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            stderr.trim().to_string()
-        });
-    }
-    Ok(stdout)
+    cmd::run_sync_str(IFCONFIG, &cmd_args)
 }
 
 /// Build ifconfig CLI args (excluding the interface name) from the primary
@@ -1313,15 +1303,11 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
 
 /// Read `cloned_interfaces` from rc.conf as a Vec of interface names.
 fn read_cloned_interfaces() -> Vec<String> {
-    let output = match Command::new(SYSRC).args(["-n", "cloned_interfaces"]).output() {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
-    };
-    let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if val.is_empty() {
-        return Vec::new();
-    }
-    val.split_whitespace().map(|s| s.to_string()).collect()
+    cmd::run_sync(SYSRC, &["-n", "cloned_interfaces"])
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Add a name to `cloned_interfaces` in rc.conf (idempotent).
@@ -1335,7 +1321,7 @@ fn add_cloned_interface(name: &str) {
     list.push(clone_name);
     let val = list.join(" ");
     let assignment = format!("cloned_interfaces={val}");
-    let _ = Command::new(SYSRC).arg(&assignment).output();
+    cmd::run_forget_sync(SYSRC, &[&assignment]);
 }
 
 /// Remove a name from `cloned_interfaces` in rc.conf.
@@ -1345,11 +1331,11 @@ fn remove_cloned_interface(name: &str) {
     let list = read_cloned_interfaces();
     let new_list: Vec<&String> = list.iter().filter(|s| s.as_str() != clone_name).collect();
     if new_list.is_empty() {
-        let _ = Command::new(SYSRC).args(["-x", "cloned_interfaces"]).output();
+        cmd::run_forget_sync(SYSRC, &["-x", "cloned_interfaces"]);
     } else {
         let val = new_list.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
         let assignment = format!("cloned_interfaces={val}");
-        let _ = Command::new(SYSRC).arg(&assignment).output();
+        cmd::run_forget_sync(SYSRC, &[&assignment]);
     }
 }
 
@@ -1375,9 +1361,13 @@ pub async fn interface_apply(
 ) -> ApiResult<Json<ApplyResult>> {
     validate_iface_name(&name)?;
 
-    let cfg = parse_iface_rcconf(&name);
-
-    let output = apply_ifconfig(&name, &cfg).map_err(ApiError::Command)?;
+    let apply_name = name.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        let cfg = parse_iface_rcconf(&apply_name);
+        apply_ifconfig(&apply_name, &cfg).map_err(ApiError::Command)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
@@ -1403,41 +1393,37 @@ pub async fn interface_destroy(
 ) -> ApiResult<StatusCode> {
     validate_iface_name(&name)?;
 
-    // Don't allow destroying physical interfaces or loopback.
-    let interfaces = read_interfaces().map_err(ApiError::Io)?;
-    let iface = interfaces
-        .iter()
-        .find(|i| i.name == name)
-        .ok_or_else(|| ApiError::NotFound(format!("interface '{name}' not found")))?;
+    let destroy_name = name.clone();
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
+        // Don't allow destroying physical interfaces or loopback.
+        let interfaces = read_interfaces().map_err(ApiError::Io)?;
+        let iface = interfaces
+            .iter()
+            .find(|i| i.name == destroy_name)
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("interface '{destroy_name}' not found"))
+            })?;
+        if iface.is_physical || iface.is_loopback {
+            return Err(ApiError::BadRequest(
+                "cannot destroy a physical or loopback interface".into(),
+            ));
+        }
 
-    if iface.is_physical || iface.is_loopback {
-        return Err(ApiError::BadRequest(
-            "cannot destroy a physical or loopback interface".into(),
-        ));
-    }
+        // Destroy via ifconfig.
+        cmd::run_sync(IFCONFIG, &[&destroy_name, "destroy"])?;
 
-    // Destroy via ifconfig.
-    let output = Command::new(IFCONFIG)
-        .args([&name, "destroy"])
-        .output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            stdout
-        } else {
-            stderr
-        }));
-    }
-
-    // Clean up rc.conf entries.
-    let primary_key = format!("ifconfig_{name}");
-    let aliases_key = format!("ifconfig_{name}_aliases");
-    let ipv6_key = format!("ifconfig_{name}_ipv6");
-    for key in [&primary_key, &aliases_key, &ipv6_key] {
-        let _ = Command::new(SYSRC).args(["-x", key]).output();
-    }
-    remove_cloned_interface(&name);
+        // Clean up rc.conf entries.
+        let primary_key = format!("ifconfig_{destroy_name}");
+        let aliases_key = format!("ifconfig_{destroy_name}_aliases");
+        let ipv6_key = format!("ifconfig_{destroy_name}_ipv6");
+        for key in [&primary_key, &aliases_key, &ipv6_key] {
+            cmd::run_forget_sync(SYSRC, &["-x", key]);
+        }
+        remove_cloned_interface(&destroy_name);
+        Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
@@ -1467,10 +1453,14 @@ pub async fn default_gateway() -> ApiResult<Json<DefaultGateway>> {
         .map(|r| (Some(r.gateway.clone()), Some(r.interface.clone())))
         .unwrap_or((None, None));
 
+    let configured = tokio::task::spawn_blocking(read_defaultrouter)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+
     Ok(Json(DefaultGateway {
         gateway,
         interface,
-        configured: read_defaultrouter(),
+        configured,
     }))
 }
 
@@ -1538,39 +1528,18 @@ const SYSRC: &str = "/usr/sbin/sysrc";
 
 /// Read `defaultrouter` from rc.conf via `sysrc -n defaultrouter`.
 fn read_defaultrouter() -> Option<String> {
-    let output = Command::new(SYSRC).args(["-n", "defaultrouter"]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if val.is_empty() {
-        None
-    } else {
-        Some(val)
-    }
-}
-
-/// Run `sysrc KEY=VALUE` and return an error on failure.
-fn run_sysrc(assignment: &str) -> ApiResult<()> {
-    let output = Command::new(SYSRC).arg(assignment).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            "sysrc failed".into()
-        } else {
-            stderr
-        }));
-    }
-    Ok(())
+    cmd::run_sync(SYSRC, &["-n", "defaultrouter"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Read all `ifconfig_<name>` rc.conf entries and parse into structured config.
 fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
-    let output = match Command::new(SYSRC).args(["-e", "-a"]).output() {
-        Ok(o) if o.status.success() => o,
+    let stdout = match cmd::run_sync(SYSRC, &["-e", "-a"]) {
+        Ok(s) => s,
         _ => return IfaceRcConfConfig::default(),
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let primary_key = format!("ifconfig_{name}");
     let aliases_key = format!("ifconfig_{name}_aliases");
     let ipv6_key = format!("ifconfig_{name}_ipv6");

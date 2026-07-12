@@ -16,24 +16,7 @@ const ZFS: &str = "/sbin/zfs";
 
 /// Run a `vm` subcommand that terminates, capturing stdout.
 fn vm_run(args: &[&str]) -> Result<String, String> {
-    let output = Command::new(VM)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let msg = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            format!("vm {} failed (exit {})", args.join(" "), output.status)
-        };
-        return Err(msg);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    crate::cmd::run_sync_str(VM, args)
 }
 
 // ── Table parsing ─────────────────────────────────────────────────
@@ -803,60 +786,18 @@ pub fn start_vm(name: &str) -> Result<(), String> {
 
 /// Stop a VM (graceful shutdown).
 pub fn stop_vm(name: &str) -> Result<(), String> {
-    let output = Command::new(VM)
-        .args(["stop", name])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if !stderr.is_empty() {
-            stderr
-        } else {
-            format!("vm stop {} failed (exit {})", name, output.status)
-        };
-        return Err(msg);
-    }
-    Ok(())
+    crate::cmd::run_sync_str(VM, &["stop", name]).map(|_| ())
 }
 
 /// Forcefully power off a VM via `vm poweroff -f`.
 pub fn poweroff_vm(name: &str) -> Result<(), String> {
-    let output = Command::new(VM)
-        .args(["poweroff", "-f", name])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if !stderr.is_empty() {
-            stderr
-        } else {
-            format!("vm poweroff -f {} failed (exit {})", name, output.status)
-        };
-        return Err(msg);
-    }
-    Ok(())
+    crate::cmd::run_sync_str(VM, &["poweroff", "-f", name]).map(|_| ())
 }
 
 /// Destroy a VM via `vm destroy -f`.
 /// Deletes all disk images and configuration for the VM.
 pub fn destroy_vm(name: &str) -> Result<(), String> {
-    let output = Command::new(VM)
-        .args(["destroy", "-f", name])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if !stderr.is_empty() {
-            stderr
-        } else {
-            format!("vm destroy -f {} failed (exit {})", name, output.status)
-        };
-        return Err(msg);
-    }
-    Ok(())
+    crate::cmd::run_sync_str(VM, &["destroy", "-f", name]).map(|_| ())
 }
 
 /// Install OS to a VM via `vm install <name> <iso>`.
@@ -885,21 +826,7 @@ pub fn add_disk(name: &str, disk_type: &str, size: &str) -> Result<(), String> {
     if size.is_empty() {
         return Err("disk size must not be empty".to_string());
     }
-    let output = Command::new(VM)
-        .args(["add", "-d", "disk", "-t", disk_type, "-s", size, name])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if !stderr.is_empty() {
-            stderr
-        } else {
-            format!("vm add failed (exit {})", output.status)
-        };
-        return Err(msg);
-    }
-    Ok(())
+    crate::cmd::run_sync_str(VM, &["add", "-d", "disk", "-t", disk_type, "-s", size, name]).map(|_| ())
 }
 
 // ── vm info ───────────────────────────────────────────────────────
@@ -1204,21 +1131,12 @@ fn get_kv_opt(sub: &[(String, String)], key: &str) -> Option<String> {
 
 /// Read process elapsed time via `ps -o etime= -p <pid>` and return total seconds.
 fn read_uptime(pid: u32) -> Option<u64> {
-    let output = Command::new("ps")
-        .args(["-o", "etime=", "-p", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let s = crate::cmd::run_sync_str("ps", &["-o", "etime=", "-p", &pid.to_string()]).ok()?;
+    let s = s.trim();
     if s.is_empty() {
         return None;
     }
-    parse_etime_to_secs(&s)
+    parse_etime_to_secs(s)
 }
 
 /// Parse `ps etime` format (`[[dd-]hh:]mm:ss`) into total seconds.
@@ -1472,15 +1390,9 @@ pub fn list_disk_resources(name: &str) -> Result<DiskResources, String> {
         if vm_dir_str.starts_with(&datastore.path) {
             if let Some(dataset) = &datastore.zfs_dataset {
                 let child_dataset = format!("{dataset}/{name}");
-                let output = Command::new(ZFS)
-                    .args(["list", "-H", "-o", "name", "-t", "volume", "-r", &child_dataset])
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null())
-                    .output()
-                    .map_err(|e| format!("zfs list failed: {e}"))?;
-                if output.status.success() {
+                if let Ok(raw) = crate::cmd::run_sync_str(ZFS, &["list", "-H", "-o", "name", "-t", "volume", "-r", &child_dataset]) {
                     let prefix = format!("{child_dataset}/");
-                    for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    for line in raw.lines() {
                         let line = line.trim();
                         if let Some(rel) = line.strip_prefix(&prefix) {
                             zvols.push(rel.to_string());
@@ -1548,22 +1460,8 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
     let mut steps = Vec::new();
 
     // 1. Install packages
-    let pkg_result = Command::new(PKG)
-        .args(["install", "-y", "vm-bhyve", "bhyve-firmware", "grub2-bhyve"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("failed to run pkg install: {e}"))?;
-    if !pkg_result.status.success() {
-        let stderr = String::from_utf8_lossy(&pkg_result.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&pkg_result.stdout).trim().to_string();
-        return Err(if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            "package installation failed".to_string()
-        });
-    }
+    crate::cmd::run_sync_str(PKG, &["install", "-y", "vm-bhyve", "bhyve-firmware", "grub2-bhyve"])
+        .map_err(|e| if e.is_empty() { "package installation failed".to_string() } else { e })?;
     steps.push("Installed packages: vm-bhyve, bhyve-firmware, grub2-bhyve".into());
 
     // 2. Configure rc.conf
@@ -1573,28 +1471,9 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
 
     // 3. Prepare storage
     if let Some(dataset) = spec.strip_prefix("zfs:") {
-        let exists = Command::new(ZFS)
-            .args(["list", "-H", "-o", "name", dataset])
-            .stdin(Stdio::null())
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !exists {
-            Command::new(ZFS)
-                .args(["create", dataset])
-                .stdin(Stdio::null())
-                .output()
-                .map_err(|e| format!("zfs create {dataset} failed: {e}"))
-                .and_then(|o| {
-                    if o.status.success() {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "zfs create {dataset} failed: {}",
-                            String::from_utf8_lossy(&o.stderr).trim()
-                        ))
-                    }
-                })?;
+        if !crate::cmd::run_sync_str(ZFS, &["list", "-H", "-o", "name", dataset]).is_ok() {
+            crate::cmd::run_sync_str(ZFS, &["create", dataset])
+                .map_err(|e| if e.is_empty() { format!("zfs create {dataset} failed") } else { e })?;
             steps.push(format!("ZFS dataset created: {dataset}"));
         } else {
             steps.push(format!("ZFS dataset already exists: {dataset}"));
@@ -1606,21 +1485,8 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
     }
 
     // 4. Run vm init (loads kernel modules, creates .config/.templates/.iso/.img)
-    let init_result = Command::new(VM)
-        .arg("init")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("vm init failed: {e}"))?;
-    if !init_result.status.success() {
-        let stderr = String::from_utf8_lossy(&init_result.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&init_result.stdout).trim().to_string();
-        return Err(format!(
-            "vm init failed: {}",
-            if !stderr.is_empty() { stderr } else { stdout }
-        ));
-    }
+    crate::cmd::run_sync_str(VM, &["init"])
+        .map_err(|e| if e.is_empty() { "vm init failed".to_string() } else { format!("vm init failed: {e}") })?;
     steps.push("vm init completed (kernel modules loaded, directories created)".into());
 
     // 5. Copy example templates into .templates/
@@ -1652,34 +1518,15 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
 
 /// Read a single sysrc variable value (returns None if unset or error).
 fn sysrc_get(key: &str) -> Option<String> {
-    let output = Command::new(SYSRC)
-        .args(["-n", key])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let s = crate::cmd::run_sync_str(SYSRC, &["-n", key]).ok()?;
+    let s = s.trim().to_string();
     if s.is_empty() { None } else { Some(s) }
 }
 
 /// Set a sysrc variable (`sysrc KEY=VALUE`).
 fn sysrc_set(key: &str, value: &str) -> Result<(), String> {
     let assignment = format!("{key}={value}");
-    let output = Command::new(SYSRC)
-        .arg(&assignment)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("sysrc {key} failed: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!("sysrc {key}={value} failed: {stderr}"));
-    }
-    Ok(())
+    crate::cmd::run_sync_str(SYSRC, &[&assignment]).map(|_| ())
 }
 
 /// Read the `vm_list` variable from rc.conf (space-separated VM names).
@@ -1713,16 +1560,8 @@ pub fn set_vm_auto_start(name: &str, enabled: bool) -> Result<(), String> {
 /// For plain paths, returns as-is.
 fn resolve_vm_dir(vm_dir: &str) -> Option<String> {
     if let Some(dataset) = vm_dir.strip_prefix("zfs:") {
-        let output = Command::new(ZFS)
-            .args(["get", "-H", "-o", "value", "mountpoint", dataset])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let mp = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let mp = crate::cmd::run_sync_str(ZFS, &["get", "-H", "-o", "value", "mountpoint", dataset]).ok()?;
+        let mp = mp.trim().to_string();
         if mp.is_empty() || mp == "-" {
             return None;
         }

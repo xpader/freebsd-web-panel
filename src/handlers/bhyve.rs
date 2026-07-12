@@ -19,7 +19,10 @@ pub struct ListQuery {
 
 /// GET /api/bhyve/vms — list all VMs (or running-only if ?running=true).
 pub async fn list_vms(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<bhyve::VmSummary>>> {
-    let vms = bhyve::list_vms(q.running).map_err(ApiError::Command)?;
+    let vms = tokio::task::spawn_blocking(move || bhyve::list_vms(q.running))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(vms))
 }
 
@@ -390,7 +393,10 @@ pub async fn vm_install(
 
 /// GET /api/bhyve/images — list vm-bhyve images.
 pub async fn list_images() -> ApiResult<Json<Vec<bhyve::VmImage>>> {
-    let images = bhyve::list_images().map_err(ApiError::Command)?;
+    let images = tokio::task::spawn_blocking(bhyve::list_images)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(images))
 }
 
@@ -498,13 +504,19 @@ pub async fn destroy_image(
 
 /// GET /api/bhyve/img-files — list disk image files from .img directory.
 pub async fn list_img_files() -> ApiResult<Json<Vec<bhyve::IsoImage>>> {
-    let files = bhyve::list_img_files().map_err(ApiError::Command)?;
+    let files = tokio::task::spawn_blocking(bhyve::list_img_files)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(files))
 }
 
 /// GET /api/bhyve/switches — list virtual switches.
 pub async fn list_switches() -> ApiResult<Json<Vec<bhyve::VmSwitch>>> {
-    let switches = bhyve::list_switches().map_err(ApiError::Command)?;
+    let switches = tokio::task::spawn_blocking(bhyve::list_switches)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(switches))
 }
 
@@ -806,7 +818,10 @@ pub async fn init(
 
 /// GET /api/bhyve/datastores — list datastores.
 pub async fn list_datastores() -> ApiResult<Json<Vec<bhyve::VmDatastore>>> {
-    let ds = bhyve::list_datastores().map_err(ApiError::Command)?;
+    let ds = tokio::task::spawn_blocking(bhyve::list_datastores)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(ds))
 }
 
@@ -879,13 +894,19 @@ pub async fn delete_datastore(
 
 /// GET /api/bhyve/templates — list available templates.
 pub async fn list_templates() -> ApiResult<Json<Vec<String>>> {
-    let templates = bhyve::list_templates().map_err(ApiError::Command)?;
+    let templates = tokio::task::spawn_blocking(bhyve::list_templates)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(templates))
 }
 
 /// GET /api/bhyve/isos — list available ISO images.
 pub async fn list_isos() -> ApiResult<Json<Vec<bhyve::IsoImage>>> {
-    let isos = bhyve::list_isos().map_err(ApiError::Command)?;
+    let isos = tokio::task::spawn_blocking(bhyve::list_isos)
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
     Ok(Json(isos))
 }
 

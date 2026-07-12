@@ -7,13 +7,13 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::jail;
 use crate::state::AppState;
@@ -138,14 +138,11 @@ fn jail_resolv_path(state: &AppState) -> PathBuf {
 
 /// Read the jail_list from rc.conf (via sysrc) and return as a HashSet of jail names.
 fn read_jail_list() -> std::collections::HashSet<String> {
-    Command::new("/usr/sbin/sysrc")
-        .args(["-n", "jail_list"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().split_whitespace().map(|n| n.to_string()).collect())
+    cmd::run_sync("/usr/sbin/sysrc", &["-n", "jail_list"])
         .unwrap_or_default()
+        .split_whitespace()
+        .map(|n| n.to_string())
+        .collect()
 }
 
 /// Unified jail info struct. Used in all list and detail responses.
@@ -231,7 +228,7 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
     }
 
     let only_running = q.running.as_deref() == Some("true");
-
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<Vec<JailInfo>> {
     if only_running {
         // Fast path: query libjail directly.
         // Parse jail.conf for meta.description and config fallback params.
@@ -262,7 +259,7 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
                 })
             })
             .collect();
-        return Ok(Json(jails));
+        return Ok(jails);
     }
 
     // Default: all jails from jail.conf + running status from libjail.
@@ -299,6 +296,11 @@ pub async fn list(Query(q): Query<ListQuery>) -> ApiResult<Json<Vec<JailInfo>>> 
             }
         })
         .collect();
+
+    Ok(result)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     Ok(Json(result))
 }
@@ -564,6 +566,7 @@ fn substitute_vars(map: &mut HashMap<String, String>, name: &str) {
 pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
     validate_jail_name(&name)?;
 
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<JailInfo> {
     // Config from jail.conf.
     let entries = parse_jail_conf().unwrap_or_default();
     let mut pj = entries
@@ -622,7 +625,7 @@ pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
     let mut params = pj.params;
     params.remove("meta.epair_id");
 
-    Ok(Json(JailInfo {
+    Ok(JailInfo {
         auto_start: auto.contains(&name),
         description: params.get("meta.description").cloned().unwrap_or_default(),
         hostname: params.get("host.hostname").cloned().unwrap_or_else(|| pj.name.clone()),
@@ -633,7 +636,12 @@ pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
         jid,
         params: Some(params),
         runtime,
-    }))
+    })
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    Ok(Json(result))
 }
 
 // ── Base systems ──────────────────────────────────────────────────
@@ -787,11 +795,7 @@ fn write_bases(state: &AppState, bases: &[BaseSystem]) -> ApiResult<()> {
 
 /// Check whether a path is a ZFS dataset.
 fn is_zfs_dataset(path: &str) -> bool {
-    Command::new(ZFS)
-        .args(["list", "-H", "-o", "name", path])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    cmd::run_sync(ZFS, &["list", "-H", "-o", "name", path]).is_ok()
 }
 
 /// Resolve a source path to a filesystem path. If it's a ZFS dataset name,
@@ -800,16 +804,9 @@ fn resolve_fs_path(path: &str) -> String {
     if path.starts_with('/') {
         return path.to_string();
     }
-    // Try ZFS mountpoint lookup.
-    if let Ok(output) = Command::new(ZFS)
-        .args(["list", "-H", "-o", "mountpoint", path])
-        .output()
-    {
-        if output.status.success() {
-            return String::from_utf8_lossy(&output.stdout).trim().to_string();
-        }
-    }
-    path.to_string()
+    cmd::run_sync(ZFS, &["list", "-H", "-o", "mountpoint", path])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| path.to_string())
 }
 
 /// Generate the fstab file path for a jail image, derived from the target path.
@@ -827,29 +824,17 @@ fn image_fstab_path(state: &AppState, target: &str) -> PathBuf {
 
 /// List snapshots for a ZFS dataset (full names like "pool/ds@snap").
 fn zfs_snapshots(dataset: &str) -> Vec<String> {
-    let output = Command::new(ZFS)
-        .args(["list", "-t", "snapshot", "-H", "-o", "name", "-d", "1", dataset])
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    }
+    cmd::run_sync(ZFS, &["list", "-t", "snapshot", "-H", "-o", "name", "-d", "1", dataset])
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
+/// Run a command and return an error on failure.
 fn run(cmd: &str, args: &[&str]) -> ApiResult<()> {
-    let output = Command::new(cmd).args(args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ApiError::Command(if stderr.is_empty() {
-            format!("{cmd} failed")
-        } else {
-            stderr
-        }));
-    }
+    cmd::run_sync(cmd, args)?;
     Ok(())
 }
 
@@ -878,13 +863,19 @@ pub async fn zfs_snapshot_list(
     Query(q): Query<NameQuery>,
 ) -> ApiResult<Json<Vec<String>>> {
     validate_source_path(&q.name)?;
-    if !is_zfs_dataset(&q.name) {
-        return Err(ApiError::BadRequest(format!(
-            "\"{}\" is not a ZFS dataset",
-            q.name
-        )));
-    }
-    Ok(Json(zfs_snapshots(&q.name)))
+    let name = q.name.clone();
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<Vec<String>> {
+        if !is_zfs_dataset(&name) {
+            return Err(ApiError::BadRequest(format!(
+                "\"{}\" is not a ZFS dataset",
+                name
+            )));
+        }
+        Ok(zfs_snapshots(&name))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    Ok(Json(result))
 }
 
 /// List all registered base systems.
@@ -922,34 +913,40 @@ pub async fn base_import(
 ) -> ApiResult<(StatusCode, Json<BaseSystem>)> {
     validate_jail_name(&body.name)?;
 
-    let mut bases = read_bases(&state);
-    if bases.iter().any(|b| b.name == body.name) {
-        return Err(ApiError::Conflict(format!(
-            "base system \"{}\" already exists",
-            body.name
-        )));
-    }
-
-    let method = if body.method.is_empty() { "import" } else { body.method.as_str() };
-    let base = match method {
-        "import" => create_base_import(&state, &body)?,
-        "from-txz" => create_base_from_txz(&state, &body, None)?,
-        "download" => {
-            let txz_path = download_base_txz(&body)?;
-            let result = create_base_from_txz(&state, &body, Some(&txz_path));
-            // Clean up the downloaded temp file regardless of success/failure.
-            let _ = fs::remove_file(&txz_path);
-            result?
-        }
-        other => {
-            return Err(ApiError::BadRequest(format!(
-                "unknown creation method: \"{other}\""
+    let body_name = body.name.clone();
+    let state_for_blocking = state.clone();
+    let (base, method) = tokio::task::spawn_blocking(move || -> ApiResult<(BaseSystem, String)> {
+        let mut bases = read_bases(&state_for_blocking);
+        if bases.iter().any(|b| b.name == body.name) {
+            return Err(ApiError::Conflict(format!(
+                "base system \"{}\" already exists",
+                body.name
             )));
         }
-    };
 
-    bases.push(base.clone());
-    write_bases(&state, &bases)?;
+        let method = if body.method.is_empty() { "import" } else { body.method.as_str() }.to_string();
+        let base = match method.as_str() {
+            "import" => create_base_import(&state_for_blocking, &body)?,
+            "from-txz" => create_base_from_txz(&state_for_blocking, &body, None)?,
+            "download" => {
+                let txz_path = download_base_txz(&body)?;
+                let result = create_base_from_txz(&state_for_blocking, &body, Some(&txz_path));
+                let _ = fs::remove_file(&txz_path);
+                result?
+            }
+            other => {
+                return Err(ApiError::BadRequest(format!(
+                    "unknown creation method: \"{other}\""
+                )));
+            }
+        };
+
+        bases.push(base.clone());
+        write_bases(&state_for_blocking, &bases)?;
+        Ok((base, method))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     crate::audit::record(
         &state,
@@ -957,7 +954,7 @@ pub async fn base_import(
         "POST",
         "/api/jails/bases",
         201,
-        Some(format!("created base system {} ({}, {})", body.name, method, base.type_)),
+        Some(format!("created base system {} ({}, {})", body_name, method, base.type_)),
     );
 
     Ok((StatusCode::CREATED, Json(base)))
@@ -1358,18 +1355,10 @@ fn download_base_txz(body: &BaseImportBody) -> ApiResult<String> {
 
     tracing::info!("downloading base.txz from {url} to {tmp_path}");
 
-    let output = Command::new(FETCH)
-        .args(["-o", &tmp_path, url])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let fetch_url = url.to_string();
+    if let Err(e) = cmd::run_sync(FETCH, &["-o", &tmp_path, &fetch_url]) {
         let _ = fs::remove_file(&tmp_path);
-        return Err(ApiError::Command(if stderr.is_empty() {
-            format!("failed to download {url}")
-        } else {
-            stderr
-        }));
+        return Err(e);
     }
 
     // Verify the file was downloaded and is non-empty.
@@ -1449,36 +1438,43 @@ pub async fn base_update(
     Path(name): Path<String>,
     Json(body): Json<BaseUpdateBody>,
 ) -> ApiResult<Json<BaseSystem>> {
-    let mut bases = read_bases(&state);
-    let base = bases
-        .iter_mut()
-        .find(|b| b.name == name)
-        .ok_or_else(|| ApiError::NotFound(format!("base system \"{name}\" not found")))?;
+    let state_for_blocking = state.clone();
+    let updated = tokio::task::spawn_blocking(move || -> ApiResult<BaseSystem> {
+        let mut bases = read_bases(&state_for_blocking);
+        let base = bases
+            .iter_mut()
+            .find(|b| b.name == name)
+            .ok_or_else(|| ApiError::NotFound(format!("base system \"{name}\" not found")))?;
 
-    if base.type_ != "zfs" {
-        return Err(ApiError::BadRequest(
-            "snapshot update is only supported for ZFS base systems".into(),
-        ));
-    }
+        if base.type_ != "zfs" {
+            return Err(ApiError::BadRequest(
+                "snapshot update is only supported for ZFS base systems".into(),
+            ));
+        }
 
-    if body.snapshots.is_empty() {
-        return Err(ApiError::BadRequest("at least one snapshot is required".into()));
-    }
+        if body.snapshots.is_empty() {
+            return Err(ApiError::BadRequest("at least one snapshot is required".into()));
+        }
 
-    validate_zfs_snapshots(&base.source_path, &body.snapshots)?;
+        validate_zfs_snapshots(&base.source_path, &body.snapshots)?;
 
-    base.snapshots = body.snapshots.clone();
-    let updated = base.clone();
-    write_bases(&state, &bases)?;
+        base.snapshots = body.snapshots.clone();
+        let updated = base.clone();
+        write_bases(&state_for_blocking, &bases)?;
+        Ok(updated)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     crate::audit::record(
         &state,
         None,
         "PUT",
-        &format!("/api/jails/bases/{name}"),
+        &format!("/api/jails/bases/{}", updated.name),
         200,
         Some(format!(
-            "updated base system {name} snapshots: [{}]",
+            "updated base system {} snapshots: [{}]",
+            updated.name,
             updated.snapshots.join(", ")
         )),
     );
@@ -1561,6 +1557,7 @@ pub async fn jail_create(
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     validate_jail_name(&body.name)?;
 
+    let (status, json_val) = tokio::task::spawn_blocking(move || -> ApiResult<(StatusCode, serde_json::Value)> {
     // Check for duplicate name in jail.conf.
     let existing = parse_jail_conf().unwrap_or_default();
     if existing.iter().any(|e| e.name == body.name) {
@@ -1649,18 +1646,7 @@ pub async fn jail_create(
 
                     // Copy template skeleton.
                     fs::create_dir_all(target)?;
-                    let cp_status = Command::new(CP)
-                        .args(["-R", &format!("{template}/."), target])
-                        .output()?;
-                    if !cp_status.status.success() {
-                        let stderr =
-                            String::from_utf8_lossy(&cp_status.stderr).trim().to_string();
-                        return Err(ApiError::Command(if stderr.is_empty() {
-                            "cp failed".into()
-                        } else {
-                            stderr
-                        }));
-                    }
+                    cmd::run_sync(CP, &["-R", &format!("{template}/."), target])?;
 
                     // Write fstab.
                     let fstab = image_fstab_path(&state, target);
@@ -1773,9 +1759,8 @@ pub async fn jail_create(
         let mut list = read_jail_list();
         list.insert(body.name.clone());
         let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-        let _ = Command::new("/usr/sbin/sysrc")
-            .args([&format!("jail_list={val}")])
-            .output();
+        let assignment = format!("jail_list={val}");
+        cmd::run_forget_sync("/usr/sbin/sysrc", &[&assignment]);
     }
 
     crate::audit::record(
@@ -1785,12 +1770,17 @@ pub async fn jail_create(
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({
+        serde_json::json!({
             "name": body.name,
             "path": jail_path,
             "fstab": fstab_path,
-        })),
+        }),
     ))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    Ok((status, Json(json_val)))
 }
 
 // ── Jail lifecycle control (start/stop/delete) ────────────────────
@@ -1896,27 +1886,21 @@ fn find_bridge_for_interface(iface: &str) -> Option<String> {
 
     // If it's already a bridge name, verify it exists.
     if iface.starts_with("bridge") {
-        let check = Command::new(IFCONFIG).arg(iface).output().ok()?;
-        if check.status.success() {
+        if cmd::status_sync(IFCONFIG, &[iface]) {
             return Some(iface.to_string());
         }
         return None;
     }
 
     // List all bridges.
-    let bridges_out = Command::new(IFCONFIG)
-        .args(["-g", "bridge"])
-        .output()
-        .ok()?;
+    let bridges = cmd::run_sync(IFCONFIG, &["-g", "bridge"]).ok()?;
 
-    let bridges = String::from_utf8_lossy(&bridges_out.stdout);
     for bridge in bridges.lines() {
         let bridge = bridge.trim();
         if bridge.is_empty() {
             continue;
         }
-        if let Ok(mout) = Command::new(IFCONFIG).arg(bridge).output() {
-            let info = String::from_utf8_lossy(&mout.stdout);
+        if let Ok(info) = cmd::run_sync(IFCONFIG, &[bridge]) {
             for line in info.lines() {
                 let line = line.trim();
                 if let Some(rest) = line.strip_prefix("member:") {
@@ -1956,24 +1940,16 @@ fn ensure_bridge_for_interface(iface: &str) -> ApiResult<String> {
     }
 
     // Create a new bridge.
-    let out = Command::new(IFCONFIG)
-        .arg("bridge")
-        .arg("create")
-        .output()?;
-    if !out.status.success() {
-        return Err(ApiError::Command(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    let bridge = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let bridge = cmd::run_sync(IFCONFIG, &["bridge", "create"])?;
+    let bridge = bridge.trim().to_string();
     if bridge.is_empty() {
         return Err(ApiError::Internal("ifconfig bridge create returned empty name".into()));
     }
 
     // Add the interface as a member and bring both up.
-    let _ = Command::new(IFCONFIG).args([&bridge, "addm", iface]).output();
-    let _ = Command::new(IFCONFIG).arg(&bridge).arg("up").output();
-    let _ = Command::new(IFCONFIG).arg(iface).arg("up").output();
+    cmd::run_forget_sync(IFCONFIG, &[&bridge, "addm", iface]);
+    cmd::run_forget_sync(IFCONFIG, &[&bridge, "up"]);
+    cmd::run_forget_sync(IFCONFIG, &[iface, "up"]);
 
     tracing::info!("created bridge {bridge} and added member {iface}");
 
@@ -1999,10 +1975,7 @@ fn ensure_vnet_helper() {
     let _ = fs::create_dir_all("/usr/local/libexec");
     let content = format!("#!/bin/sh\n{marker}\n{}", &VNET_HELPER_SCRIPT["#!/bin/sh\n".len()..]);
     let _ = fs::write(VNET_HELPER, content);
-    let _ = Command::new("/bin/chmod")
-        .arg("+x")
-        .arg(VNET_HELPER)
-        .output();
+    cmd::run_forget_sync("/bin/chmod", &["+x", VNET_HELPER]);
 }
 
 /// Extract epair ID from a name like "epair0a", "epair100b", or "epair0".
@@ -2217,10 +2190,7 @@ fn remove_jail_vnet_rc_conf(path: &str) {
 
 /// Get the host's default IPv4 gateway from the routing table.
 fn get_default_gateway() -> ApiResult<String> {
-    let output = Command::new("/sbin/route")
-        .args(["-n", "get", "default"])
-        .output()?;
-    let info = String::from_utf8_lossy(&output.stdout);
+    let info = cmd::run_sync("/sbin/route", &["-n", "get", "default"])?;
     for line in info.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("gateway:") {
@@ -2239,13 +2209,20 @@ pub async fn jail_start(
     Path(name): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_jail_name(&name)?;
-    ensure_vnet_helper();
-    jail::start_jail(&name).map_err(ApiError::Command)?;
-    crate::audit::record(
-        &state, None, "POST", &format!("/api/jails/{name}/start"), 200,
-        Some(format!("started jail {name}")),
-    );
-    Ok(Json(serde_json::json!({"name": name, "action": "start"})))
+    let name_for_json = name.clone();
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
+        ensure_vnet_helper();
+        jail::start_jail(&name).map_err(ApiError::Command)?;
+        crate::audit::record(
+            &state, None, "POST", &format!("/api/jails/{name}/start"), 200,
+            Some(format!("started jail {name}")),
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    Ok(Json(serde_json::json!({"name": name_for_json, "action": "start"})))
 }
 
 /// Stop a jail.
@@ -2254,12 +2231,19 @@ pub async fn jail_stop(
     Path(name): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_jail_name(&name)?;
-    jail::stop_jail(&name).map_err(ApiError::Command)?;
-    crate::audit::record(
-        &state, None, "POST", &format!("/api/jails/{name}/stop"), 200,
-        Some(format!("stopped jail {name}")),
-    );
-    Ok(Json(serde_json::json!({"name": name, "action": "stop"})))
+    let name_for_json = name.clone();
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
+        jail::stop_jail(&name).map_err(ApiError::Command)?;
+        crate::audit::record(
+            &state, None, "POST", &format!("/api/jails/{name}/stop"), 200,
+            Some(format!("stopped jail {name}")),
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    Ok(Json(serde_json::json!({"name": name_for_json, "action": "stop"})))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2278,6 +2262,8 @@ pub async fn jail_delete(
 ) -> ApiResult<StatusCode> {
     validate_jail_name(&name)?;
 
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
     // Stop if running.
     if jail::is_jail_running(&name) {
         jail::stop_jail(&name).map_err(ApiError::Command)?;
@@ -2307,13 +2293,10 @@ pub async fn jail_delete(
             // Determine if the path is its own ZFS dataset or just a directory
             // inside a parent dataset. `zfs list` resolves to the nearest parent
             // dataset, so we MUST verify the mountpoint matches exactly.
-            let zfs_info = Command::new(ZFS)
-                .args(["list", "-H", "-o", "name,mountpoint", path])
-                .output()
+            let zfs_info = cmd::run_sync(ZFS, &["list", "-H", "-o", "name,mountpoint", path])
                 .ok()
-                .filter(|o| o.status.success())
-                .and_then(|o| {
-                    let line = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                .and_then(|s| {
+                    let line = s.trim().to_string();
                     let parts: Vec<&str> = line.split('\t').collect();
                     if parts.len() >= 2 {
                         Some((parts[0].to_string(), parts[1].to_string()))
@@ -2360,6 +2343,10 @@ pub async fn jail_delete(
         &state, None, "DELETE", &format!("/api/jails/{name}"), 200,
         Some(detail_msg),
     );
+    Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2629,7 +2616,10 @@ pub async fn jail_update(
     Json(body): Json<JailUpdateBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_jail_name(&name)?;
+    let name_for_json = name.clone();
 
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
     let entries = parse_jail_conf().unwrap_or_default();
     if !entries.iter().any(|e| e.name == name) {
         return Err(ApiError::NotFound(format!("jail \"{name}\" not found")));
@@ -2682,9 +2672,8 @@ pub async fn jail_update(
         if want_auto && !was_in {
             list.insert(name.clone());
             let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-            let _ = Command::new("/usr/sbin/sysrc")
-                .args([&format!("jail_list={val}")])
-                .output();
+            let assignment = format!("jail_list={val}");
+            cmd::run_forget_sync("/usr/sbin/sysrc", &[&assignment]);
             crate::audit::record(
                 &state, None, "PUT", &format!("/api/jails/{name}"), 200,
                 Some(format!("added {name} to jail_list (auto-start)")),
@@ -2692,9 +2681,8 @@ pub async fn jail_update(
         } else if !want_auto && was_in {
             list.remove(&name);
             let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-            let _ = Command::new("/usr/sbin/sysrc")
-                .args([&format!("jail_list={val}")])
-                .output();
+            let assignment = format!("jail_list={val}");
+            cmd::run_forget_sync("/usr/sbin/sysrc", &[&assignment]);
             crate::audit::record(
                 &state, None, "PUT", &format!("/api/jails/{name}"), 200,
                 Some(format!("removed {name} from jail_list (auto-start)")),
@@ -2706,8 +2694,12 @@ pub async fn jail_update(
         &state, None, "PUT", &format!("/api/jails/{name}"), 200,
         Some(format!("updated jail {name} configuration")),
     );
+    Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
-    Ok(Json(serde_json::json!({"name": name})))
+    Ok(Json(serde_json::json!({"name": name_for_json})))
 }
 
 /// Parse jail.conf from a string (for backup file parsing).

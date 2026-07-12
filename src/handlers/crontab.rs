@@ -649,11 +649,7 @@ fn run_crontab_install(name: &str, body: &str) -> ApiResult<()> {
 
 /// Remove user `<name>`'s crontab entirely (used when the last entry is gone).
 fn run_crontab_remove(name: &str) -> ApiResult<()> {
-    let _ = Command::new(CRONTAB)
-        .arg("-u")
-        .arg(name)
-        .arg("-r")
-        .output()?;
+    crate::cmd::run_forget_sync(CRONTAB, &["-u", name, "-r"]);
     Ok(())
 }
 
@@ -795,14 +791,19 @@ fn build_comment_lines(comment: &str) -> Vec<String> {
 
 /// GET /api/crontab — list all entries from /etc/crontab and every user tab.
 pub async fn list() -> ApiResult<Json<Vec<CronEntry>>> {
-    let mut out = Vec::new();
-    if Path::new(ETC_CRONTAB).exists() {
-        out.extend(parse_source("system")?);
-    }
-    for user in list_tab_users()? {
-        out.extend(parse_source(&user)?);
-    }
-    Ok(Json(out))
+    let result = tokio::task::spawn_blocking(|| {
+        let mut out = Vec::new();
+        if Path::new(ETC_CRONTAB).exists() {
+            out.extend(parse_source("system")?);
+        }
+        for user in list_tab_users()? {
+            out.extend(parse_source(&user)?);
+        }
+        Ok::<_, ApiError>(out)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    Ok(Json(result))
 }
 
 /// Selectable creation target: `/etc/crontab` or a per-user crontab.
@@ -820,53 +821,58 @@ pub struct CronTarget {
 /// UIDs ≤ 26 (except root). Lets the "Add" dialog target users that don't
 /// yet appear in the list (no tab created).
 pub async fn targets() -> ApiResult<Json<Vec<CronTarget>>> {
-    use std::collections::{BTreeSet, HashSet};
-    let tab_users: HashSet<String> = list_tab_users()?.into_iter().collect();
+    let result = tokio::task::spawn_blocking(|| {
+        use std::collections::{BTreeSet, HashSet};
+        let tab_users: HashSet<String> = list_tab_users()?.into_iter().collect();
 
-    let mut names: BTreeSet<String> = BTreeSet::new();
-    names.extend(tab_users.iter().cloned());
-    if let Ok(passwd) = fs::read_to_string("/etc/passwd") {
-        for line in passwd.lines() {
-            if line.starts_with('#') || line.is_empty() {
-                continue;
-            }
-            let f: Vec<&str> = line.splitn(7, ':').collect();
-            if f.len() < 3 {
-                continue;
-            }
-            let name = f[0];
-            // Skip underscore-prefixed system accounts (_dhcp, _pflogd, …).
-            if name.starts_with('_') {
-                continue;
-            }
-            if let Ok(uid) = f[2].parse::<u32>() {
-                // nobody pseudo-account and reserved UIDs ≤ 26 (daemon, bin,
-                // tty, smmsp, mailnull, …) — except root (UID 0).
-                if uid == 65534 || (uid <= 26 && name != "root") {
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        names.extend(tab_users.iter().cloned());
+        if let Ok(passwd) = fs::read_to_string("/etc/passwd") {
+            for line in passwd.lines() {
+                if line.starts_with('#') || line.is_empty() {
                     continue;
                 }
-                names.insert(name.to_string());
+                let f: Vec<&str> = line.splitn(7, ':').collect();
+                if f.len() < 3 {
+                    continue;
+                }
+                let name = f[0];
+                // Skip underscore-prefixed system accounts (_dhcp, _pflogd, …).
+                if name.starts_with('_') {
+                    continue;
+                }
+                if let Ok(uid) = f[2].parse::<u32>() {
+                    // nobody pseudo-account and reserved UIDs ≤ 26 (daemon, bin,
+                    // tty, smmsp, mailnull, …) — except root (UID 0).
+                    if uid == 65534 || (uid <= 26 && name != "root") {
+                        continue;
+                    }
+                    names.insert(name.to_string());
+                }
             }
         }
-    }
 
-    let mut out = Vec::with_capacity(names.len() + 1);
-    out.push(CronTarget {
-        source: "system".into(),
-        label: "/etc/crontab".into(),
-        has_tab: Path::new(ETC_CRONTAB).exists(),
-    });
-    for n in names {
-        if !RE_USERNAME.is_match(&n) {
-            continue;
-        }
+        let mut out = Vec::with_capacity(names.len() + 1);
         out.push(CronTarget {
-            has_tab: tab_users.contains(&n),
-            source: n.clone(),
-            label: n,
+            source: "system".into(),
+            label: "/etc/crontab".into(),
+            has_tab: Path::new(ETC_CRONTAB).exists(),
         });
-    }
-    Ok(Json(out))
+        for n in names {
+            if !RE_USERNAME.is_match(&n) {
+                continue;
+            }
+            out.push(CronTarget {
+                has_tab: tab_users.contains(&n),
+                source: n.clone(),
+                label: n,
+            });
+        }
+        Ok::<_, ApiError>(out)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    Ok(Json(result))
 }
 
 /// POST /api/crontab — append a new entry to the given source.
@@ -897,7 +903,13 @@ pub async fn create(
         disabled: req.entry.disabled.unwrap_or(false),
     }));
 
-    write_source(&req.source, is_system, &preamble, &blocks, &backup_dir(&state))?;
+    let backup = backup_dir(&state);
+    let source_for_write = req.source.clone();
+    tokio::task::spawn_blocking(move || {
+        write_source(&source_for_write, is_system, &preamble, &blocks, &backup)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
@@ -951,7 +963,13 @@ pub async fn update(
         task_idx: old.task_idx,
     });
 
-    write_source(&req.source, is_system, &preamble, &blocks, &backup_dir(&state))?;
+    let backup = backup_dir(&state);
+    let source_for_write = req.source.clone();
+    tokio::task::spawn_blocking(move || {
+        write_source(&source_for_write, is_system, &preamble, &blocks, &backup)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
@@ -982,7 +1000,13 @@ pub async fn delete(
         .ok_or_else(|| ApiError::NotFound("crontab line not found".into()))?;
     blocks.remove(idx);
 
-    write_source(&q.source, is_system, &preamble, &blocks, &backup_dir(&state))?;
+    let backup = backup_dir(&state);
+    let source_for_write = q.source.clone();
+    tokio::task::spawn_blocking(move || {
+        write_source(&source_for_write, is_system, &preamble, &blocks, &backup)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     audit::record(
         &state,
