@@ -419,6 +419,8 @@ tr:hover td { background: var(--bg-elev2); }
 
 /* ---- Clickable table row ---- */
 tr.row-clickable { cursor: pointer; }
+.card.clickable { cursor: pointer; transition: border-color 0.15s; }
+.card.clickable:hover { border-color: var(--accent); }
 
 /* ---- Dashboard footer ---- */
 .dash-footer { display: flex; align-items: center; gap: 16px; padding: 16px 0 8px; font-size: 13px; }

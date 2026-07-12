@@ -1,10 +1,16 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { api } from '../lib/api.js';
 import { fmtBytes } from '../lib/format.js';
 
 const { t } = useI18n();
+const router = useRouter();
+
+function goToPool(name) {
+  router.push({ name: 'zfs-pool-detail', params: { name } });
+}
 const data = ref(null);
 const error = ref('');
 
@@ -32,9 +38,9 @@ onMounted(async () => {
 
   <template v-else>
     <!-- ZFS Pools -->
+    <template v-if="data.zpools.length">
     <div class="section-title">{{ t('fs.zfsPools') }}</div>
-    <div v-if="!data.zpools.length" class="card empty">{{ t('fs.noPools') }}</div>
-    <div v-for="p in data.zpools" :key="p.name" class="card">
+    <div v-for="p in data.zpools" :key="p.name" class="card clickable" @click="goToPool(p.name)">
       <div class="card-title">{{ t('fs.poolName', { name: p.name }) }}</div>
       <div class="stat-row">
         <span>{{ t('fs.state') }}: <span :class="['badge', p.health === 'ONLINE' ? 'badge-success' : 'badge-danger']">{{ p.health }}</span></span>
@@ -48,6 +54,7 @@ onMounted(async () => {
         <div :class="['bar', barClass(p.capacity_pct)]" :style="{ width: p.capacity_pct + '%' }"></div>
       </div>
     </div>
+    </template>
 
     <!-- Physical Disks -->
     <div class="section-title" style="margin-top:32px;">{{ t('fs.physicalDisks', { n: data.disks.length }) }}</div>
