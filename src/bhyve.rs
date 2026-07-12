@@ -406,9 +406,16 @@ pub fn list_switches() -> Result<Vec<VmSwitch>, String> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct VirtualPort {
+    pub device: String,
+    pub vm: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct VmSwitchDetail {
     pub name: String,
     pub fields: std::collections::BTreeMap<String, String>,
+    pub virtual_ports: Vec<VirtualPort>,
 }
 
 pub fn get_switch_info(name: &str) -> Result<VmSwitchDetail, String> {
@@ -418,20 +425,61 @@ pub fn get_switch_info(name: &str) -> Result<VmSwitchDetail, String> {
 
 fn parse_switch_info(raw: &str, name: &str) -> VmSwitchDetail {
     let mut fields = std::collections::BTreeMap::new();
+    let mut virtual_ports = Vec::new();
+    let mut current_port: Option<(String, String)> = None; // (device, vm)
+
     for line in raw.lines() {
         let trimmed = line.trim();
-        let Some((key, value)) = trimmed.split_once(':') else {
+        if trimmed.is_empty() {
+            // Blank line: flush any in-progress virtual-port
+            if let Some((device, vm)) = current_port.take() {
+                virtual_ports.push(VirtualPort { device, vm });
+            }
             continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if !key.is_empty() && !value.is_empty() {
-            fields.insert(key.to_string(), value.to_string());
+        }
+
+        // Detect "virtual-port" section header
+        if trimmed == "virtual-port" {
+            if let Some((device, vm)) = current_port.take() {
+                virtual_ports.push(VirtualPort { device, vm });
+            }
+            current_port = Some((String::new(), String::new()));
+            continue;
+        }
+
+        // Inside a virtual-port block, parse "device:" / "vm:" lines
+        if let Some((device, vm)) = &mut current_port {
+            if let Some((key, value)) = trimmed.split_once(':') {
+                match key.trim() {
+                    "device" => *device = value.trim().to_string(),
+                    "vm" => *vm = value.trim().to_string(),
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        // Top-level key: value
+        if let Some((key, value)) = trimmed.split_once(':') {
+            let key = key.trim();
+            let value = value.trim();
+            if !key.is_empty() && !value.is_empty() {
+                fields.insert(key.to_string(), value.to_string());
+            }
         }
     }
+
+    // Flush trailing virtual-port
+    if let Some((device, vm)) = current_port.take() {
+        if !device.is_empty() || !vm.is_empty() {
+            virtual_ports.push(VirtualPort { device, vm });
+        }
+    }
+
     VmSwitchDetail {
         name: name.to_string(),
         fields,
+        virtual_ports,
     }
 }
 
@@ -482,6 +530,34 @@ pub fn create_switch(
 
 pub fn destroy_switch(name: &str) -> Result<(), String> {
     vm_run(&["switch", "destroy", name])?;
+    Ok(())
+}
+
+pub fn switch_vlan(name: &str, vlan: u16) -> Result<(), String> {
+    let vlan_str = vlan.to_string();
+    vm_run(&["switch", "vlan", name, &vlan_str])?;
+    Ok(())
+}
+
+pub fn switch_address(name: &str, address: Option<&str>) -> Result<(), String> {
+    let addr = address.unwrap_or("none");
+    vm_run(&["switch", "address", name, addr])?;
+    Ok(())
+}
+
+pub fn switch_private(name: &str, on: bool) -> Result<(), String> {
+    let flag = if on { "on" } else { "off" };
+    vm_run(&["switch", "private", name, flag])?;
+    Ok(())
+}
+
+pub fn switch_add_port(name: &str, interface: &str) -> Result<(), String> {
+    vm_run(&["switch", "add", name, interface])?;
+    Ok(())
+}
+
+pub fn switch_remove_port(name: &str, interface: &str) -> Result<(), String> {
+    vm_run(&["switch", "remove", name, interface])?;
     Ok(())
 }
 

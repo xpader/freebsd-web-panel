@@ -13,13 +13,14 @@ Bhyve 模块封装 vm-bhyve（`/usr/local/sbin/vm`）CLI，提供虚拟机列表
 - VM VNC 代理（WebSocket→TCP 代理 + noVNC 前端）
 - vm-bhyve 镜像管理（`vm image list` / `vm image create` / `vm image provision` / `vm image destroy`）
 - 交换机列表/详情/创建/删除（`vm switch list` / `vm switch info` / `vm switch create` / `vm switch destroy`）
+- 交换机属性管理：VLAN 设置/清除（`vm switch vlan`）、地址设置/清除（`vm switch address`）、隔离模式开关（`vm switch private`）、物理端口添加/移除（`vm switch add` / `vm switch remove`）
 - 数据存储列表（`vm datastore list`）
 - 数据存储添加/移除（`vm datastore add` / `vm datastore remove`）
 - 模板列表（读取默认数据存储的 `.templates/`）
 - ISO 列表（读取默认数据存储的 `.iso/`）
 - vm-bhyve 初始化检测与引导（检测软件包/rc.conf 配置/init 状态，提供一键初始化）
 
-未实现：VM 删除、快照/克隆/回滚、重启/强制停止/挂起、ISO 下载。
+未实现：VM 快照/克隆/回滚、重启、挂起、ISO 下载。
 
 ## 实现细节
 
@@ -116,9 +117,22 @@ VM 名称校验（`:handlers/bhyve.rs:176`）：小写字母+数字+`.`/`_`/`-`�
 
 前端根据交换机类型显示有效字段：standard 支持接口、VLAN、CIDR 地址、MTU 和隔离；manual 强制现有 bridge；VXLAN 强制接口和 VLAN；netgraph 与 VALE 不接受创建参数。后端重复校验类型、VXLAN/manual 的必填组合、VLAN 范围（0-4094）、MTU 范围（100-9000）和 IPv4 CIDR 格式。
 
-`get_switch_info()` 调用 `vm switch info <name>`，解析缩进的 `key: value` 字段为有序键值映射，详情页展示类型、接口标识、VLAN、物理端口和收发字节等实际可用字段。
+`get_switch_info()` 调用 `vm switch info <name>`，解析缩进的 `key: value` 字段为有序键值映射（`VmSwitchDetail.fields`），同时解析嵌套的 `virtual-port` 块为结构化列表（`VmSwitchDetail.virtual_ports`，每项含 device 和 vm 字段）。详情页展示类型、接口标识、VLAN、物理端口、收发字节等字段，以及已连接虚拟机的虚拟端口列表。
 
 `destroy_switch()` 调用 `vm switch destroy <name>`；前端删除前强制确认，警告已连接 VM 会失去网络连接，成功后刷新列表。
+
+### 交换机属性管理
+
+详情页同时从 `vm switch list`（获取 address/private/mtu/vlan/ports）和 `vm switch info`（获取虚拟端口 + 流量统计）加载数据，在属性表中提供以下内联管理操作：
+
+- **VLAN 设置/清除**：`switch_vlan(name, vlan)` → `vm switch vlan <name> <vlan|0>`，0 表示清除。前端用 formModal 输入 VLAN ID（0-4094），PUT `/api/bhyve/switches/{name}/vlan`。
+- **地址设置/清除**：`switch_address(name, addr)` → `vm switch address <name> <addr|none>`，空值清除。前端用 formModal 输入 CIDR 地址，PUT `/api/bhyve/switches/{name}/address`，后端校验 IPv4 CIDR 格式。
+- **隔离模式开关**：`switch_private(name, on)` → `vm switch private <name> <on|off>`。前端用 toggle 按钮切换，PUT `/api/bhyve/switches/{name}/private`。
+- **物理端口添加**：`switch_add_port(name, iface)` → `vm switch add <name> <interface>`。前端用 formModal 输入接口名（如 `em0`），POST `/api/bhyve/switches/{name}/ports`，后端校验接口名格式。
+- **物理端口移除**：`switch_remove_port(name, iface)` → `vm switch remove <name> <interface>`。前端确认对话框后删除，DELETE `/api/bhyve/switches/{name}/ports/{interface}`。
+- **NAT** — `vm switch nat` 命令在 vm-bhyve 1.7.3 中 NAT 功能被禁用（仅打印警告），且无法查询当前 NAT 状态，故未实现。
+
+所有操作均在 handler 中通过 `spawn_blocking` 调用，成功后记录审计日志。
 
 ### 数据存储管理
 
@@ -204,9 +218,14 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | POST | `/api/bhyve/images/{uuid}/provision` | 从镜像创建虚拟机（body: new_name/datastore，调用 `vm image provision`） |
 | DELETE | `/api/bhyve/images/{uuid}` | 销毁镜像（调用 `vm image destroy`） |
 | GET | `/api/bhyve/switches` | 交换机列表 |
-| GET | `/api/bhyve/switches/{name}` | 交换机详情 |
+| GET | `/api/bhyve/switches/{name}` | 交换机详情（含虚拟端口） |
 | POST | `/api/bhyve/switches` | 创建交换机（body: name/type/iface/vlan/bridge/address/mtu/private） |
 | DELETE | `/api/bhyve/switches/{name}` | 删除交换机 |
+| PUT | `/api/bhyve/switches/{name}/vlan` | 设置/清除 VLAN（body: vlan，0=清除） |
+| PUT | `/api/bhyve/switches/{name}/address` | 设置/清除地址（body: address，null=清除） |
+| PUT | `/api/bhyve/switches/{name}/private` | 切换隔离模式（body: private） |
+| POST | `/api/bhyve/switches/{name}/ports` | 添加物理端口（body: interface） |
+| DELETE | `/api/bhyve/switches/{name}/ports/{interface}` | 移除物理端口 |
 | GET | `/api/bhyve/status` | vm-bhyve 安装/配置状态 |
 | POST | `/api/bhyve/init` | 初始化 vm-bhyve（body: spec） |
 | GET | `/api/bhyve/datastores` | 数据存储列表 |

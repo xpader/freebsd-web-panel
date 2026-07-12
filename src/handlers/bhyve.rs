@@ -605,6 +605,166 @@ pub async fn delete_switch(
     Ok(StatusCode::OK)
 }
 
+/// PUT /api/bhyve/switches/{name}/vlan — set or clear VLAN (0 = clear).
+#[derive(Debug, Deserialize)]
+pub struct SwitchVlanBody {
+    pub vlan: u16,
+}
+
+pub async fn switch_vlan(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SwitchVlanBody>,
+) -> ApiResult<StatusCode> {
+    validate_switch_name(&name)?;
+    if body.vlan >= 4095 {
+        return Err(ApiError::BadRequest(
+            "VLAN ID must be between 0 and 4094".into(),
+        ));
+    }
+    let switch_name = name.clone();
+    let vlan = body.vlan;
+    tokio::task::spawn_blocking(move || bhyve::switch_vlan(&switch_name, vlan))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        &format!("/api/bhyve/switches/{name}/vlan"),
+        200,
+        Some(format!("set switch {name} vlan to {vlan}")),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// PUT /api/bhyve/switches/{name}/address — set or clear address.
+#[derive(Debug, Deserialize)]
+pub struct SwitchAddressBody {
+    pub address: Option<String>,
+}
+
+pub async fn switch_address(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SwitchAddressBody>,
+) -> ApiResult<StatusCode> {
+    validate_switch_name(&name)?;
+    if let Some(addr) = &body.address {
+        validate_cidr_address(addr)?;
+    }
+    let switch_name = name.clone();
+    let address = body.address.clone();
+    tokio::task::spawn_blocking(move || bhyve::switch_address(&switch_name, address.as_deref()))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        &format!("/api/bhyve/switches/{name}/address"),
+        200,
+        Some(format!(
+            "set switch {name} address to {}",
+            body.address.as_deref().unwrap_or("none")
+        )),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// PUT /api/bhyve/switches/{name}/private — enable or disable private mode.
+#[derive(Debug, Deserialize)]
+pub struct SwitchPrivateBody {
+    pub private: bool,
+}
+
+pub async fn switch_private(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SwitchPrivateBody>,
+) -> ApiResult<StatusCode> {
+    validate_switch_name(&name)?;
+    let switch_name = name.clone();
+    let private = body.private;
+    tokio::task::spawn_blocking(move || bhyve::switch_private(&switch_name, private))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "PUT",
+        &format!("/api/bhyve/switches/{name}/private"),
+        200,
+        Some(format!(
+            "set switch {name} private {}",
+            if private { "on" } else { "off" }
+        )),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/bhyve/switches/{name}/ports — add a physical interface to the switch.
+#[derive(Debug, Deserialize)]
+pub struct SwitchPortBody {
+    pub interface: String,
+}
+
+pub async fn switch_add_port(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SwitchPortBody>,
+) -> ApiResult<StatusCode> {
+    validate_switch_name(&name)?;
+    validate_interface_name(&body.interface)?;
+    let switch_name = name.clone();
+    let interface = body.interface.clone();
+    tokio::task::spawn_blocking(move || bhyve::switch_add_port(&switch_name, &interface))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "POST",
+        &format!("/api/bhyve/switches/{name}/ports"),
+        200,
+        Some(format!("added port {} to switch {name}", body.interface)),
+    );
+    Ok(StatusCode::OK)
+}
+
+/// DELETE /api/bhyve/switches/{name}/ports/{interface} — remove a physical interface.
+pub async fn switch_remove_port(
+    State(state): State<AppState>,
+    Path((name, interface)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    validate_switch_name(&name)?;
+    validate_interface_name(&interface)?;
+    let switch_name = name.clone();
+    let iface = interface.clone();
+    tokio::task::spawn_blocking(move || bhyve::switch_remove_port(&switch_name, &iface))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+        .map_err(ApiError::Command)?;
+
+    crate::audit::record(
+        &state,
+        None,
+        "DELETE",
+        &format!("/api/bhyve/switches/{name}/ports/{interface}"),
+        200,
+        Some(format!("removed port {interface} from switch {name}")),
+    );
+    Ok(StatusCode::OK)
+}
+
 /// GET /api/bhyve/status — check vm-bhyve installation and configuration status.
 pub async fn status() -> ApiResult<Json<bhyve::BhyveStatus>> {
     let s = tokio::task::spawn_blocking(bhyve::check_status)
@@ -881,14 +1041,39 @@ fn validate_switch_create(body: &CreateSwitchBody) -> ApiResult<()> {
         return Err(ApiError::BadRequest("MTU must be between 100 and 9000".into()));
     }
     if let Some(address) = &body.address {
-        let (ip, prefix) = address
-            .split_once('/')
-            .ok_or_else(|| ApiError::BadRequest("address must use CIDR notation".into()))?;
-        if ip.parse::<std::net::Ipv4Addr>().is_err()
-            || prefix.parse::<u8>().map_or(true, |value| value > 32)
-        {
-            return Err(ApiError::BadRequest("address must use IPv4 CIDR notation".into()));
-        }
+        validate_cidr_address(address)?;
+    }
+    Ok(())
+}
+
+fn validate_cidr_address(addr: &str) -> ApiResult<()> {
+    let (ip, prefix) = addr
+        .split_once('/')
+        .ok_or_else(|| ApiError::BadRequest("address must use CIDR notation".into()))?;
+    if ip.parse::<std::net::Ipv4Addr>().is_err()
+        || prefix.parse::<u8>().map_or(true, |value| value > 32)
+    {
+        return Err(ApiError::BadRequest("address must use IPv4 CIDR notation".into()));
+    }
+    Ok(())
+}
+
+fn validate_interface_name(iface: &str) -> ApiResult<()> {
+    if iface.is_empty() || iface.len() > 32 {
+        return Err(ApiError::BadRequest("invalid interface name".into()));
+    }
+    let valid = iface
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-');
+    if !valid {
+        return Err(ApiError::BadRequest(
+            "interface name may only contain letters, digits, dots, underscores and dashes".into(),
+        ));
+    }
+    if !iface.chars().next().unwrap().is_ascii_alphabetic() {
+        return Err(ApiError::BadRequest(
+            "interface name must start with a letter".into(),
+        ));
     }
     Ok(())
 }
