@@ -197,7 +197,7 @@ async function saveConfig() {
 
 async function applyConfig(iface) {
   const name = iface.name;
-  if (!await confirm(t('net.applyConfirmTitle'), t('net.applyConfirmMsg', { name }))) return;
+  if (!await confirm(t('net.applyConfig'), t('net.applyConfirmMsg', { name }))) return;
   configApplying.value = true;
   try {
     await api.post(`/api/network/interfaces/${name}/apply`, {});
@@ -212,7 +212,7 @@ async function applyConfig(iface) {
 
 async function destroyIface(iface) {
   const name = iface.name;
-  if (!await confirm(t('net.destroyConfirm'), t('net.destroyConfirmMsg', { name }))) return;
+  if (!await confirm(t('net.destroy'), t('net.destroyConfirmMsg', { name }))) return;
   try {
     await api.del(`/api/network/interfaces/${name}`);
     toast.toast(t('common.delete') + ': ' + name);
@@ -572,7 +572,7 @@ onMounted(load);
       <p class="text-dim" style="margin-bottom:1rem;">{{ t('net.createInterfaceDesc') }}</p>
       <div style="display:flex; gap:12px; margin-bottom:1rem;">
         <div style="flex:1;">
-          <label>{{ t('net.ifaceType') }}</label>
+          <label>{{ t('common.type') }}</label>
           <select class="input" v-model="createType">
             <option v-for="tp in ifaceTypes" :key="tp.value" :value="tp.value">{{ tp.label }}</option>
           </select>
@@ -582,7 +582,7 @@ onMounted(load);
           <input type="number" class="input" v-model.number="createNum" min="0" @keyup.enter="doCreate">
         </div>
         <div v-else style="flex:1;">
-          <label>{{ t('net.ifaceName') }}</label>
+          <label>{{ t('common.name') }}</label>
           <input type="text" class="input mono" v-model="createCustomName" :placeholder="t('net.ifaceNamePlaceholder')" @keyup.enter="doCreate">
         </div>
       </div>
