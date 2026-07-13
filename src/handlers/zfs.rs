@@ -5,6 +5,7 @@
 //! command arguments (no shell interpolation).
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -19,14 +20,20 @@ use crate::state::AppState;
 const ZFS: &str = "/sbin/zfs";
 const ZPOOL: &str = "/sbin/zpool";
 
+static RE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9@/_:\-\.]+$").unwrap());
+static RE_PROP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_:\-\.]+$").unwrap());
+static RE_DISK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9]+$").unwrap());
+static RE_POOL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_.\-]+$").unwrap());
+static RE_POOL_CREATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z][a-zA-Z0-9_.\-]*$").unwrap());
+static RE_DEVICE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9\-]+$").unwrap());
+
 /// Validate a dataset/pool/snapshot name. ZFS names allow alphanumerics,
 /// '/', '_', '-', '.', ':' (for snapshots '@') and no leading dot.
 fn validate_name(name: &str) -> ApiResult<()> {
     if name.is_empty() || name.len() > 256 {
         return Err(ApiError::BadRequest("invalid name length".into()));
     }
-    let re = Regex::new(r"^[a-zA-Z0-9@/_:\-\.]+$").unwrap();
-    if !re.is_match(name) || name.starts_with('.') || name.contains("..") {
+    if !RE_NAME.is_match(name) || name.starts_with('.') || name.contains("..") {
         return Err(ApiError::BadRequest("invalid name".into()));
     }
     Ok(())
@@ -484,8 +491,7 @@ pub struct Property {
 }
 
 fn validate_prop_key(k: &str) -> ApiResult<()> {
-    let re = Regex::new(r"^[a-zA-Z0-9_:\-\.]+$").unwrap();
-    if k.is_empty() || k.len() > 128 || !re.is_match(k) {
+    if k.is_empty() || k.len() > 128 || !RE_PROP.is_match(k) {
         return Err(ApiError::BadRequest("invalid property name".into()));
     }
     Ok(())
@@ -707,8 +713,7 @@ fn validate_disk_name(name: &str) -> ApiResult<String> {
     if dev.is_empty() || dev.len() > 32 {
         return Err(ApiError::BadRequest("invalid disk name length".into()));
     }
-    let re = Regex::new(r"^[a-zA-Z0-9]+$").unwrap();
-    if !re.is_match(dev) {
+    if !RE_DISK.is_match(dev) {
         return Err(ApiError::BadRequest("invalid disk name".into()));
     }
     Ok(dev.to_string())
@@ -967,7 +972,7 @@ pub async fn pool_import(
     if pool_name.is_empty() || pool_name.contains('/') || pool_name.contains('@') {
         return Err(ApiError::BadRequest("invalid pool name".into()));
     }
-    if !Regex::new(r"^[a-zA-Z0-9_.\-]+$").unwrap().is_match(pool_name) {
+    if !RE_POOL.is_match(pool_name) {
         return Err(ApiError::BadRequest("invalid pool name".into()));
     }
 
@@ -1074,7 +1079,7 @@ pub async fn pool_create(
     if pool_name.is_empty() || pool_name.contains('/') || pool_name.contains('@') {
         return Err(ApiError::BadRequest("invalid pool name".into()));
     }
-    if !Regex::new(r"^[a-zA-Z][a-zA-Z0-9_.\-]*$").unwrap().is_match(pool_name) {
+    if !RE_POOL_CREATE.is_match(pool_name) {
         return Err(ApiError::BadRequest("invalid pool name".into()));
     }
     if body.vdevs.is_empty() {
@@ -1220,8 +1225,7 @@ pub async fn pool_attach(
 ) -> ApiResult<StatusCode> {
     validate_name(&name)?;
     // device can be a disk name (vtbd1) or a vdev name (raidz1-0, mirror-0).
-    let re = Regex::new(r"^[a-zA-Z0-9\-]+$").unwrap();
-    if body.device.is_empty() || !re.is_match(&body.device) {
+    if body.device.is_empty() || !RE_DEVICE.is_match(&body.device) {
         return Err(ApiError::BadRequest("invalid device name".into()));
     }
     let device = &body.device;

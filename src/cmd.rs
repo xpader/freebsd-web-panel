@@ -134,7 +134,8 @@ pub fn run_sync_str(cmd: &str, args: &[&str]) -> Result<String, String> {
             format!("{cmd} failed")
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    String::from_utf8(output.stdout)
+        .map_err(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Fire-and-forget: run a command, discarding stdout, stderr, and exit code.
@@ -186,5 +187,5 @@ pub fn output_ok(cmd: &str, output: &Output) -> ApiResult<String> {
             stderr
         }));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

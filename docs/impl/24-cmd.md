@@ -73,6 +73,42 @@ pub async fn interface_apply(...) -> ApiResult<...> {
 - `ApiError` 版本（`run`、`run_sync`、`output_ok`）：非零退出 → `ApiError::Command(stderr)` → HTTP 422。stderr 为空时 fallback 到 `"{cmd} failed"`。
 - `String` 版本（`run_sync_str`）：非零退出 → `Err(stderr)`，stderr 为空时 fallback 到 stdout，再为空时 `"{cmd} failed"`。错误格式略有不同（多一级 stdout fallback），因为 bhyve 的 `vm` 命令经常把错误写到 stdout。
 
+## stdout 提取与 UTF-8 处理
+
+命令输出的 stdout/stderr 都是 `Vec<u8>`，需要转成 Rust `String`。两条路径。本节聚焦 `cmd.rs` 具体写法；为什么这么选、与 jemalloc 行为的关系见 [25-memory.md](25-memory.md)。
+
+### 成功路径：`run_sync_str` — 严格 UTF-8
+
+```rust
+String::from_utf8(output.stdout)
+    .map_err(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+```
+
+- `String::from_utf8(output.stdout)` **消费** `Vec<u8>`：如果字节是合法 UTF-8，**零拷贝**直接返回 `String`（内部复用原 `Vec` 的 buffer），无第二次分配。
+- 非法 UTF-8 时 `FromUtf8Error` 携带原 `Vec`，用 `from_utf8_lossy` 生成 `Cow<'_, str>`，再 `into_owned()` 取 `String`——错误路径才发生一次分配。
+
+### 通用路径：`output_ok` — 容错 UTF-8
+
+```rust
+Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+```
+
+- `output_ok` 接收 `&Output`（借用），不能消费 `output.stdout`，因此用 `from_utf8_lossy` 的容错语义。
+- `from_utf8_lossy` 返回 `Cow<'_, str>`：
+  - 合法 UTF-8 → `Cow::Borrowed(&str)`，指向原 buffer，**零分配**。
+  - 非法 UTF-8 → `Cow::Owned(String)`，已分配。
+- `into_owned()` 对 `Borrowed` 变体做 clone，对 `Owned` 变体直接返回——**只发生一次 clone**。
+- 反例：`.to_string()` 无论 `Cow` 是 Borrowed 还是 Owned 都会 clone 一次，等价于 `Borrowed → clone`、`Owned → clone`（Owned 时多一次无谓的分配）。
+
+### stderr（错误分支）
+
+```rust
+let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+```
+
+`trim()` 返回 `&str` 切片（可能比原串短），`.to_string()` 分配一个与 trim 结果等长的新 `String`——这一步分配不可避免，因为需要独立所有权。
+
+
 ## 不使用 cmd 模块的特殊场景
 
 以下场景因技术限制不能走 `cmd::` 通用封装，仍保留直接使用 `Command`：

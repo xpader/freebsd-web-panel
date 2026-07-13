@@ -31,9 +31,20 @@
 
 **属性** `stat`：返回完整元数据——路径、父目录、类型、符号链接目标（`read_link`）、大小、mtime/atime/ctime、mode/权限串、uid/gid、nlink、inode、blocks、blksize。
 
-**上传** `upload`：请求体为原始文件字节（`application/octet-stream`），目标目录与文件名经 query 传递，`std::fs::write` 落盘。上传路由在 `app.rs` 中单独拆出并加 `DefaultBodyLimit::disable()`，解除 axum 默认 2 MiB 请求体限制（否则大文件上传会被拒）。
+**上传** `upload`：请求体为原始文件字节（`application/octet-stream`），目标目录与文件名经 query 传递。上传路由在 `app.rs` 中单独拆出并加 `DefaultBodyLimit::disable()`，解除 axum 默认 2 MiB 请求体限制（否则大文件上传会被拒）。
 
-**下载** `download`：`std::fs::read` 读入内存后返回 `Body`，设 `Content-Type: application/octet-stream` + `Content-Disposition: attachment`。目录拒绝下载。
+流式写入 + 原子提交（避免大文件占满内存 + 中断时留下残文件；背景与模式总结见 [25-memory.md](25-memory.md)）：
+
+1. 提取器用 `axum::body::Body`（不是 `Bytes`），不在聚合阶段就把整个 body 读进内存。
+2. 在目标目录内创建临时文件 `.upload-tmp.<filename>`（与目标文件同目录、同 basename、固定前缀）。同一目标路径的并发上传会竞争同一临时文件，后完成者覆盖前者，但目标文件始终保持完整版本。
+3. `body.into_data_stream()` 得到 chunk 流（hyper 默认约 64 KB/chunk），循环 `file.write_all(chunk).await`，累加 `total_size`，chunk drop 后即释放——峰值内存恒定 ≈ chunk 大小。
+4. 写完后 `file.sync_all().await`：flush 用户态缓冲 + `fsync` 确保数据落到稳定存储。
+5. `tokio::fs::rename(tmp, dest).await` 原子替换（POSIX rename 在同一文件系统上是原子的，目标路径只会观察到"旧文件"或"新文件"，无半新半旧窗口）。
+6. 任何阶段失败（chunk 网络中断 / write 失败 / sync 失败 / rename 失败）都会 `tokio::fs::remove_file(tmp)` 清理临时文件，目标路径保持不变（原文件不被破坏）。
+
+审计记录 `upload <path> (<size> bytes)` 仅在 rename 成功后写入。
+
+**下载** `download`：`tokio::fs::File::open` + `tokio_util::io::ReaderStream` 包装为 `axum::body::Body::from_stream`，分块（默认约 8 KB/chunk）流出，**不把整个文件读进内存**。响应头：`Content-Type: application/octet-stream` + `Content-Disposition: attachment; filename="<name>"`。目录拒绝下载。
 
 写入操作（mkdir/rename/delete/upload）均经 `crate::audit::record` 写审计日志。
 
@@ -78,12 +89,14 @@
 ## 外部依赖
 
 - chmod/chown 通过裸 FFI（`fchmodat` + `lchown`，FreeBSD libc），无系统命令调用
+- 上传/下载使用 `tokio::fs::File` + `tokio_util::io::ReaderStream`（`tokio-util = "0.7"`，io feature）做流式 I/O
 - 其余纯 `std::fs` + `std::os::unix::fs::MetadataExt`
 - 前端无第三方库
 
 ## 已知限制 / TODO
 
-- 上传/下载均将整个文件读入内存（超大文件会占内存），未做流式传输；上传默认无大小限制（已禁用 axum 2 MiB 限制）
+- 上传临时文件用 `.` 开头（常规 `ls` 隐藏）；服务被 `SIGKILL` 强杀时可能留下 `.upload-tmp.*` 残留，启动时未自动清理
+- 上传默认无大小限制（已禁用 axum 2 MiB 限制）
 - 所有者/组解析自 `/etc/passwd`、`/etc/group`（首次访问 `LazyLock` 缓存），非系统 UID/GID 回退为数字
 - chmod/chown 不递归（不支持 `-R`）
 - 无分页；目录条目极多时全量返回

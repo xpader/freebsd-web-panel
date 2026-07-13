@@ -10,6 +10,20 @@
 
 所有命令通过 `run(cmd, args)` 封装执行，输入经 `validate_name()` / `validate_prop_key()` 校验（正则白名单），参数以 `Command::arg()` 传递（防注入）。
 
+**输入校验正则（缓存）**：6 个正则以 `static LazyLock<Regex>` 方式在模块顶层声明，进程生命周期内只编译一次，避免每次请求重新编译：
+
+| 静态变量 | 模式 | 用途 |
+|---|---|---|
+| `RE_NAME` | `^[a-zA-Z0-9@/_:\-\.]+$` | 数据集/快照名（含 `/`、`@`） |
+| `RE_PROP` | `^[a-zA-Z0-9_:\-\.]+$` | 属性键（不允许 `/`、`@`） |
+| `RE_DISK` | `^[a-zA-Z0-9]+$` | 裸磁盘名（如 `da0`） |
+| `RE_POOL` | `^[a-zA-Z0-9_.\-]+$` | pool 名（查询/操作） |
+| `RE_POOL_CREATE` | `^[a-zA-Z][a-zA-Z0-9_.\-]*$` | pool 名（创建时，须字母开头） |
+| `RE_DEVICE` | `^[a-zA-Z0-9\-]+$` | vdev 名（含 `mirror-0`、`raidz1-0`） |
+
+为什么用 `LazyLock` 而不是每次 `Regex::new()`：`Regex::new` 内部会编译 DFA，单次开销 ~数十 µs 加一次堆分配。ZFS 列表页一次请求会触发 N 次校验（N = 数据集数），频繁操作下这些临时 Regex 会累积到 jemalloc arena，成为 RES 增长的来源之一。`LazyLock` + `static` 保证只编译一次，线程安全且零运行期开销。同类优化的通用总结见 [25-memory.md](25-memory.md)。
+
+
 **Zpool**：
 
 | 函数 | 命令 | 说明 |

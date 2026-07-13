@@ -31,6 +31,7 @@
 | [22-pkg-repos.md](22-pkg-repos.md) | pkg 软件源配置管理：仓库 CRUD（UCL 解析/生成）、启用/禁用、`pkg update -f` 后台任务、预设镜像模板 | `handlers/pkg.rs`, `web/js/pages/pkg-repos.js` |
 | [23-bhyve.md](23-bhyve.md) | Bhyve 虚拟机管理：VM 列表/详情/创建/启停、串口控制台（cu + nmdm）、VNC 代理（WS→TCP）、镜像/交换机/数据存储/模板/ISO 列表 | `bhyve.rs`, `handlers/bhyve.rs`, `terminal.rs`, `frontend/src/pages/Bhyve*.vue` |
 | [24-cmd.md](24-cmd.md) | 命令执行封装：spawn_blocking 统一封装、async/sync 函数选择、管道 FD 死锁问题 | `cmd.rs` |
+| [25-memory.md](25-memory.md) | 内存占用与性能优化：流式 I/O、静态正则缓存、UTF-8 双分配修复、jemalloc 行为分析 | `handlers/files.rs`, `handlers/zfs.rs`, `cmd.rs` |
 
 ## 文档规范
 

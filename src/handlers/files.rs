@@ -17,6 +17,9 @@ use axum::extract::{Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ApiError, ApiResult};
@@ -374,12 +377,12 @@ pub async fn delete(State(state): State<AppState>, Query(q): Query<PathQuery>) -
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Upload a file: the request body is the raw file bytes, destination dir and
+/// Upload a file: the request body is streamed to disk, destination dir and
 /// filename come via query parameters.
 pub async fn upload(
     State(state): State<AppState>,
     Query(q): Query<UploadQuery>,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     let dir = normalize(&q.path)?;
     validate_name_component(&q.filename)?;
@@ -389,18 +392,41 @@ pub async fn upload(
         return Err(ApiError::BadRequest(format!("not a directory: {}", dir.display())));
     }
     let dest = dir.join(&q.filename);
-    std::fs::write(&dest, &body)?;
+    let tmp = dir.join(format!(".upload-tmp.{}", q.filename));
+    let mut file = tokio::fs::File::create(&tmp).await?;
+    let mut body_stream = body.into_data_stream();
+    let mut total_size: u64 = 0;
+    let write_result: ApiResult<()> = async {
+        while let Some(chunk) = body_stream.next().await {
+            let chunk: Bytes = chunk
+                .map_err(|e| ApiError::Io(std::io::Error::other(e)))?;
+            file.write_all(&chunk).await?;
+            total_size += chunk.len() as u64;
+        }
+        file.sync_all().await?;
+        Ok(())
+    }
+    .await;
+    drop(file);
+    if let Err(e) = write_result {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e.into());
+    }
     crate::audit::record(
         &state,
         None,
         "POST",
         "/api/files/upload",
         201,
-        Some(format!("upload {} ({} bytes)", dest.display(), body.len())),
+        Some(format!("upload {} ({} bytes)", dest.display(), total_size)),
     );
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({"path": dest.to_string_lossy(), "size": body.len()})),
+        Json(serde_json::json!({"path": dest.to_string_lossy(), "size": total_size})),
     ))
 }
 
@@ -412,13 +438,13 @@ pub async fn download(Query(q): Query<PathQuery>) -> ApiResult<Response> {
     if meta.is_dir() {
         return Err(ApiError::BadRequest("cannot download a directory".into()));
     }
-    let bytes = std::fs::read(&path)?;
+    let file = tokio::fs::File::open(&path).await?;
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
 
-    let mut resp = Response::new(axum::body::Body::from(bytes));
+    let mut resp = Response::new(axum::body::Body::from_stream(ReaderStream::new(file)));
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
