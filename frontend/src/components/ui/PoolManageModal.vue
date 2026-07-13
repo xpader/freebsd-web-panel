@@ -20,6 +20,7 @@ const error = ref('');
 const poolName = ref('');
 const ashift = ref('auto');
 const mountpoint = ref('');
+const force = ref(false);
 const vdevGroups = ref([]);
 
 const VDEV_TYPES = [
@@ -77,7 +78,7 @@ watch(() => props.show, async (val) => {
     ashift.value = 'auto';
     mountpoint.value = '';
     vdevGroups.value = [{ vdevType: 'disk', selectedDisks: [] }];
-    error.value = '';
+    force.value = false;
     await fetchDisks();
   }
 });
@@ -139,7 +140,7 @@ async function submit() {
       if (mountpoint.value.trim()) body.mountpoint = mountpoint.value.trim();
       await api.post('/api/zfs/pools', body);
     } else {
-      await api.post(`/api/zfs/pools/${props.poolName}/add`, { vdevs });
+      await api.post(`/api/zfs/pools/${props.poolName}/add`, { vdevs, force: force.value || undefined });
     }
     emit('success');
   } catch (e) {
@@ -226,6 +227,11 @@ async function submit() {
         <button class="btn-secondary btn-sm" style="margin-top:8px;" @click="addGroup">
           + {{ t('zfs.addVdevGroup') }}
         </button>
+
+        <label v-if="mode === 'add'" class="checkbox-row" style="margin-top:12px;">
+          <input type="checkbox" v-model="force" />
+          <span style="font-size:13px;">{{ t('zfs.poolForceAdd') }}</span>
+        </label>
 
         <div class="modal-actions">
           <button class="btn-secondary" :disabled="submitting" @click="emit('close')">{{ t('common.cancel') }}</button>
