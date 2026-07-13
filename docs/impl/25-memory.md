@@ -105,6 +105,8 @@ String::from_utf8_lossy(&v).into_owned()
 
 ## 验证方法
 
+**FWP 状态页面**：监控菜单下的「FWP 状态」页面（`MonitorFwpPage.vue`）调用 `/api/debug/jemalloc-stats` 接口，实时展示内存分类。
+
 **观察 RES 趋势**：
 ```sh
 while :; do
@@ -117,6 +119,26 @@ done
 **上传峰值内存**：上传 500 MB 文件时观察 RSS，优化前峰值 ~1 GB，优化后 ~30 MB（包含 tokio worker 基线）。
 
 **单元测试**：`cargo test --offline --bin fwp` 27 个测试全过。
+
+### jemalloc 驻留 vs 进程 RSS
+
+`jemalloc` 的 `stats.resident` **只统计 jemalloc 自身 mmap 的物理页**。进程总 RSS 还包括大量非 jemalloc 管理的内存：
+
+- 代码段（.text）：Rust debug build 含完整调试符号，可达数十 MB
+- 线程栈：每个 tokio worker 线程 ~2 MB
+- 共享库映射：libc、libssl 等
+- 直接 mmap 区域：Rust std 或第三方 crate 绕过 jemalloc 的分配
+
+实测 debug build 中，jemalloc `resident` 通常仅占进程 RSS 的 30% 左右。
+
+`/api/debug/jemalloc-stats` 额外返回 `process_rss` 字段——通过 `sysctl(KERN_PROC_PID)` 读取 `kinfo_proc.ki_rssize`（FreeBSD 15 amd64 上为 `segsz_t` = int64，位于 struct 偏移 264 处，以页为单位）。前端据此将进程 RSS 分为四类：
+
+| 分类 | 计算方式 | 含义 |
+|---|---|---|
+| 程序在用 | `allocated` | jemalloc 中活的 Rust 对象 |
+| 进程其它内存 (Other Memory) | `process_rss − resident` | 代码段、调试符号、栈、共享库 |
+| 可被系统回收 | `resident − active` | jemalloc 脏页 / 模糊页，OS 可回收 |
+| 不可回收开销 | `active − allocated` | jemalloc 内部碎片 |
 
 ## 尚未实施的方向
 
@@ -134,5 +156,6 @@ done
 |---|---|
 | `src/handlers/files.rs` | #1 上传流式 + 原子提交、#2 下载流式 |
 | `src/handlers/zfs.rs` | #3 静态 LazyLock 正则缓存 |
+| `src/handlers/debug.rs` | jemalloc-stats + process_rss（sysctl KERN_PROC_PID） |
 | `src/cmd.rs` | #4 UTF-8 双分配修复 |
 | `Cargo.toml` | 新增 `tokio-util = "0.7"`（io feature，用于 `ReaderStream`） |

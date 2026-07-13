@@ -3,6 +3,7 @@ pub mod audit;
 pub mod auth;
 pub mod bhyve;
 pub mod crontab;
+pub mod debug;
 pub mod files;
 pub mod filesystem;
 pub mod jails;

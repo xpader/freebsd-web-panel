@@ -21,19 +21,22 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 | **Network** | Interface details, routes, default gateway, DNS nameservers |
 | **System Accounts** | Browse FreeBSD users and groups |
 | **File Manager** | Browse, upload, download, rename, chmod, chown files |
-| **ZFS** | Pool status/scrub, dataset CRUD, snapshots, rollback, clone |
+| **ZFS** | Pool create/import/export/destroy, vdev add/attach/detach/replace, scrub, dataset CRUD, snapshots, rollback, clone |
 | **Jails** | Full lifecycle via native libjail FFI — **no third-party jail tools** (jail.conf parser + create/start/stop/delete, base image management) |
+| **Bhyve VMs** | Full VM lifecycle via vm-bhyve — create/start/stop/destroy, VNC console, serial console, disks, networks, ISOs, images, switches, datastores |
+| **Packages** | Search, install, remove (pkg), package details & file lists, repository management |
+| **File Manager** | Browse, upload, download, rename, chmod, chown files |
 | **Web Terminal** | WebSocket-based shell access directly in the browser |
 | **Users & Auth** | Built-in user system (Argon2id), session tokens, first-run bootstrap |
 | **Audit Log** | All write operations logged (who/when/what/result) |
 | **i18n** | Multi-language UI (English, Chinese) with runtime switching |
 
-> **Planned:** PF firewall editor, Bhyve (vm-bhyve) management.
+> **Planned:** PF firewall editor.
 
 ## Tech Stack
 
 - **Backend:** Rust 2021 (MSRV 1.74), Axum 0.8, tokio, rusqlite (bundled SQLite), argon2, rust-embed
-- **Frontend:** Vanilla JS ES Modules, hand-written dark-theme CSS. **No build step, no framework** — keeps deployment simple.
+- **Frontend:** Vue 3 (Composition API) + Vite, Pinia (state), Vue Router (hash), vue-i18n, Chart.js, xterm.js, noVNC. Hand-written dark-theme CSS. Built output is embedded into the binary.
 - **Deployment:** Single binary with embedded web assets. TOML config at `/usr/local/etc/fwp.toml`.
 - **Jail FFI:** Direct libjail calls (`jailparam_*`) — all `unsafe` isolated in a dedicated `sys` submodule.
 
@@ -43,11 +46,16 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 
 - FreeBSD 15.x (amd64)
 - Rust toolchain (1.74+)
-- System tools: `sysctl`, `sysrc`, `ifconfig`, `zfs`, `zpool` (all base system)
+- Node.js & npm (for frontend build)
+- System tools: `sysctl`, `sysrc`, `ifconfig`, `zfs`, `zpool`, `pkg`, `service`, `vm` (vm-bhyve)
 
 ### Build
 
 ```sh
+# Frontend (first time or after frontend changes)
+cd frontend && npm install && npm run build   # output → ../web/
+
+# Backend
 cargo build --release
 ```
 
@@ -134,6 +142,13 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
+
+    location /api/bhyve/vms/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
 }
 ```
 
@@ -151,21 +166,30 @@ src/
 ├── audit.rs          # Append-only JSON audit log
 ├── monitor.rs        # Background metric collector + time-series API
 ├── jail.rs           # libjail FFI + jail.conf parser
-├── terminal.rs       # WebSocket shell (PTY)
+├── bhyve.rs          # vm-bhyve wrapper (VM lifecycle, switches, datastores)
+├── cmd.rs            # Typed Command builder + run helper
+├── ifutil.rs         # Network interface helpers (getifaddrs, route sysctls)
+├── terminal.rs       # WebSocket shell (PTY) + VNC proxy
 ├── sysinfo.rs        # System info via sysctl
 ├── web_assets.rs     # rust-embed + disk fallback asset handler
 └── handlers/         # HTTP handlers (one file per module)
 
-web/
-├── index.html        # SPA entry
-├── css/app.css       # Dark theme styles
-└── js/
-    ├── main.js       # App entry, route registration
-    ├── router.js     # Hash-based router
-    ├── api.js        # fetch wrapper (auth header, error handling)
-    ├── i18n/         # Internationalization
-    ├── ui/           # Layout, toast, confirm dialog, modal
-    └── pages/        # One module per page
+frontend/             # Vue 3 + Vite frontend source
+├── src/
+│   ├── main.js       # App entry (Pinia + Router + i18n)
+│   ├── App.vue       # Root component
+│   ├── assets/       # Dark theme CSS
+│   ├── lib/          # API client, formatters, menu config, Chart.js setup
+│   ├── i18n/         # vue-i18n init + translations
+│   ├── router/       # Vue Router config + auth guard
+│   ├── stores/       # Pinia stores (auth, UI dialogs)
+│   ├── composables/  # useToast / useConfirm / useAlert / useFormModal
+│   ├── components/   # Layout (TopBar, SideBar) + UI (Toast, Dialog)
+│   └── pages/        # Feature pages (one .vue per page)
+├── public/           # Static assets (img, fontawesome)
+└── vite.config.js    # Vite config (outDir=../web)
+
+web/                  # Vite build output (rust-embed target)
 
 docs/
 ├── plan/             # Design documents (goals & architecture)
@@ -178,8 +202,8 @@ docs/
 # Backend check
 cargo check
 
-# Frontend syntax check
-node --check web/js/main.js
+# Frontend build (type-check + bundle)
+cd frontend && npm install && npm run build
 
 # Run with dev config (live web assets from repo)
 cargo run -- --config fwp.toml
@@ -197,10 +221,4 @@ The server tries disk `web_root` first, then falls back to embedded assets — s
 
 ## Documentation
 
-- [Design plans](docs/plan/) — architecture and interface design for each module
-- [Implementation docs](docs/impl/) — how each feature works, with data structures and APIs
-- [Roadmap](docs/plan/80-roadmap.md) — phased delivery plan
-
-## License
-
-[MIT](LICENSE) &copy; 2026 Pader
+- [Design plans](docs/plan/) — architecture and interface design for each mo

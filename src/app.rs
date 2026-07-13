@@ -144,6 +144,8 @@ pub fn build(state: AppState) -> Router {
         .route("/api/monitor/grouped", get(crate::monitor::grouped))
         .route("/api/monitor/aggregate", get(crate::monitor::aggregate))
         .route("/api/monitor/latest", get(crate::monitor::latest))
+        // --- Debug / diagnostics ---
+        .route("/api/debug/jemalloc-stats", get(handlers::debug::jemalloc_stats))
         // --- pkg (package management) ---
         .route("/api/pkg/packages", get(handlers::pkg::list_packages))
         .route("/api/pkg/search", get(handlers::pkg::search))
