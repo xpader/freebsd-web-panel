@@ -217,7 +217,8 @@ a:hover { color: var(--accent-hover); }
 }
 .vdev-row { padding: 3px 0; }
 .vdev-node { margin-bottom: 4px; }
-.vdev-node-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.vdev-node-row { padding: 6px 8px; border-bottom: 1px solid var(--border); border-radius: var(--radius); transition: background 0.12s; }
+.vdev-node-row:hover { background: var(--bg-elev2); }
 .pool-card { transition: border-color 0.15s, background 0.15s; }
 .pool-card:hover { border-color: var(--accent); background: var(--bg-elev2); }
 .main { flex: 1; padding: 24px 32px; min-width: 0; }
@@ -384,9 +385,7 @@ tr:hover td { background: var(--bg-elev2); }
   border-radius: var(--radius);
   padding: 20px;
   margin-bottom: 16px;
-  transition: border-color 0.12s ease, background-color 0.12s ease;
 }
-.card:hover { border-color: var(--accent); }
 .card-title { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
 .card-value { font-size: 28px; font-weight: 700; }
 .card-value.sm { font-size: 16px; font-weight: 600; }

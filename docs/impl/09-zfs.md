@@ -16,6 +16,13 @@
 |---|---|---|
 | `pool_list` | `zpool list -H -p` | 所有 pool 摘要（tab 分隔，精确数值） |
 | `pool_status` | `zpool status <name>` + `zpool list -H -p <name>` | 详细状态 + VDEV 树 + 容量/碎片/去重数据（合并两个命令输出） |
+| `pool_create` | `zpool create -f [-o ashift=N] [-o prop=val] <name> <vdev_spec>` | 创建存储池，支持 mirror/raidz1-3/单盘多组 vdev |
+| `pool_destroy` | `zpool destroy [-f] <name>` | 销毁存储池，query: `?force=<bool>` |
+| `available_disks` | `geom disk list` + `zpool status` | 可用磁盘列表（过滤已在 pool 中的磁盘，标记 in_use + 所属 pool） |
+| `pool_add_vdev` | `zpool add [-f] <name> <vdev_spec>` | 向已有 pool 添加 vdev 组，body: `{vdevs, force?}` |
+| `pool_attach` | `zpool attach <name> <device> <new_device>` | 将新设备附加为镜像（单盘→镜像或镜像扩容），body: `{device, new_device}` |
+| `pool_detach` | `zpool detach <name> <device>` | 从镜像中分离设备，query: `?device=` |
+| `pool_replace` | `zpool replace <name> <old_device> <new_device>` | 替换磁盘（故障更换/升级），body: `{old_device, new_device}` |
 | `pool_scrub` | `zpool scrub <name>` | 启动 scrub |
 | `pool_scrub_stop` | `zpool scrub -s <name>` | 停止 scrub |
 
@@ -69,13 +76,21 @@ ZFS 名称含 `/`（如 `zroot/vm/alpine@test`），axum 的 `{name}` 路径参�
 **Zpool 列表**（`/zfs/pools`）：
 - Pool 卡片列表（可点击，hover 高亮 + 箭头提示）
 - 点击卡片跳转到详情页
+- 创建 Pool 按钮（打开 PoolManageModal，含 VDEV 组构建器）
+- 销毁 Pool 按钮（确认对话框 + 可选强制销毁）
 
 **Zpool 详情**（`/zfs/pools/{name}`）：
 - 6 个概览卡片（状态/总容量/已分配/空闲/碎片率/去重比）
 - 容量进度条
 - Scrub 状态信息
 - 阵列结构 VDEV 树（层级缩进，类型标签：镜像/RAID-Z/磁盘，状态徽章，错误计数）
+- 每个磁盘的操作按钮：
+  - 单盘（无子节点）：附加（转为镜像）+ 替换
+  - 镜像成员：分离 + 替换
+  - RAID-Z 成员：仅替换
+- 添加 VDEV 按钮（打开 PoolManageModal 的 add 模式）
 - Scrub 启动/停止按钮
+- 销毁 Pool 按钮
 - 返回按钮
 
 **数据集管理**（`/zfs/datasets`）：
@@ -113,7 +128,14 @@ CSS：`.sub-group` / `.sub-group-header`（`cursor: pointer`，hover 高亮，�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/zfs/pools` | Pool 列表 |
+| POST | `/api/zfs/pools` | 创建 Pool（body: `{name, ashift?, vdevs, properties?}`） |
+| GET | `/api/zfs/pools/available-disks` | 可用磁盘列表 |
 | GET | `/api/zfs/pools/{name}` | Pool 详情（含 VDEV 树 + 容量数据） |
+| DELETE | `/api/zfs/pools/{name}?force=` | 销毁 Pool |
+| POST | `/api/zfs/pools/{name}/add` | 添加 VDEV（body: `{vdevs, force?}`） |
+| POST | `/api/zfs/pools/{name}/attach` | 附加设备（body: `{device, new_device}`） |
+| POST | `/api/zfs/pools/{name}/detach?device=` | 分离设备 |
+| POST | `/api/zfs/pools/{name}/replace` | 替换设备（body: `{old_device, new_device}`） |
 | POST | `/api/zfs/pools/{name}/scrub` | 启动 scrub |
 | POST | `/api/zfs/pools/{name}/scrub/stop` | 停止 scrub |
 | GET | `/api/zfs/datasets` | 数据集树 |
@@ -135,6 +157,6 @@ CSS：`.sub-group` / `.sub-group-header`（`cursor: pointer`，hover 高亮，�
 ## 已知限制
 
 - 未实现 send/receive（流式传输）
-- 未实现 vdev 添加/替换/attach/detach（pool 扩容/维护）
 - 未实现 ZFS 加密管理
 - 审计日志未关联操作用户（handler 未提取 AuthUser，后续补充）
+- pool_create 使用 `-f` 强制创建（跳过 EFI/overlap 检查），适用于全新磁盘场景

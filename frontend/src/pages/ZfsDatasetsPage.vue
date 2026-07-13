@@ -93,10 +93,7 @@ onMounted(load);
   <div class="page-header">
     <h1>{{ t('zfs.dsTitle') }}</h1>
     <p>{{ t('zfs.dsSubtitle') }}</p>
-  </div>
-  <div class="toolbar">
-    <div></div>
-    <div class="flex">
+    <div class="flex" style="margin-left:auto;">
       <button @click="createDataset"><i class="fa-solid fa-plus"></i> {{ t('zfs.dsCreate') }}</button>
       <button @click="load" :disabled="refreshing"><i :class="['fa-solid fa-rotate-right', { 'fa-spin': refreshing }]"></i> {{ t('common.refresh') }}</button>
     </div>
