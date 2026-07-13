@@ -309,8 +309,15 @@ pub async fn list(Query(q): Query<SearchQuery>) -> ApiResult<Json<Vec<SysctlEntr
             let name = r.name.clone();
             let fmt = r.fmt.clone();
             let desc = r.description.clone();
-            let value = sysctl_value(&r.mib)
-                .and_then(|buf| format_value(&buf, typ));
+            // OPAQUE = raw binary struct (kinfo_proc[], rt_msghdr[], devstat[],
+            // etc.). Reading every such OID across the MIB tree easily totals
+            // 100+ MB for no benefit — format_value() only ever reports
+            // "opaque (N bytes)". Skip and leave value = None.
+            let value = if typ == 5 {
+                None
+            } else {
+                sysctl_value(&r.mib).and_then(|buf| format_value(&buf, typ))
+            };
             SysctlEntry {
                 name,
                 value,
