@@ -4,18 +4,21 @@ import { useI18n } from 'vue-i18n';
 import { api, authFetch } from '../lib/api.js';
 import { fmtBytes, fmtDate, permStringFull, octStr } from '../lib/format.js';
 import { useToast, useConfirm, useAlert } from '../composables/useDialog.js';
-import DirTreeNode from '../components/ui/DirTreeNode.vue';
+import { ROOT, fileIcon, joinPath, createTreeState } from '../lib/fileTree.js';
+import FileTreeRow from '../components/ui/FileTreeRow.vue';
 
 const { t } = useI18n();
 const toast = useToast();
 const confirm = useConfirm();
 const alert = useAlert();
 
-const ROOT = '/';
+const ROOT_SLASH = ROOT;
 const currentDir = ref('/root');
 const viewMode = ref(localStorage.getItem('fwp_fm_view') || 'list');
-const expanded = reactive(new Set([ROOT]));
-const treeChildren = reactive(new Map());
+
+const { expanded, treeChildren, toggleExpand, ensureAncestors, getChildren, invalidate, refreshAll } =
+  createTreeState({ filterFn: (e) => e.is_dir });
+
 const entries = ref([]);
 const loading = ref(true);
 
@@ -34,63 +37,6 @@ const chownInfo = ref(null);
 const chownAccounts = ref(null);
 const chownUid = ref('');
 const chownGid = ref('');
-
-function fileIcon(e) {
-  if (e.is_dir) return 'fa-solid fa-folder';
-  if (e.is_symlink) return 'fa-solid fa-link';
-  const ext = (e.name.split('.').pop() || '').toLowerCase();
-  const map = {
-    txt: 'fa-regular fa-file-lines', log: 'fa-regular fa-file-lines', md: 'fa-regular fa-file-lines',
-    png: 'fa-regular fa-file-image', jpg: 'fa-regular fa-file-image', jpeg: 'fa-regular fa-file-image',
-    gif: 'fa-regular fa-file-image', webp: 'fa-regular fa-file-image', svg: 'fa-regular fa-file-image',
-    mp4: 'fa-regular fa-file-video', mkv: 'fa-regular fa-file-video', avi: 'fa-regular fa-file-video',
-    mp3: 'fa-regular fa-file-audio', wav: 'fa-regular fa-file-audio',
-    zip: 'fa-regular fa-file-zipper', gz: 'fa-regular fa-file-zipper', tar: 'fa-regular fa-file-zipper', xz: 'fa-regular fa-file-zipper', '7z': 'fa-regular fa-file-zipper',
-    pdf: 'fa-regular fa-file-pdf',
-    sh: 'fa-regular fa-file-code', py: 'fa-regular fa-file-code', js: 'fa-regular fa-file-code', rs: 'fa-regular fa-file-code', c: 'fa-regular fa-file-code', json: 'fa-regular fa-file-code',
-  };
-  return map[ext] || 'fa-regular fa-file';
-}
-
-function pathDepth(path) {
-  if (path === ROOT) return 0;
-  return path.split('/').filter(Boolean).length;
-}
-
-function joinPath(dir, name) {
-  if (dir === ROOT) return ROOT + name;
-  return dir + '/' + name;
-}
-
-async function fetchDirs(path) {
-  const list = await api.get(`/api/files/list?path=${encodeURIComponent(path)}`);
-  return list.filter((e) => e.is_dir);
-}
-
-async function ensureAncestors(path) {
-  const parts = path.split('/').filter(Boolean);
-  let cur = '';
-  for (const part of parts) {
-    cur = cur + '/' + part;
-    if (!treeChildren.has(cur)) {
-      try { treeChildren.set(cur, await fetchDirs(cur)); } catch { treeChildren.set(cur, []); }
-    }
-    expanded.add(cur);
-  }
-  expanded.add(ROOT);
-}
-
-function getTreeChildren(path) {
-  return treeChildren.get(path);
-}
-
-async function toggleExpand(path) {
-  if (!treeChildren.has(path)) {
-    try { treeChildren.set(path, await fetchDirs(path)); } catch { treeChildren.set(path, []); }
-  }
-  if (expanded.has(path)) expanded.delete(path);
-  else expanded.add(path);
-}
 
 async function openDir(path) {
   currentDir.value = path;
@@ -117,20 +63,12 @@ function breadcrumbPath(idx) {
   return '/' + breadcrumbParts().slice(0, idx + 1).join('/');
 }
 
-function invalidateTree(path) {
-  for (const key of [...treeChildren.keys()]) {
-    if (key === path || key.startsWith(path + '/')) treeChildren.delete(key);
-  }
-}
-
 async function refreshTree() {
   const parts = currentDir.value.split('/').filter(Boolean);
   const paths = [ROOT];
   let cur = '';
   for (const p of parts) { cur = cur + '/' + p; paths.push(cur); }
-  for (const p of paths) {
-    try { treeChildren.set(p, await fetchDirs(p)); } catch {}
-  }
+  await refreshAll(paths);
 }
 
 // Upload manager
@@ -243,7 +181,7 @@ function checkAllDone() {
       alert(t('fm.uploadFailed', { name: '', msg: '' }), t('fm.uploadFailed', { name: '', msg: '' }));
     }
     loadListing(currentDir.value);
-    invalidateTree(currentDir.value);
+    invalidate(currentDir.value);
     refreshTree();
   }
 }
@@ -276,7 +214,7 @@ async function doMkdir() {
     await api.post(`/api/files/mkdir?path=${encodeURIComponent(target)}`);
     toast.toast(t('fm.mkdirDone'));
     showMkdir.value = false;
-    invalidateTree(currentDir.value);
+    invalidate(currentDir.value);
     await refreshTree();
     await loadListing(currentDir.value);
   } catch (err) {
@@ -297,7 +235,7 @@ async function doRename() {
     await api.post(`/api/files/rename?from=${encodeURIComponent(renamePath.value)}&to=${encodeURIComponent(target)}`);
     toast.toast(t('fm.renameDone'));
     showRename.value = false;
-    invalidateTree(parent);
+    invalidate(parent);
     await refreshTree();
     await loadListing(currentDir.value);
   } catch (err) {
@@ -313,7 +251,7 @@ async function onDelete(path, isDir) {
   try {
     await api.del(`/api/files?path=${encodeURIComponent(path)}`);
     toast.toast(t('fm.deleteDone'));
-    invalidateTree(path);
+    invalidate(path);
     await refreshTree();
     await loadListing(currentDir.value);
   } catch (err) {
@@ -383,7 +321,13 @@ function setBit(bit, checked) {
 }
 
 onMounted(async () => {
-  if (!treeChildren.has(ROOT)) treeChildren.set(ROOT, await fetchDirs(ROOT));
+  expanded.add(ROOT);
+  if (!treeChildren.has(ROOT)) {
+    try {
+      const list = await api.get(`/api/files/list?path=${encodeURIComponent(ROOT)}`);
+      treeChildren.set(ROOT, list.filter((e) => e.is_dir));
+    } catch { treeChildren.set(ROOT, []); }
+  }
   await ensureAncestors(currentDir.value);
   await loadListing(currentDir.value);
 });
@@ -408,17 +352,16 @@ onMounted(async () => {
             <span class="fm-tree-name"><span class="fm-tree-ico"><i class="fa-solid fa-folder-tree"></i></span>/</span>
           </div>
           <div v-if="expanded.has(ROOT)" class="fm-tree-children">
-            <DirTreeNode
-              v-for="d in (getTreeChildren(ROOT) || [])"
+            <FileTreeRow
+              v-for="d in (getChildren(ROOT) || [])"
               :key="d.path"
-              :path="d.path"
-              :name="d.name"
+              :entry="d"
+              :depth="1"
               :expanded="expanded"
               :tree-children="treeChildren"
-              :current-dir="currentDir"
-              :depth="1"
               :toggle-expand="toggleExpand"
-              :open-dir="openDir"
+              :selected-path="currentDir"
+              @rowclick="(e) => openDir(e.path)"
             />
           </div>
         </div>
