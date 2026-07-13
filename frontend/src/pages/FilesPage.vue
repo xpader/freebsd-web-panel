@@ -1,9 +1,10 @@
 <script setup>
-import { ref, reactive, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api, authFetch } from '../lib/api.js';
 import { fmtBytes, fmtDate, permStringFull, octStr } from '../lib/format.js';
 import { useToast, useConfirm, useAlert } from '../composables/useDialog.js';
+import DirTreeNode from '../components/ui/DirTreeNode.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -132,24 +133,119 @@ async function refreshTree() {
   }
 }
 
-// Upload
+// Upload manager
+const showUpload = ref(false);
+const uploadQueue = reactive([]); // { id, file, name, size, progress, status, error }
 const uploadInput = ref(null);
+const dropzoneDragover = ref(false);
+let uploadSeq = 0;
 
-async function onUploadPicked(ev) {
-  const files = [...ev.target.files];
-  ev.target.value = '';
-  if (!files.length) return;
+const activeUploadCount = computed(() => uploadQueue.filter((u) => u.status === 'uploading').length);
+
+function openUploadModal() {
+  showUpload.value = true;
+}
+
+function addFiles(files) {
   for (const file of files) {
-    try {
-      const url = `/api/files/upload?path=${encodeURIComponent(currentDir.value)}&filename=${encodeURIComponent(file.name)}`;
-      const res = await authFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-      if (!res.ok) throw { message: `Upload failed (${res.status})` };
-      toast.toast(t('fm.uploaded', { name: file.name }));
-    } catch (err) {
-      await alert(t('fm.uploadFailed', { name: file.name, msg: '' }), t('fm.uploadFailed', { name: file.name, msg: err.message || '' }));
+    uploadQueue.push({
+      id: ++uploadSeq,
+      file,
+      name: file.name,
+      size: file.size,
+      progress: 0,
+      status: 'pending',
+      error: null,
+    });
+  }
+}
+
+function onUploadPicked(ev) {
+  addFiles([...ev.target.files]);
+  ev.target.value = '';
+}
+
+function onDrop(ev) {
+  ev.preventDefault();
+  dropzoneDragover.value = false;
+  if (ev.dataTransfer?.files?.length) addFiles([...ev.dataTransfer.files]);
+}
+
+function onDragover(ev) {
+  ev.preventDefault();
+  dropzoneDragover.value = true;
+}
+
+function onDragleave() {
+  dropzoneDragover.value = false;
+}
+
+function removeUploadItem(id) {
+  const idx = uploadQueue.findIndex((u) => u.id === id);
+  if (idx >= 0) uploadQueue.splice(idx, 1);
+}
+
+function clearCompleted() {
+  for (let i = uploadQueue.length - 1; i >= 0; i--) {
+    if (uploadQueue[i].status === 'done' || uploadQueue[i].status === 'error') {
+      uploadQueue.splice(i, 1);
     }
   }
-  await loadListing(currentDir.value);
+}
+
+function startUpload() {
+  const pending = uploadQueue.filter((u) => u.status === 'pending');
+  if (!pending.length) return;
+  const dir = currentDir.value;
+  for (const item of pending) {
+    item.status = 'uploading';
+    const url = `/api/files/upload?path=${encodeURIComponent(dir)}&filename=${encodeURIComponent(item.name)}`;
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener('progress', (ev) => {
+      if (ev.lengthComputable) {
+        item.progress = Math.round((ev.loaded / ev.total) * 100);
+      }
+    });
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        item.status = 'done';
+        item.progress = 100;
+        toast.toast(t('fm.uploaded', { name: item.name }));
+      } else {
+        item.status = 'error';
+        item.error = `HTTP ${xhr.status}`;
+      }
+      checkAllDone();
+    });
+    xhr.addEventListener('error', () => {
+      item.status = 'error';
+      item.error = 'Network error';
+      checkAllDone();
+    });
+    xhr.addEventListener('abort', () => {
+      item.status = 'error';
+      item.error = 'Aborted';
+      checkAllDone();
+    });
+    xhr.open('POST', url);
+    const token = sessionStorage.getItem('fwp_token');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.send(item.file);
+  }
+}
+
+let allDoneToastShown = false;
+function checkAllDone() {
+  if (!uploadQueue.some((u) => u.status === 'uploading' || u.status === 'pending')) {
+    const hasError = uploadQueue.some((u) => u.status === 'error');
+    if (hasError) {
+      alert(t('fm.uploadFailed', { name: '', msg: '' }), t('fm.uploadFailed', { name: '', msg: '' }));
+    }
+    loadListing(currentDir.value);
+    invalidateTree(currentDir.value);
+    refreshTree();
+  }
 }
 
 async function downloadFile(path) {
@@ -312,17 +408,18 @@ onMounted(async () => {
             <span class="fm-tree-name"><span class="fm-tree-ico"><i class="fa-solid fa-folder-tree"></i></span>/</span>
           </div>
           <div v-if="expanded.has(ROOT)" class="fm-tree-children">
-            <template v-for="d in (getTreeChildren(ROOT) || [])" :key="d.path">
-              <div class="fm-tree-node">
-                <div :class="['fm-tree-row', { active: currentDir === d.path }]" :style="{ paddingLeft: pathDepth(d.path) * 14 + 6 + 'px' }" @click="openDir(d.path)">
-                  <span class="fm-tree-arrow" @click.stop="toggleExpand(d.path)">
-                    <i v-if="expanded.has(d.path)" class="fa-solid fa-caret-down"></i>
-                    <i v-else class="fa-solid fa-caret-right"></i>
-                  </span>
-                  <span class="fm-tree-name"><span class="fm-tree-ico"><i class="fa-solid fa-folder"></i></span>{{ d.path.split('/').filter(Boolean).pop() }}</span>
-                </div>
-              </div>
-            </template>
+            <DirTreeNode
+              v-for="d in (getTreeChildren(ROOT) || [])"
+              :key="d.path"
+              :path="d.path"
+              :name="d.name"
+              :expanded="expanded"
+              :tree-children="treeChildren"
+              :current-dir="currentDir"
+              :depth="1"
+              :toggle-expand="toggleExpand"
+              :open-dir="openDir"
+            />
           </div>
         </div>
       </div>
@@ -342,7 +439,7 @@ onMounted(async () => {
             </template>
           </div>
           <div class="fm-actions">
-            <button class="btn-secondary btn-sm" @click="uploadInput?.click()"><i class="fa-solid fa-upload"></i> {{ t('fm.upload') }}</button>
+            <button class="btn-secondary btn-sm" @click="openUploadModal"><i class="fa-solid fa-upload"></i> {{ t('fm.upload') }}<span v-if="activeUploadCount" class="upload-badge">{{ activeUploadCount }}</span></button>
             <button class="btn-secondary btn-sm" @click="openMkdir"><i class="fa-solid fa-folder-plus"></i> {{ t('fm.mkdir') }}</button>
             <div class="fm-view-toggle">
               <button :class="['btn-secondary', 'btn-sm', { 'active-range': viewMode === 'list' }]" @click="setView('list')"><i class="fa-solid fa-list"></i> {{ t('fm.listView') }}</button>
@@ -350,8 +447,6 @@ onMounted(async () => {
             </div>
           </div>
         </div>
-
-        <input ref="uploadInput" type="file" multiple style="display:none" @change="onUploadPicked" />
 
         <!-- List view -->
         <div v-if="viewMode === 'list'" class="fm-listing">
@@ -403,6 +498,54 @@ onMounted(async () => {
           </div>
         </div>
       </template>
+    </div>
+  </div>
+
+  <!-- Upload modal -->
+  <div v-if="showUpload" class="modal-overlay" @click="(e) => { if (e.target === e.currentTarget) showUpload = false }">
+    <div class="modal upload-modal">
+      <h3>{{ t('fm.uploadTitle') }}</h3>
+      <div class="upload-target">{{ t('fm.uploadTarget', { path: currentDir }) }}</div>
+
+      <div
+        :class="['upload-dropzone', { dragover: dropzoneDragover }]"
+        @click="uploadInput?.click()"
+        @drop="onDrop"
+        @dragover="onDragover"
+        @dragleave="onDragleave"
+      >
+        <i class="fa-solid fa-cloud-arrow-up"></i>
+        <div>{{ t('fm.uploadDropzone') }}</div>
+      </div>
+      <input ref="uploadInput" type="file" multiple style="display:none" @change="onUploadPicked" />
+
+      <div v-if="uploadQueue.length" class="upload-list">
+        <div v-for="item in uploadQueue" :key="item.id" class="upload-item">
+          <span class="fm-row-ico"><i class="fa-regular fa-file"></i></span>
+          <span class="upload-item-name">{{ item.name }}</span>
+          <span class="upload-item-size mono">{{ fmtBytes(item.size) }}</span>
+          <div class="upload-progress">
+            <div
+              :class="['upload-progress-bar', { done: item.status === 'done', error: item.status === 'error' }]"
+              :style="{ width: item.progress + '%' }"
+            ></div>
+          </div>
+          <span :class="['upload-item-status', item.status]">
+            {{ item.status === 'done' ? t('fm.uploadDone') : item.status === 'error' ? t('fm.uploadError') : item.status === 'uploading' ? item.progress + '%' : t('fm.uploadPending') }}
+          </span>
+          <button v-if="item.status === 'pending'" class="fm-act fm-act-danger" @click="removeUploadItem(item.id)"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+
+      <div class="upload-toolbar">
+        <button class="btn-secondary btn-sm" @click="clearCompleted" v-if="uploadQueue.some((u) => u.status === 'done' || u.status === 'error')">{{ t('fm.uploadClear') }}</button>
+        <span class="text-dim" style="font-size:12px;">{{ uploadQueue.length }} {{ t('fm.uploadPending') }}</span>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-secondary" @click="showUpload = false">{{ t('common.close') }}</button>
+        <button @click="startUpload" :disabled="!uploadQueue.some((u) => u.status === 'pending')">{{ t('fm.uploadStart') }}</button>
+      </div>
     </div>
   </div>
 
