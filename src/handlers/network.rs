@@ -5,7 +5,6 @@
 //! Only `defaultrouter` from rc.conf uses `sysrc`.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -218,6 +217,9 @@ pub struct DefaultGateway {
     pub gateway: Option<String>,
     pub interface: Option<String>,
     pub configured: Option<String>,
+    pub gateway6: Option<String>,
+    pub interface6: Option<String>,
+    pub configured6: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -253,6 +255,7 @@ pub struct IfaceRcConfConfig {
     pub ipv4: Option<String>,
     pub ipv4_netmask: Option<String>,
     pub ipv4_aliases: Vec<RcIpv4Alias>,
+    pub ipv6_mode: String,
     pub ipv6: Vec<RcIpv6Entry>,
     pub bridge_members: Vec<String>,
     pub lagg_proto: Option<String>,
@@ -1064,26 +1067,23 @@ pub async fn interface_rcconf_save(
         // 2. Persist to rc.conf.
         let primary_val = build_primary_value(&save_cfg);
         if primary_val.is_empty() {
-            cmd::run_forget_sync(SYSRC, &["-x", &primary_key]);
+            crate::sysrc::delete(&primary_key);
         } else {
-            let assignment = format!("{primary_key}={primary_val}");
-            cmd::run_sync(SYSRC, &[&assignment])?;
+            crate::sysrc::set(&primary_key, &primary_val).map_err(ApiError::Command)?;
         }
 
         let aliases_val = build_aliases_value(&save_cfg.ipv4_aliases);
         if aliases_val.is_empty() {
-            cmd::run_forget_sync(SYSRC, &["-x", &aliases_key]);
+            crate::sysrc::delete(&aliases_key);
         } else {
-            let assignment = format!("{aliases_key}={aliases_val}");
-            cmd::run_sync(SYSRC, &[&assignment])?;
+            crate::sysrc::set(&aliases_key, &aliases_val).map_err(ApiError::Command)?;
         }
 
-        let ipv6_val = build_ipv6_value(&save_cfg.ipv6);
+        let ipv6_val = build_ipv6_value(&save_cfg.ipv6_mode, &save_cfg.ipv6);
         if ipv6_val.is_empty() {
-            cmd::run_forget_sync(SYSRC, &["-x", &ipv6_key]);
+            crate::sysrc::delete(&ipv6_key);
         } else {
-            let assignment = format!("{ipv6_key}={ipv6_val}");
-            cmd::run_sync(SYSRC, &[&assignment])?;
+            crate::sysrc::set(&ipv6_key, &ipv6_val).map_err(ApiError::Command)?;
         }
 
         // Re-read to confirm what was stored.
@@ -1276,21 +1276,23 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
         }
     }
 
-    // 6. Apply each IPv6 entry (skip existing).
-    for entry in &cfg.ipv6 {
-        let addr = entry.address.trim();
-        if addr.is_empty() || existing_v6.iter().any(|a| a == addr) {
-            continue;
-        }
-        let pl = entry.prefixlen.trim();
-        let v6_args: Vec<&str> = if pl.is_empty() {
-            vec!["inet6", addr]
-        } else {
-            vec!["inet6", addr, "prefixlen", pl]
-        };
-        match run_ifconfig(name, &v6_args) {
-            Ok(o) => output.push_str(&o),
-            Err(e) => errors.push(format!("inet6 {addr}: {e}")),
+    // 6. Apply each IPv6 entry (skip existing, skip SLAAC mode).
+    if cfg.ipv6_mode != "slaac" {
+        for entry in &cfg.ipv6 {
+            let addr = entry.address.trim();
+            if addr.is_empty() || existing_v6.iter().any(|a| a == addr) {
+                continue;
+            }
+            let pl = entry.prefixlen.trim();
+            let v6_args: Vec<&str> = if pl.is_empty() {
+                vec!["inet6", addr]
+            } else {
+                vec!["inet6", addr, "prefixlen", pl]
+            };
+            match run_ifconfig(name, &v6_args) {
+                Ok(o) => output.push_str(&o),
+                Err(e) => errors.push(format!("inet6 {addr}: {e}")),
+            }
         }
     }
 
@@ -1303,11 +1305,7 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
 
 /// Read `cloned_interfaces` from rc.conf as a Vec of interface names.
 fn read_cloned_interfaces() -> Vec<String> {
-    cmd::run_sync(SYSRC, &["-n", "cloned_interfaces"])
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect()
+    crate::sysrc::get_list("cloned_interfaces")
 }
 
 /// Add a name to `cloned_interfaces` in rc.conf (idempotent).
@@ -1320,8 +1318,7 @@ fn add_cloned_interface(name: &str) {
     }
     list.push(clone_name);
     let val = list.join(" ");
-    let assignment = format!("cloned_interfaces={val}");
-    cmd::run_forget_sync(SYSRC, &[&assignment]);
+    crate::sysrc::set_forget("cloned_interfaces", &val);
 }
 
 /// Remove a name from `cloned_interfaces` in rc.conf.
@@ -1331,11 +1328,10 @@ fn remove_cloned_interface(name: &str) {
     let list = read_cloned_interfaces();
     let new_list: Vec<&String> = list.iter().filter(|s| s.as_str() != clone_name).collect();
     if new_list.is_empty() {
-        cmd::run_forget_sync(SYSRC, &["-x", "cloned_interfaces"]);
+        crate::sysrc::delete("cloned_interfaces");
     } else {
         let val = new_list.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
-        let assignment = format!("cloned_interfaces={val}");
-        cmd::run_forget_sync(SYSRC, &[&assignment]);
+        crate::sysrc::set_forget("cloned_interfaces", &val);
     }
 }
 
@@ -1417,7 +1413,7 @@ pub async fn interface_destroy(
         let aliases_key = format!("ifconfig_{destroy_name}_aliases");
         let ipv6_key = format!("ifconfig_{destroy_name}_ipv6");
         for key in [&primary_key, &aliases_key, &ipv6_key] {
-            cmd::run_forget_sync(SYSRC, &["-x", key]);
+            crate::sysrc::delete(key);
         }
         remove_cloned_interface(&destroy_name);
         Ok(())
@@ -1449,19 +1445,112 @@ pub async fn default_gateway() -> ApiResult<Json<DefaultGateway>> {
 
     let (gateway, interface) = routes
         .iter()
-        .find(|r| r.destination == "default")
+        .find(|r| r.destination == "default" && r.family == "Internet")
         .map(|r| (Some(r.gateway.clone()), Some(r.interface.clone())))
         .unwrap_or((None, None));
 
-    let configured = tokio::task::spawn_blocking(read_defaultrouter)
-        .await
-        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    let (gateway6, interface6) = routes
+        .iter()
+        .find(|r| r.destination == "default" && r.family == "Internet6")
+        .map(|r| (Some(r.gateway.clone()), Some(r.interface.clone())))
+        .unwrap_or((None, None));
+
+    let (configured, configured6) = tokio::task::spawn_blocking(|| {
+        (read_defaultrouter(), read_ipv6_defaultrouter())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
 
     Ok(Json(DefaultGateway {
         gateway,
         interface,
         configured,
+        gateway6,
+        interface6,
+        configured6,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetGatewayBody {
+    pub gateway: Option<String>,
+    pub gateway6: Option<String>,
+}
+
+/// PUT `/api/network/gateway` — set or clear IPv4/IPv6 default gateway.
+///
+/// Sets `defaultrouter` / `ipv6_defaultrouter` in rc.conf (persistent) and
+/// applies the route change to the live system. An empty value clears the
+/// configuration for that family. Each family is independent; only the
+/// provided field(s) are updated.
+pub async fn set_default_gateway(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<SetGatewayBody>,
+) -> ApiResult<Json<DefaultGateway>> {
+    if let Some(raw) = &body.gateway {
+        let gw = raw.trim();
+        if gw.is_empty() {
+            crate::sysrc::delete_async("defaultrouter").await?;
+            tokio::task::spawn_blocking(|| {
+                cmd::run_forget_sync("/sbin/route", &["delete", "default"]);
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+            audit::record(
+                &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
+                Some("cleared IPv4 default gateway".into()),
+            );
+        } else {
+            validate_ip(gw)?;
+            crate::sysrc::set_async("defaultrouter", gw).await?;
+            let gw_owned = gw.to_string();
+            tokio::task::spawn_blocking(move || {
+                if !cmd::status_sync("/sbin/route", &["change", "default", &gw_owned]) {
+                    cmd::run_forget_sync("/sbin/route", &["add", "default", &gw_owned]);
+                }
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+            audit::record(
+                &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
+                Some(format!("set IPv4 default gateway to {gw}")),
+            );
+        }
+    }
+
+    if let Some(raw) = &body.gateway6 {
+        let gw = raw.trim();
+        if gw.is_empty() {
+            crate::sysrc::delete_async("ipv6_defaultrouter").await?;
+            tokio::task::spawn_blocking(|| {
+                cmd::run_forget_sync("/sbin/route", &["-6", "delete", "default"]);
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+            audit::record(
+                &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
+                Some("cleared IPv6 default gateway".into()),
+            );
+        } else {
+            validate_ip(gw)?;
+            crate::sysrc::set_async("ipv6_defaultrouter", gw).await?;
+            let gw_owned = gw.to_string();
+            tokio::task::spawn_blocking(move || {
+                if !cmd::status_sync("/sbin/route", &["-6", "change", "default", &gw_owned]) {
+                    cmd::run_forget_sync("/sbin/route", &["-6", "add", "default", &gw_owned]);
+                }
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+            audit::record(
+                &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
+                Some(format!("set IPv6 default gateway to {gw}")),
+            );
+        }
+    }
+
+    default_gateway().await
 }
 
 /// GET `/api/network/dns` — DNS configuration from `/etc/resolv.conf`.
@@ -1524,32 +1613,22 @@ pub async fn set_nameservers(
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-const SYSRC: &str = "/usr/sbin/sysrc";
-
-/// Read `defaultrouter` from rc.conf via `sysrc -n defaultrouter`.
+/// Read `defaultrouter` from rc.conf via sysrc.
 fn read_defaultrouter() -> Option<String> {
-    cmd::run_sync(SYSRC, &["-n", "defaultrouter"])
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    crate::sysrc::get("defaultrouter")
+}
+
+/// Read `ipv6_defaultrouter` from rc.conf via sysrc.
+fn read_ipv6_defaultrouter() -> Option<String> {
+    crate::sysrc::get("ipv6_defaultrouter")
 }
 
 /// Read all `ifconfig_<name>` rc.conf entries and parse into structured config.
 fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
-    let stdout = match cmd::run_sync(SYSRC, &["-e", "-a"]) {
-        Ok(s) => s,
-        _ => return IfaceRcConfConfig::default(),
-    };
+    let kv = crate::sysrc::list_all();
     let primary_key = format!("ifconfig_{name}");
     let aliases_key = format!("ifconfig_{name}_aliases");
     let ipv6_key = format!("ifconfig_{name}_ipv6");
-
-    let mut kv: std::collections::HashMap<String, String> = HashMap::new();
-    for line in stdout.lines() {
-        if let Some((k, v)) = parse_sysrc_export_line(line) {
-            kv.insert(k, v);
-        }
-    }
 
     let mut cfg = IfaceRcConfConfig::default();
 
@@ -1591,11 +1670,16 @@ fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
     // Parse IPv6 value.
     if let Some(ref val) = kv.get(&ipv6_key) {
         let parsed = parse_ifconfig_tokens(val);
-        for e in &parsed.inet6s {
-            cfg.ipv6.push(RcIpv6Entry {
-                address: e.address.clone(),
-                prefixlen: e.prefixlen.clone().unwrap_or_default(),
-            });
+        if parsed.ipv6_accept_rtadv {
+            cfg.ipv6_mode = "slaac".into();
+        } else {
+            cfg.ipv6_mode = "static".into();
+            for e in &parsed.inet6s {
+                cfg.ipv6.push(RcIpv6Entry {
+                    address: e.address.clone(),
+                    prefixlen: e.prefixlen.clone().unwrap_or_default(),
+                });
+            }
         }
     }
 
@@ -1609,6 +1693,7 @@ struct ParsedIfConfig {
     ipv4_netmask: Option<String>,
     extra_inets: Vec<InetEntry>,
     inet6s: Vec<Inet6Entry>,
+    ipv6_accept_rtadv: bool,
     bridge_members: Vec<String>,
     lagg_proto: Option<String>,
     lagg_ports: Vec<String>,
@@ -1636,6 +1721,7 @@ impl Default for ParsedIfConfig {
             ipv4_netmask: None,
             extra_inets: Vec::new(),
             inet6s: Vec::new(),
+            ipv6_accept_rtadv: false,
             bridge_members: Vec::new(),
             lagg_proto: None,
             lagg_ports: Vec::new(),
@@ -1721,17 +1807,23 @@ fn parse_ifconfig_tokens(value: &str) -> ParsedIfConfig {
                 if i >= tokens.len() {
                     break;
                 }
-                let addr = tokens[i].to_string();
-                i += 1;
-                let mut prefixlen = None;
-                if i < tokens.len() && tokens[i] == "prefixlen" {
+                // Detect SLAAC mode: "inet6 accept_rtadv"
+                if tokens[i] == "accept_rtadv" {
+                    result.ipv6_accept_rtadv = true;
                     i += 1;
-                    if i < tokens.len() {
-                        prefixlen = Some(tokens[i].to_string());
+                } else {
+                    let addr = tokens[i].to_string();
+                    i += 1;
+                    let mut prefixlen = None;
+                    if i < tokens.len() && tokens[i] == "prefixlen" {
                         i += 1;
+                        if i < tokens.len() {
+                            prefixlen = Some(tokens[i].to_string());
+                            i += 1;
+                        }
                     }
+                    result.inet6s.push(Inet6Entry { address: addr, prefixlen });
                 }
-                result.inet6s.push(Inet6Entry { address: addr, prefixlen });
             }
             "up" => {
                 result.is_up = true;
@@ -1970,7 +2062,10 @@ fn build_aliases_value(aliases: &[RcIpv4Alias]) -> String {
 }
 
 /// Build the `ifconfig_<name>_ipv6` value.
-fn build_ipv6_value(entries: &[RcIpv6Entry]) -> String {
+fn build_ipv6_value(mode: &str, entries: &[RcIpv6Entry]) -> String {
+    if mode == "slaac" {
+        return "inet6 accept_rtadv".to_string();
+    }
     entries
         .iter()
         .filter(|e| !e.address.trim().is_empty())
@@ -1985,38 +2080,6 @@ fn build_ipv6_value(entries: &[RcIpv6Entry]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// Reverse sysrc's shell-style export escaping (`\"` -> `"`, `\\` -> `\`).
-fn unescape_sysrc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(n) = chars.next() {
-                out.push(n);
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Parse one line of `sysrc -e` output (`KEY="VALUE"`) into a (key, value) pair.
-fn parse_sysrc_export_line(line: &str) -> Option<(String, String)> {
-    let eq = line.find('=')?;
-    let key = line[..eq].trim().to_string();
-    if key.is_empty() {
-        return None;
-    }
-    let raw = &line[eq + 1..];
-    let value = if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
-        unescape_sysrc(&raw[1..raw.len() - 1])
-    } else {
-        raw.to_string()
-    };
-    Some((key, value))
 }
 
 /// Validate an interface name: `^[a-zA-Z0-9_.]+$`, 1–15 chars.

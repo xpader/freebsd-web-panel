@@ -3,12 +3,14 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtSpeed, fmtExpire } from '../lib/format.js';
-import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
+import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import FieldHelp from '../components/ui/FieldHelp.vue';
 
 const { t } = useI18n();
 const toast = useToast();
 const alert = useAlert();
 const confirm = useConfirm();
+const formModal = useFormModal();
 const interfaces = ref([]);
 const routes = ref([]);
 const gateway = ref(null);
@@ -51,6 +53,29 @@ const physical = computed(() => interfaces.value.filter((i) => i.is_physical));
 const others = computed(() => interfaces.value.filter((i) => !i.is_physical));
 const routesV4 = computed(() => routes.value.filter((r) => r.family === 'Internet'));
 const routesV6 = computed(() => routes.value.filter((r) => r.family === 'Internet6'));
+
+const ipv4Mode = computed({
+  get: () => {
+    if (!configData.value) return 'static';
+    const v = configData.value.ipv4;
+    return v && (v === 'DHCP' || v === 'SYNCDHCP') ? 'dhcp' : 'static';
+  },
+  set: (val) => {
+    if (!configData.value) return;
+    configData.value.ipv4 = val === 'dhcp' ? 'DHCP' : '';
+  },
+});
+
+const ipv6Mode = computed({
+  get: () => {
+    if (!configData.value) return 'static';
+    return configData.value.ipv6_mode === 'slaac' ? 'slaac' : 'static';
+  },
+  set: (val) => {
+    if (!configData.value) return;
+    configData.value.ipv6_mode = val;
+  },
+});
 
 async function load() {
   if (!interfaces.value.length) loading.value = true;
@@ -252,6 +277,47 @@ async function doCreate() {
   }
 }
 
+async function setGateway() {
+  const result = await formModal(
+    t('net.setGatewayTitle'),
+    [
+      {
+        key: 'gateway',
+        label: t('net.gatewayIpv4'),
+        type: 'text',
+        value: gateway.value?.configured || '',
+        placeholder: 'e.g. 192.168.1.1',
+        tooltip: t('net.gatewayHint'),
+      },
+      {
+        key: 'gateway6',
+        label: t('net.gatewayIpv6'),
+        type: 'text',
+        value: gateway.value?.configured6 || '',
+        placeholder: 'e.g. fe80::1%em0',
+        tooltip: t('net.gatewayHint6'),
+      },
+    ],
+    {
+      submitLabel: t('common.save'),
+      submitHandler: async (values) => {
+        const payload = {};
+        if (values.gateway !== (gateway.value?.configured || '')) {
+          payload.gateway = values.gateway || '';
+        }
+        if (values.gateway6 !== (gateway.value?.configured6 || '')) {
+          payload.gateway6 = values.gateway6 || '';
+        }
+        await api.put('/api/network/gateway', payload);
+      },
+    },
+  );
+  if (result) {
+    toast.toast(t('net.gatewaySaved'));
+    load();
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -353,15 +419,19 @@ onMounted(load);
     <template v-if="gateway">
       <div class="section-title" style="margin-top:32px;">{{ t('net.defaultGateway') }}</div>
       <div class="card" style="padding:1rem;">
-        <div class="kv"><span class="kv-key">{{ t('net.defaultGateway') }}</span><span class="kv-val">
+        <div class="kv"><span class="kv-key">{{ t('net.gatewayIpv4') }}</span><span class="kv-val">
           <strong v-if="gateway.gateway" class="mono">{{ gateway.gateway }}</strong>
-          <span v-else class="text-dim">{{ t('net.notConfigured') }}</span>
+          <span v-else class="text-dim">{{ t('common.notConfigured') }}</span>
           {{ gateway.interface ? `(${gateway.interface})` : '' }}
         </span></div>
-        <div class="kv"><span class="kv-key">{{ t('net.gatewayConfigured') }}</span><span class="kv-val">
-          <span v-if="gateway.configured" class="mono">{{ gateway.configured }}</span>
-          <span v-else class="text-dim">{{ t('net.notConfigured') }}</span>
+        <div class="kv"><span class="kv-key">{{ t('net.gatewayIpv6') }}</span><span class="kv-val">
+          <strong v-if="gateway.gateway6" class="mono">{{ gateway.gateway6 }}</strong>
+          <span v-else class="text-dim">{{ t('common.notConfigured') }}</span>
+          {{ gateway.interface6 ? `(${gateway.interface6})` : '' }}
         </span></div>
+        <div style="margin-top:0.75rem;">
+          <button class="btn-secondary btn-sm" @click="setGateway">{{ t('common.config') }}</button>
+        </div>
       </div>
     </template>
 
@@ -460,7 +530,7 @@ onMounted(load);
   <!-- rc.conf config modal -->
   <div v-if="configIfaceName" class="modal-overlay" @click.self="configIfaceName = null">
     <div class="modal" style="max-width:680px;">
-      <h3>{{ configIfaceName }} — {{ t('net.rcConfigTitle') }}</h3>
+      <h3>{{ configIfaceName }} — {{ t('net.ifaceConfig') }}</h3>
       <div v-if="configLoading" class="text-dim" style="padding:1rem 0;"><span class="spinner"></span> {{ t('common.loading') }}</div>
       <template v-else-if="configData">
         <!-- Interface properties -->
@@ -482,39 +552,86 @@ onMounted(load);
         <div style="margin-bottom:1rem;">
           <label class="checkbox-row">
             <input type="checkbox" v-model="configData.is_up">
-            <span>{{ t('net.enableUp') }}</span>
+            <span>UP</span>
           </label>
         </div>
 
         <!-- IPv4 config -->
         <div class="config-section">
           <h4>{{ t('net.ipv4Config') }}</h4>
-          <div class="form-row">
-            <input type="text" class="input mono" v-model="configData.ipv4" placeholder="e.g. 192.168.1.10">
-            <input type="text" class="input mono" v-model="configData.ipv4_netmask" placeholder="Netmask e.g. 255.255.255.0">
+          <div class="radio-pill-group" style="margin-bottom:0.5rem;">
+            <label class="radio-pill" :class="{ active: ipv4Mode === 'dhcp' }">
+              <input type="radio" value="dhcp" v-model="ipv4Mode"><span>DHCP</span>
+            </label>
+            <label class="radio-pill" :class="{ active: ipv4Mode === 'static' }">
+              <input type="radio" value="static" v-model="ipv4Mode"><span>{{ t('net.staticIp') }}</span>
+            </label>
           </div>
+          <template v-if="ipv4Mode === 'static'">
+            <table class="form-table">
+              <thead><tr>
+                <th>{{ t('net.ipAddress') }}</th>
+                <th>{{ t('net.netmask') }}</th>
+                <th style="width:40px;"></th>
+              </tr></thead>
+              <tbody><tr>
+                <td><input type="text" class="input mono" v-model="configData.ipv4" placeholder="e.g. 192.168.1.10"></td>
+                <td><input type="text" class="input mono" v-model="configData.ipv4_netmask" placeholder="255.255.255.0"></td>
+                <td></td>
+              </tr></tbody>
+            </table>
+          </template>
         </div>
 
         <!-- IPv4 aliases -->
         <div class="config-section">
           <h4>{{ t('net.ipv4Aliases') }}</h4>
-          <div v-for="(a, i) in configData.ipv4_aliases" :key="'alias-'+i" class="form-row">
-            <input type="text" class="input mono" v-model="a.address" placeholder="IP address">
-            <input type="text" class="input mono" v-model="a.netmask" placeholder="Netmask">
-            <button class="btn-secondary btn-sm" @click="removeAlias(i)"><i class="fa-solid fa-xmark"></i></button>
-          </div>
+          <table class="form-table">
+            <thead><tr>
+              <th>{{ t('net.ipAddress') }}</th>
+              <th>{{ t('net.netmask') }}</th>
+              <th style="width:40px;"></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="(a, i) in configData.ipv4_aliases" :key="'alias-'+i">
+                <td><input type="text" class="input mono" v-model="a.address" placeholder="192.168.1.11"></td>
+                <td><input type="text" class="input mono" v-model="a.netmask" placeholder="255.255.255.0"></td>
+                <td><button class="btn-secondary btn-sm" @click="removeAlias(i)"><i class="fa-solid fa-xmark"></i></button></td>
+              </tr>
+            </tbody>
+          </table>
           <button class="btn-secondary btn-sm" @click="addAlias"><i class="fa-solid fa-plus"></i> {{ t('net.addAlias') }}</button>
         </div>
 
         <!-- IPv6 config -->
         <div class="config-section">
           <h4>{{ t('net.ipv6Config') }}</h4>
-          <div v-for="(e, i) in configData.ipv6" :key="'ipv6-'+i" class="form-row">
-            <input type="text" class="input mono" v-model="e.address" placeholder="IPv6 address">
-            <input type="text" class="input mono" v-model="e.prefixlen" placeholder="Prefix len" style="max-width:100px;">
-            <button class="btn-secondary btn-sm" @click="removeIpv6(i)"><i class="fa-solid fa-xmark"></i></button>
+          <div class="radio-pill-group" style="margin-bottom:0.5rem;">
+            <label class="radio-pill" :class="{ active: ipv6Mode === 'slaac' }">
+              <input type="radio" value="slaac" v-model="ipv6Mode"><span>SLAAC</span>
+              <FieldHelp :text="t('net.ipv6SlaacDesc')" />
+            </label>
+            <label class="radio-pill" :class="{ active: ipv6Mode === 'static' }">
+              <input type="radio" value="static" v-model="ipv6Mode"><span>{{ t('net.staticIp') }}</span>
+            </label>
           </div>
-          <button class="btn-secondary btn-sm" @click="addIpv6"><i class="fa-solid fa-plus"></i> {{ t('net.addIpv6') }}</button>
+          <template v-if="ipv6Mode === 'static'">
+            <table class="form-table">
+              <thead><tr>
+                <th>{{ t('net.ipAddress') }}</th>
+                <th style="width:120px;">{{ t('net.prefixLen') }}</th>
+                <th style="width:40px;"></th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="(e, i) in configData.ipv6" :key="'ipv6-'+i">
+                  <td><input type="text" class="input mono" v-model="e.address" placeholder="2001:db8::1"></td>
+                  <td><input type="text" class="input mono" v-model="e.prefixlen" placeholder="64"></td>
+                  <td><button class="btn-secondary btn-sm" @click="removeIpv6(i)"><i class="fa-solid fa-xmark"></i></button></td>
+                </tr>
+              </tbody>
+            </table>
+            <button class="btn-secondary btn-sm" @click="addIpv6"><i class="fa-solid fa-plus"></i> {{ t('net.addIpv6') }}</button>
+          </template>
         </div>
 
         <!-- LAGG config -->

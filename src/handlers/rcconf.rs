@@ -1,9 +1,9 @@
 //! rc.conf management — list, set and delete variables via sysrc.
 //!
-//! All operations go through `/usr/sbin/sysrc`. Reads use `sysrc -e -a`
-//! (export format, non-default variables only). Writes use `sysrc KEY=VALUE`;
-//! deletes use `sysrc -x KEY`. Inputs are validated before being passed as
-//! command arguments (no shell interpolation).
+//! All sysrc operations go through the [`crate::sysrc`] module. Reads use
+//! `sysrc -e -a` (export format, non-default variables only). Writes use
+//! `sysrc KEY=VALUE`; deletes use `sysrc -x KEY`. Inputs are validated before
+//! being passed as command arguments (no shell interpolation).
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -13,11 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::auth::AuthUser;
-use crate::cmd;
 use crate::error::{ApiError, ApiResult};
+use crate::sysrc;
 use crate::AppState;
-
-const SYSRC: &str = "/usr/sbin/sysrc";
 
 /// Validate a rc.conf variable name: must be a shell identifier
 /// (`[a-zA-Z_][a-zA-Z0-9_]*`), 1–128 chars.
@@ -50,46 +48,13 @@ pub struct RcVar {
     pub value: String,
 }
 
-/// Reverse sysrc's shell-style export escaping (`\"` → `"`, `\\` → `\`).
-fn unescape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(n) = chars.next() {
-                out.push(n);
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Parse one line of `sysrc -e` output (`KEY="VALUE"`) into an RcVar.
-fn parse_export_line(line: &str) -> Option<RcVar> {
-    let eq = line.find('=')?;
-    let key = line[..eq].trim().to_string();
-    if key.is_empty() {
-        return None;
-    }
-    let raw = &line[eq + 1..];
-    let value = if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
-        unescape(&raw[1..raw.len() - 1])
-    } else {
-        raw.to_string()
-    };
-    Some(RcVar { key, value })
-}
-
 /// GET /api/rcconf — list all non-default rc.conf variables (effective values),
 /// sorted by key.
 pub async fn list() -> ApiResult<Json<Vec<RcVar>>> {
-    let raw = cmd::run(SYSRC, &["-e", "-a"]).await?;
-    let mut vars: Vec<RcVar> = raw
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(parse_export_line)
+    let map = sysrc::list_all_async().await?;
+    let mut vars: Vec<RcVar> = map
+        .into_iter()
+        .map(|(key, value)| RcVar { key, value })
         .collect();
     vars.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(Json(vars))
@@ -110,12 +75,11 @@ pub async fn set(
     validate_key(&body.key)?;
     validate_value(&body.value)?;
 
-    let assignment = format!("{}={}", body.key, body.value);
-    cmd::run(SYSRC, &[&assignment]).await?;
+    sysrc::set_async(&body.key, &body.value).await?;
 
     // Re-read the effective value so we echo back what sysrc actually stored.
-    let stored = cmd::run(SYSRC, &["-n", &body.key]).await
-        .map(|s| s.trim_end().to_string())
+    let stored = sysrc::get_async(&body.key)
+        .await
         .unwrap_or_else(|_| body.value.clone());
     let var = RcVar {
         key: body.key.clone(),
@@ -146,7 +110,7 @@ pub async fn delete(
     Query(q): Query<KeyQuery>,
 ) -> ApiResult<StatusCode> {
     validate_key(&q.key)?;
-    cmd::run(SYSRC, &["-x", &q.key]).await?;
+    sysrc::delete_async(&q.key).await?;
 
     audit::record(
         &state,

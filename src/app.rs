@@ -59,7 +59,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/network/interfaces/{name}/rcconf", get(handlers::network::interface_rcconf).put(handlers::network::interface_rcconf_save))
         .route("/api/network/interfaces/{name}/apply", post(handlers::network::interface_apply))
         .route("/api/network/routes", get(handlers::network::list_routes))
-        .route("/api/network/gateway", get(handlers::network::default_gateway))
+        .route("/api/network/gateway", get(handlers::network::default_gateway).put(handlers::network::set_default_gateway))
         .route("/api/network/dns", get(handlers::network::dns_config))
         .route("/api/network/dns/nameservers", put(handlers::network::set_nameservers))
         .route("/api/services", get(handlers::services::list))

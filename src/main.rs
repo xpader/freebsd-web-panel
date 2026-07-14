@@ -14,6 +14,7 @@ mod jail;
 mod monitor;
 mod state;
 mod sysinfo;
+mod sysrc;
 mod terminal;
 mod web_assets;
 

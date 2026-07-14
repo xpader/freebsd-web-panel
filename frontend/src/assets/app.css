@@ -338,6 +338,18 @@ input[type="checkbox"]:focus, input[type="radio"]:focus {
 }
 .config-section > .form-row .input { flex: 1; }
 .config-section > .form-row > button { flex-shrink: 0; }
+.form-table {
+  width: 100%; border-collapse: collapse; margin-bottom: 8px;
+}
+.form-table th {
+  text-align: left; font-size: 12px; font-weight: 500;
+  color: var(--text-dim); padding: 0 8px 4px 0;
+  border: none; text-transform: none; letter-spacing: 0;
+}
+.form-table td { padding: 0 8px 4px 0; vertical-align: middle; border: none; }
+.form-table td:last-child, .form-table th:last-child { padding-right: 0; }
+.form-table tr:hover td { background: none; }
+.form-table .input { width: 100%; }
 .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
 .config-grid .kv { display: flex; flex-direction: column; gap: 4px; }
 .config-grid .kv-key { font-size: 12px; }
@@ -808,6 +820,16 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .radio-group-inline { display: flex; gap: 20px; flex-wrap: wrap; }
 .radio-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .radio-label input[type="radio"] { margin: 0; }
+.radio-pill-group { display: flex; flex-direction: row; gap: 8px; }
+.radio-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  border-radius: var(--radius);
+  transition: background 0.15s, color 0.15s;
+}
+.radio-pill:hover { background: var(--bg-elev2); }
+.radio-pill.active { color: var(--accent); background: rgba(59,130,246,0.08); }
+.radio-pill input { width: auto; margin: 0; }
 .badge-modified {
   display: inline-block; margin-left: 6px;
   padding: 1px 6px; border-radius: 3px;

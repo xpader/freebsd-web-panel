@@ -1102,6 +1102,8 @@ pub async fn pool_import(
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     cmd::run(ZPOOL, &arg_refs).await?;
 
+    crate::sysrc::ensure_yes("zfs_enable");
+
     let mut detail = format!("imported pool {}", pool_name);
     if let Some(altroot) = &body.altroot {
         if !altroot.trim().is_empty() {
@@ -1228,6 +1230,8 @@ pub async fn pool_create(
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     cmd::run(ZPOOL, &arg_refs).await?;
+
+    crate::sysrc::ensure_yes("zfs_enable");
 
     let vdev_summary: Vec<String> = body
         .vdevs

@@ -136,12 +136,10 @@ fn jail_resolv_path(state: &AppState) -> PathBuf {
 
 // ── Running jail list / detail ────────────────────────────────────
 
-/// Read the jail_list from rc.conf (via sysrc) and return as a HashSet of jail names.
+/// Read the jail_list from rc.conf and return as a HashSet of jail names.
 fn read_jail_list() -> std::collections::HashSet<String> {
-    cmd::run_sync("/usr/sbin/sysrc", &["-n", "jail_list"])
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(|n| n.to_string())
+    crate::sysrc::get_list("jail_list")
+        .into_iter()
         .collect()
 }
 
@@ -1759,8 +1757,8 @@ pub async fn jail_create(
         let mut list = read_jail_list();
         list.insert(body.name.clone());
         let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-        let assignment = format!("jail_list={val}");
-        cmd::run_forget_sync("/usr/sbin/sysrc", &[&assignment]);
+        crate::sysrc::set_forget("jail_list", &val);
+        crate::sysrc::ensure_yes("jail_enable");
     }
 
     crate::audit::record(
@@ -2672,8 +2670,8 @@ pub async fn jail_update(
         if want_auto && !was_in {
             list.insert(name.clone());
             let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-            let assignment = format!("jail_list={val}");
-            cmd::run_forget_sync("/usr/sbin/sysrc", &[&assignment]);
+            crate::sysrc::set_forget("jail_list", &val);
+            crate::sysrc::ensure_yes("jail_enable");
             crate::audit::record(
                 &state, None, "PUT", &format!("/api/jails/{name}"), 200,
                 Some(format!("added {name} to jail_list (auto-start)")),
@@ -2681,8 +2679,7 @@ pub async fn jail_update(
         } else if !want_auto && was_in {
             list.remove(&name);
             let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-            let assignment = format!("jail_list={val}");
-            cmd::run_forget_sync("/usr/sbin/sysrc", &[&assignment]);
+            crate::sysrc::set_forget("jail_list", &val);
             crate::audit::record(
                 &state, None, "PUT", &format!("/api/jails/{name}"), 200,
                 Some(format!("removed {name} from jail_list (auto-start)")),

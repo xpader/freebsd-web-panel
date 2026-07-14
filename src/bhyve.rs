@@ -8,7 +8,6 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 
 const VM: &str = "/usr/local/sbin/vm";
-const SYSRC: &str = "/usr/sbin/sysrc";
 const PKG: &str = "/usr/sbin/pkg";
 const ZFS: &str = "/sbin/zfs";
 
@@ -1532,9 +1531,9 @@ pub struct BhyveStatus {
 /// Check whether vm-bhyve is installed, enabled, and initialized.
 pub fn check_status() -> BhyveStatus {
     let installed = std::path::Path::new(VM).exists();
-    let vm_enable = sysrc_get("vm_enable");
+    let vm_enable = crate::sysrc::get("vm_enable");
     let enabled = vm_enable.as_deref() == Some("YES");
-    let vm_dir = sysrc_get("vm_dir");
+    let vm_dir = crate::sysrc::get("vm_dir");
     let resolved_path = vm_dir.as_deref().and_then(resolve_vm_dir);
     let initialized = resolved_path
         .as_ref()
@@ -1568,8 +1567,8 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
     steps.push("Installed packages: vm-bhyve, bhyve-firmware, grub2-bhyve".into());
 
     // 2. Configure rc.conf
-    sysrc_set("vm_enable", "YES")?;
-    sysrc_set("vm_dir", spec)?;
+    crate::sysrc::set("vm_enable", "YES")?;
+    crate::sysrc::set("vm_dir", spec)?;
     steps.push(format!("rc.conf configured: vm_enable=YES, vm_dir={spec}"));
 
     // 3. Prepare storage
@@ -1619,24 +1618,9 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
 
 // ── sysrc / zfs helpers ────────────────────────────────────────────
 
-/// Read a single sysrc variable value (returns None if unset or error).
-fn sysrc_get(key: &str) -> Option<String> {
-    let s = crate::cmd::run_sync_str(SYSRC, &["-n", key]).ok()?;
-    let s = s.trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
-}
-
-/// Set a sysrc variable (`sysrc KEY=VALUE`).
-fn sysrc_set(key: &str, value: &str) -> Result<(), String> {
-    let assignment = format!("{key}={value}");
-    crate::cmd::run_sync_str(SYSRC, &[&assignment]).map(|_| ())
-}
-
 /// Read the `vm_list` variable from rc.conf (space-separated VM names).
 pub fn read_vm_list() -> Vec<String> {
-    sysrc_get("vm_list")
-        .map(|s| s.split_whitespace().map(String::from).collect())
-        .unwrap_or_default()
+    crate::sysrc::get_list("vm_list")
 }
 
 /// Add or remove a VM from the `vm_list` rc.conf variable (auto-start on boot).
@@ -1645,15 +1629,10 @@ pub fn set_vm_auto_start(name: &str, enabled: bool) -> Result<(), String> {
     let was_in = list.iter().any(|n| n == name);
     if enabled && !was_in {
         list.push(name.to_string());
-        sysrc_set("vm_list", &list.join(" "))?;
+        crate::sysrc::set("vm_list", &list.join(" "))?;
     } else if !enabled && was_in {
         list.retain(|n| n != name);
-        let val = list.join(" ");
-        if val.is_empty() {
-            sysrc_set("vm_list", "")?;
-        } else {
-            sysrc_set("vm_list", &val)?;
-        }
+        crate::sysrc::set("vm_list", &list.join(" "))?;
     }
     Ok(())
 }
