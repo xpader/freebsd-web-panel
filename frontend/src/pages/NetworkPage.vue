@@ -56,24 +56,39 @@ const routesV6 = computed(() => routes.value.filter((r) => r.family === 'Interne
 
 const ipv4Mode = computed({
   get: () => {
-    if (!configData.value) return 'static';
+    if (!configData.value) return 'none';
     const v = configData.value.ipv4;
-    return v && (v === 'DHCP' || v === 'SYNCDHCP') ? 'dhcp' : 'static';
+    if (v === null || v === undefined) return 'none';
+    if (v === 'DHCP' || v === 'SYNCDHCP') return 'dhcp';
+    return 'static';
   },
   set: (val) => {
     if (!configData.value) return;
-    configData.value.ipv4 = val === 'dhcp' ? 'DHCP' : '';
+    if (val === 'none') {
+      configData.value.ipv4 = null;
+    } else if (val === 'dhcp') {
+      configData.value.ipv4 = 'DHCP';
+    } else {
+      const cur = configData.value.ipv4;
+      if (!cur || cur === 'DHCP' || cur === 'SYNCDHCP') {
+        configData.value.ipv4 = '';
+      }
+    }
   },
 });
 
 const ipv6Mode = computed({
   get: () => {
-    if (!configData.value) return 'static';
-    return configData.value.ipv6_mode === 'slaac' ? 'slaac' : 'static';
+    if (!configData.value) return 'none';
+    const m = configData.value.ipv6_mode;
+    if (m === 'slaac') return 'slaac';
+    if (m === 'static') return 'static';
+    return 'none';
   },
   set: (val) => {
     if (!configData.value) return;
     configData.value.ipv6_mode = val;
+    if (val === 'none') configData.value.ipv6 = [];
   },
 });
 
@@ -541,10 +556,8 @@ onMounted(load);
               <input type="text" class="input" v-model="configData.description" placeholder="e.g. WAN"></div>
             <div class="kv"><span class="kv-key">MTU</span>
               <input type="number" class="input" v-model.number="configData.mtu" placeholder="e.g. 1500"></div>
-            <div class="kv"><span class="kv-key">Media</span>
-              <input type="text" class="input mono" v-model="configData.media" placeholder="e.g. 1000baseTX"></div>
-            <div class="kv"><span class="kv-key">Mediaopt</span>
-              <input type="text" class="input mono" v-model="configData.mediaopt" placeholder="e.g. full-duplex"></div>
+            <div class="kv" style="grid-column:1/-1;"><span class="kv-key">{{ t('net.extraOptions') }}</span>
+              <input type="text" class="input mono" v-model="configData.options" :placeholder="t('net.extraOptionsPh')"></div>
           </div>
         </div>
 
@@ -560,6 +573,9 @@ onMounted(load);
         <div class="config-section">
           <h4>{{ t('net.ipv4Config') }}</h4>
           <div class="radio-pill-group" style="margin-bottom:0.5rem;">
+            <label class="radio-pill" :class="{ active: ipv4Mode === 'none' }">
+              <input type="radio" value="none" v-model="ipv4Mode"><span>{{ t('common.none') }}</span>
+            </label>
             <label class="radio-pill" :class="{ active: ipv4Mode === 'dhcp' }">
               <input type="radio" value="dhcp" v-model="ipv4Mode"><span>DHCP</span>
             </label>
@@ -586,7 +602,7 @@ onMounted(load);
         <!-- IPv4 aliases -->
         <div class="config-section">
           <h4>{{ t('net.ipv4Aliases') }}</h4>
-          <table class="form-table">
+          <table v-if="configData.ipv4_aliases.length" class="form-table">
             <thead><tr>
               <th>{{ t('net.ipAddress') }}</th>
               <th>{{ t('net.netmask') }}</th>
@@ -607,6 +623,9 @@ onMounted(load);
         <div class="config-section">
           <h4>{{ t('net.ipv6Config') }}</h4>
           <div class="radio-pill-group" style="margin-bottom:0.5rem;">
+            <label class="radio-pill" :class="{ active: ipv6Mode === 'none' }">
+              <input type="radio" value="none" v-model="ipv6Mode"><span>{{ t('common.none') }}</span>
+            </label>
             <label class="radio-pill" :class="{ active: ipv6Mode === 'slaac' }">
               <input type="radio" value="slaac" v-model="ipv6Mode"><span>SLAAC</span>
               <FieldHelp :text="t('net.ipv6SlaacDesc')" />

@@ -262,8 +262,7 @@ pub struct IfaceRcConfConfig {
     pub lagg_ports: Vec<String>,
     pub mtu: Option<u32>,
     pub description: Option<String>,
-    pub media: Option<String>,
-    pub mediaopt: Option<String>,
+    pub options: String,
 }
 
 // ─── Interface reading via getifaddrs(3) ───────────────────────────────────
@@ -1043,11 +1042,8 @@ pub async fn interface_rcconf_save(
     if let Some(ref d) = cfg.description {
         validate_str(d)?;
     }
-    if let Some(ref m) = cfg.media {
-        validate_str(m)?;
-    }
-    if let Some(ref m) = cfg.mediaopt {
-        validate_str(m)?;
+    if !cfg.options.is_empty() {
+        validate_str(&cfg.options)?;
     }
     if let Some(ref p) = cfg.lagg_proto {
         validate_str(p)?;
@@ -1163,20 +1159,9 @@ fn build_ifconfig_args(cfg: &IfaceRcConfConfig) -> Vec<String> {
         args.push(desc.trim().into());
     }
 
-    // Media / Mediaopt
-    if let Some(ref media) = cfg.media {
-        let m = media.trim();
-        if !m.is_empty() {
-            args.push("media".into());
-            args.push(m.into());
-        }
-    }
-    if let Some(ref mediaopt) = cfg.mediaopt {
-        let m = mediaopt.trim();
-        if !m.is_empty() {
-            args.push("mediaopt".into());
-            args.push(m.into());
-        }
+    // Extra options (media, mediaopt, vlan, etc.)
+    for tok in cfg.options.split_whitespace() {
+        args.push(tok.into());
     }
 
     // UP
@@ -1276,8 +1261,8 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
         }
     }
 
-    // 6. Apply each IPv6 entry (skip existing, skip SLAAC mode).
-    if cfg.ipv6_mode != "slaac" {
+    // 6. Apply each IPv6 entry (only in static mode).
+    if cfg.ipv6_mode == "static" {
         for entry in &cfg.ipv6 {
             let addr = entry.address.trim();
             if addr.is_empty() || existing_v6.iter().any(|a| a == addr) {
@@ -1643,8 +1628,7 @@ fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
         cfg.lagg_ports = parsed.lagg_ports;
         cfg.mtu = parsed.mtu;
         cfg.description = parsed.description;
-        cfg.media = parsed.media;
-        cfg.mediaopt = parsed.mediaopt;
+        cfg.options = parsed.options_tokens.join(" ");
         // Additional inet entries beyond the first become aliases.
         if parsed.extra_inets.len() > 1 {
             for inet in parsed.extra_inets.iter().skip(1) {
@@ -1699,8 +1683,7 @@ struct ParsedIfConfig {
     lagg_ports: Vec<String>,
     mtu: Option<u32>,
     description: Option<String>,
-    media: Option<String>,
-    mediaopt: Option<String>,
+    options_tokens: Vec<String>,
 }
 
 struct InetEntry {
@@ -1727,8 +1710,7 @@ impl Default for ParsedIfConfig {
             lagg_ports: Vec::new(),
             mtu: None,
             description: None,
-            media: None,
-            mediaopt: None,
+            options_tokens: Vec::new(),
         }
     }
 }
@@ -1895,20 +1877,6 @@ fn parse_ifconfig_tokens(value: &str) -> ParsedIfConfig {
                     i += 1;
                 }
             }
-            "media" => {
-                i += 1;
-                if i < tokens.len() && tokens[i] != "mediaopt" && !is_ifconfig_keyword(tokens[i]) {
-                    result.media = Some(tokens[i].to_string());
-                    i += 1;
-                }
-            }
-            "mediaopt" => {
-                i += 1;
-                if i < tokens.len() {
-                    result.mediaopt = Some(tokens[i].to_string());
-                    i += 1;
-                }
-            }
             "laggproto" => {
                 i += 1;
                 if i < tokens.len() {
@@ -1932,6 +1900,7 @@ fn parse_ifconfig_tokens(value: &str) -> ParsedIfConfig {
                 i += 1;
             }
             _ => {
+                result.options_tokens.push(tokens[i].to_string());
                 i += 1;
             }
         }
@@ -2022,18 +1991,9 @@ fn build_primary_value(cfg: &IfaceRcConfConfig) -> String {
         }
     }
 
-    if let Some(ref media) = cfg.media {
-        let m = media.trim();
-        if !m.is_empty() {
-            parts.push(format!("media {m}"));
-        }
-    }
-
-    if let Some(ref mediaopt) = cfg.mediaopt {
-        let m = mediaopt.trim();
-        if !m.is_empty() {
-            parts.push(format!("mediaopt {m}"));
-        }
+    let opts = cfg.options.trim();
+    if !opts.is_empty() {
+        parts.push(opts.to_string());
     }
 
     if cfg.is_up {
@@ -2065,6 +2025,9 @@ fn build_aliases_value(aliases: &[RcIpv4Alias]) -> String {
 fn build_ipv6_value(mode: &str, entries: &[RcIpv6Entry]) -> String {
     if mode == "slaac" {
         return "inet6 accept_rtadv".to_string();
+    }
+    if mode == "none" {
+        return String::new();
     }
     entries
         .iter()
