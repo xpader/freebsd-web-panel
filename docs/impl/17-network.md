@@ -125,12 +125,12 @@ IfaceRcConfConfig {
     interface: String, is_bridge: bool, is_lagg: bool, is_up: bool,
     ipv4: Option<String>, ipv4_netmask: Option<String>,
     ipv4_aliases: Vec<RcIpv4Alias>,     // { address, netmask }
-    ipv6_mode: String,                  // "static" | "slaac"
-    ipv6: Vec<RcIpv6Entry>,             // { address, prefixlen }（slaac 模式下为空）
+    ipv6_mode: String,                  // "none" | "static" | "slaac"
+    ipv6: Vec<RcIpv6Entry>,             // { address, prefixlen }（slaac/none 模式下为空）
     bridge_members: Vec<String>,
     lagg_proto: Option<String>, lagg_ports: Vec<String>,
     mtu: Option<u32>, description: Option<String>,
-    media: Option<String>, mediaopt: Option<String>,
+    options: String,                    // 扩展参数（media/mediaopt/vlan 等不在表单中的 ifconfig 参数）
 }
 ```
 
@@ -138,23 +138,26 @@ IfaceRcConfConfig {
 
 **解析**（`parse_iface_rcconf`）：从 `sysrc -e -a` 输出提取 `ifconfig_<name>`、`ifconfig_<name>_aliases`、`ifconfig_<name>_ipv6` 三个键，用 `parse_ifconfig_tokens` 将值字符串解析为结构化字段。
 
-**IPv4 模式检测**：主值包含 `DHCP` 或 `SYNCDHCP` → `ipv4_mode = "dhcp"`，前端隐藏 IP/掩码输入；否则为 `static`。
+**IPv4 模式检测**：`ipv4` 为 `null` → `ipv4_mode = "none"`（不配置 IPv4）；主值包含 `DHCP` 或 `SYNCDHCP` → `ipv4_mode = "dhcp"`，前端隐藏 IP/掩码输入；否则为 `static`。
 
-**IPv6 模式检测**：`ifconfig_<name>_ipv6` 值含 `accept_rtadv` → `ipv6_mode = "slaac"`（无静态地址条目），前端隐藏静态 IPv6 输入；否则为 `static`。
+**IPv6 模式检测**：`ifconfig_<name>_ipv6` 键不存在 → `ipv6_mode = "none"`（不配置 IPv6）；值含 `accept_rtadv` → `ipv6_mode = "slaac"`（无静态地址条目），前端隐藏静态 IPv6 输入；否则为 `static`。
 
 **写入**（`build_primary_value` / `build_ipv6_value`）：
+- IPv4 none → 主值不含 inet 字段
 - IPv4 DHCP → `ifconfig_<name>="DHCP"`（或 `SYNCDHCP`）
+- IPv6 none → `ifconfig_<name>_ipv6` 键被删除
 - IPv6 SLAAC → `ifconfig_<name>_ipv6="inet6 accept_rtadv"`
 - IPv6 static → `build_ipv6_value("static", entries)` 拼接 `inet6 <addr> prefixlen <pl>` 条目
 - description 用单引号包裹（`description 'Hello World'`）以区分空格分隔的其他参数。
+- `options` 字段中的扩展参数原样追加到主值末尾（如 `media 1000baseTX mediaopt full-duplex`）
 
 **配置应用**（`apply_ifconfig`）：
 1. 先用 `read_interfaces()` 读取当前运行时状态
-2. 应用非结构性属性（IP/MTU/description/media/UP）
+2. 应用非结构性属性（IP/MTU/description/options/UP）
 3. 应用 LAGG 协议和端口（跳过已有端口）
 4. 应用 bridge 成员（跳过已有成员、其他 bridge 的成员）
 5. 应用 IPv4 别名（跳过已有地址）
-6. 应用 IPv6 条目（跳过已有地址）——SLAAC 模式跳过此步
+6. 应用 IPv6 条目（跳过已有地址）——仅 `static` 模式应用；`slaac` 和 `none` 模式跳过
 
 **PUT 流程**：先 ifconfig 应用 → 成功后写 rc.conf。ifconfig 失败则不写 rc.conf，返回错误。
 
@@ -213,11 +216,11 @@ IfaceRcConfConfig {
 
 ### 配置弹窗
 
-- 接口属性：描述、MTU、Media、Mediaopt
+- 接口属性：描述、MTU、扩展选项（Options，自由填写 media/mediaopt/vlan 等额外 ifconfig 参数）
 - UP 勾选框
-- IPv4 模式切换：DHCP / Static 药丸选择器（`.radio-pill-group`），Static 模式显示 IP + 子网掩码输入
-- IPv4 别名列表（可增删，`.form-table` 表格布局）
-- IPv6 模式切换：SLAAC / Static 药丸选择器，SLAAC 模式隐藏静态输入；Static 模式显示地址 + 前缀长度列表（可增删）
+- IPv4 模式切换：无 / DHCP / Static 三选一药丸选择器（`.radio-pill-group`）；无 → 不配置 IPv4，DHCP → 使用 DHCP 获取地址，Static → 显示 IP + 子网掩码输入
+- IPv4 别名列表（可增删，`.form-table` 表格布局，无数据时不显示表头）
+- IPv6 模式切换：无 / SLAAC / Static 三选一药丸选择器；无 → 不配置 IPv6，SLAAC → 使用路由器广播自动配置，Static → 显示地址 + 前缀长度列表（可增删）
 - LAGG 配置（仅 lagg 接口）：协议下拉 + 端口下拉列表
 - Bridge 成员（仅 bridge 接口）：成员下拉列表
 - 保存按钮：先应用后持久化
@@ -241,6 +244,6 @@ IfaceRcConfConfig {
 ## 已知限制
 
 - DHCP/SYNCDHCP 配置在 ifconfig apply 时跳过（由 dhclient 管理）
-- IPv6 SLAAC 配置在 ifconfig apply 时跳过（由内核 RTADV 处理）
+- IPv6 SLAAC/none 配置在 ifconfig apply 时跳过（仅 static 模式应用 IPv6 地址）
 - 删除别名/成员需手动销毁后重建（ifconfig 无原子"替换"语义）
 - 部分边缘路由的 gateway 显示为空（IPv6 零长度网关地址）
