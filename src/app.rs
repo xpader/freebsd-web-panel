@@ -124,6 +124,8 @@ pub fn build(state: AppState) -> Router {
         .route("/api/zfs/datasets", get(handlers::zfs::dataset_list).post(handlers::zfs::dataset_create))
         .route("/api/zfs/dataset/destroy", delete(handlers::zfs::dataset_destroy))
         .route("/api/zfs/dataset/properties", get(handlers::zfs::dataset_properties).put(handlers::zfs::dataset_set))
+        .route("/api/zfs/dataset/inherit", post(handlers::zfs::dataset_inherit))
+        .route("/api/zfs/dataset/prop-schema", get(handlers::zfs::dataset_prop_schema))
         .route("/api/zfs/snapshots", get(handlers::zfs::snapshot_list).post(handlers::zfs::snapshot_create))
         .route("/api/zfs/snapshot/destroy", delete(handlers::zfs::snapshot_destroy))
         .route("/api/zfs/snapshot/rollback", post(handlers::zfs::snapshot_rollback))

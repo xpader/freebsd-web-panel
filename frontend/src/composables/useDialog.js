@@ -24,6 +24,13 @@ export function useAlert() {
 
 export function useFormModal() {
   const ui = useUiStore();
-  return (title, fields, submitLabel) =>
-    ui.showDialog({ type: 'form', title, fields, submitLabel });
+  return (title, fields, opts = {}) =>
+    ui.showDialog({
+      type: 'form',
+      title,
+      fields,
+      submitLabel: opts.submitLabel,
+      errorMessage: opts.errorMessage,
+      submitHandler: opts.submitHandler,
+    });
 }

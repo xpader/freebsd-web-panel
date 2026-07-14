@@ -1,26 +1,40 @@
 <script setup>
-import { ref, nextTick, watch } from 'vue';
+import { ref, reactive, nextTick, watch } from 'vue';
 import { useUiStore } from '../../stores/ui.js';
 import { useI18n } from 'vue-i18n';
+import FieldHelp from './FieldHelp.vue';
 
 const ui = useUiStore();
 const { t } = useI18n();
 
 const firstInput = ref(null);
+const submitting = ref(false);
+const radioState = reactive({});
+const radioOwner = ref(null);
+const formValues = reactive({});
 
-// Auto-focus first input when a form dialog opens.
-watch(() => ui.dialog, (d) => {
-  if (d && d.type === 'form') {
+watch(() => ui.dialogs.length, () => {
+  const d = ui.dialog;
+  if (!d || d.type !== 'form') return;
+  // Reset state when a different form becomes the top dialog.
+  if (radioOwner.value !== d.id) {
+    Object.keys(radioState).forEach(k => delete radioState[k]);
+    Object.keys(formValues).forEach(k => delete formValues[k]);
+    radioOwner.value = d.id;
+    for (const f of (d.fields || [])) {
+      formValues[f.key] = f.value ?? '';
+      if (f.type === 'radio') radioState[f.key] = f.value ?? f.options?.[0]?.value ?? '';
+    }
     nextTick(() => {
       if (firstInput.value) firstInput.value.focus();
     });
   }
-});
+}, { immediate: true });
 
-function handleConfirm() {
-  if (ui.dialog?.options?.length) {
+function handleConfirm(d) {
+  if (d?.options?.length) {
     const result = { confirmed: true };
-    for (const o of ui.dialog.options) {
+    for (const o of d.options) {
       const cb = document.querySelector(`[data-opt="${o.key}"]`);
       result[o.key] = cb ? cb.checked : false;
     }
@@ -30,24 +44,72 @@ function handleConfirm() {
   }
 }
 
-function handleFormSubmit(ev) {
-  const formData = new FormData(ev.target);
-  const result = {};
-  for (const f of ui.dialog.fields) {
-    result[f.key] = formData.get(f.key);
+async function handleFormSubmit(ev, d) {
+  const result = { ...formValues };
+  if (d.submitHandler) {
+    submitting.value = true;
+    d.errorMessage = null;
+    try {
+      await d.submitHandler(result);
+      ui.resolveDialog(result);
+    } catch (e) {
+      d.errorMessage = e.message || String(e);
+    } finally {
+      submitting.value = false;
+    }
+  } else {
+    ui.resolveDialog(result);
   }
-  ui.resolveDialog(result);
+}
+
+function isFieldVisible(f) {
+  if (!f.showIf) return true;
+  const [key, val] = Object.entries(f.showIf)[0];
+  return radioState[key] === val;
+}
+
+function isFieldRequired(f) {
+  if (f.required) return true;
+  if (f.requiredIf) {
+    const [key, val] = Object.entries(f.requiredIf)[0];
+    return radioState[key] === val;
+  }
+  return false;
+}
+
+function groupedFields(d) {
+  const groups = [];
+  let pending = null;
+  for (const f of (d.fields || [])) {
+    if (f.half) {
+      if (pending) {
+        groups.push([pending, f]);
+        pending = null;
+      } else {
+        pending = f;
+      }
+    } else {
+      if (pending) {
+        groups.push([pending]);
+        pending = null;
+      }
+      groups.push([f]);
+    }
+  }
+  if (pending) groups.push([pending]);
+  return groups;
 }
 </script>
 
 <template>
-  <div v-if="ui.dialog" class="modal-overlay">
+  <template v-for="d in ui.dialogs" :key="d.id">
+    <div class="modal-overlay">
     <!-- Confirm dialog -->
-    <div v-if="ui.dialog.type === 'confirm'" class="modal">
-      <h3>{{ ui.dialog.title }}</h3>
-      <p class="text-dim">{{ ui.dialog.message }}</p>
+    <div v-if="d.type === 'confirm'" class="modal">
+      <h3>{{ d.title }}</h3>
+      <p class="text-dim">{{ d.message }}</p>
       <label
-        v-for="o in (ui.dialog.options || [])"
+        v-for="o in (d.options || [])"
         :key="o.key"
         class="confirm-opt"
       >
@@ -55,58 +117,127 @@ function handleFormSubmit(ev) {
         <span>{{ o.label }}</span>
       </label>
       <div class="modal-actions">
-        <button class="btn-secondary" @click="ui.resolveDialog(ui.dialog.options?.length ? { confirmed: false } : false)">{{ t('common.cancel') }}</button>
-        <button class="btn-danger" @click="handleConfirm">{{ t('common.confirm') }}</button>
+        <button class="btn-secondary" @click="ui.resolveDialog(d.options?.length ? { confirmed: false } : false)">{{ t('common.cancel') }}</button>
+        <button class="btn-danger" @click="handleConfirm(d)">{{ t('common.confirm') }}</button>
       </div>
     </div>
 
     <!-- Alert dialog -->
-    <div v-else-if="ui.dialog.type === 'alert'" class="modal">
-      <h3>{{ ui.dialog.title }}</h3>
-      <p class="text-dim">{{ ui.dialog.message }}</p>
+    <div v-else-if="d.type === 'alert'" class="modal">
+      <h3>{{ d.title }}</h3>
+      <p class="text-dim">{{ d.message }}</p>
       <div class="modal-actions">
         <button class="btn-secondary" @click="ui.resolveDialog()">{{ t('common.ok') }}</button>
       </div>
     </div>
 
     <!-- Form modal -->
-    <div v-else-if="ui.dialog.type === 'form'" class="modal">
-      <h3>{{ ui.dialog.title }}</h3>
-      <form @submit.prevent="handleFormSubmit">
-        <div v-for="f in ui.dialog.fields" :key="f.key" class="field">
-          <label>{{ f.label }}<span v-if="f.required" style="color:var(--danger)"> *</span></label>
-          <select v-if="f.type === 'select' && f.options" :name="f.key" :required="f.required">
-            <option value="">{{ t('common.pleaseSelect') }}</option>
-            <option
-              v-for="o in f.options"
-              :key="o.value || o"
-              :value="o.value || o"
-              :selected="f.value === (o.value || o)"
-            >{{ o.label || o }}</option>
-          </select>
-          <textarea
-            v-else-if="f.type === 'textarea'"
-            :name="f.key"
-            :rows="f.rows || 3"
-            :placeholder="f.placeholder || ''"
-          >{{ f.value || '' }}</textarea>
-          <input
-            v-else
-            :type="f.type === 'password' ? 'password' : 'text'"
-            :name="f.key"
-            :value="f.value || ''"
-            :placeholder="f.placeholder || ''"
-            :required="f.required"
-            ref="firstInput"
-          />
-        </div>
+    <div v-else-if="d.type === 'form'" class="modal">
+      <h3>{{ d.title }}</h3>
+      <form @submit.prevent="handleFormSubmit($event, d)">
+        <!-- Group consecutive half-width fields into rows -->
+        <template v-for="(group, gi) in groupedFields(d)" :key="gi">
+          <div v-if="group.length > 1" class="form-row-half">
+            <div v-for="f in group" :key="f.key" class="field" v-show="isFieldVisible(f)">
+              <label>{{ f.label }}<span v-if="isFieldRequired(f)" style="color:var(--danger)"> *</span>
+                <FieldHelp v-if="f.tooltip" :text="f.tooltip" />
+              </label>
+              <select v-if="f.type === 'select' && f.options" v-model="formValues[f.key]" :name="f.key" :required="isFieldRequired(f)" :disabled="!isFieldVisible(f)">
+                <option v-if="!f.options.some(o => (o.value ?? o) === '')" value="">{{ t('common.pleaseSelect') }}</option>
+                <option
+                  v-for="o in f.options"
+                  :key="o.value ?? o"
+                  :value="o.value ?? o"
+                >{{ o.label || o }}</option>
+              </select>
+              <div v-else-if="f.type === 'radio' && f.options" class="radio-group">
+                <label
+                  v-for="o in f.options"
+                  :key="o.value ?? o"
+                  class="radio-item"
+                  :class="{ active: radioState[f.key] === (o.value ?? o) }"
+                >
+                  <input type="radio" :name="f.key" :value="o.value ?? o" :checked="radioState[f.key] === (o.value ?? o)" @change="radioState[f.key] = o.value ?? o" />
+                  <span>{{ o.label || o }}</span>
+                </label>
+              </div>
+              <textarea
+                v-else-if="f.type === 'textarea'"
+                v-model="formValues[f.key]"
+                :name="f.key"
+                :rows="f.rows || 3"
+                :placeholder="f.placeholder || ''"
+                :required="isFieldRequired(f)"
+                :disabled="!isFieldVisible(f)"
+              />
+              <input
+                v-else
+                v-model="formValues[f.key]"
+                :type="f.type === 'password' ? 'password' : 'text'"
+                :name="f.key"
+                :placeholder="f.placeholder || ''"
+                :required="isFieldRequired(f)"
+                :disabled="!isFieldVisible(f)"
+                ref="firstInput"
+              />
+            </div>
+          </div>
+          <div v-else class="field" v-show="isFieldVisible(group[0])">
+            <label>{{ group[0].label }}<span v-if="isFieldRequired(group[0])" style="color:var(--danger)"> *</span>
+              <FieldHelp v-if="group[0].tooltip" :text="group[0].tooltip" />
+            </label>
+            <select v-if="group[0].type === 'select' && group[0].options" v-model="formValues[group[0].key]" :name="group[0].key" :required="isFieldRequired(group[0])" :disabled="!isFieldVisible(group[0])">
+              <option v-if="!group[0].options.some(o => (o.value ?? o) === '')" value="">{{ t('common.pleaseSelect') }}</option>
+              <option
+                v-for="o in group[0].options"
+                :key="o.value ?? o"
+                :value="o.value ?? o"
+              >{{ o.label || o }}</option>
+            </select>
+            <div v-else-if="group[0].type === 'radio' && group[0].options" class="radio-group">
+              <label
+                v-for="o in group[0].options"
+                :key="o.value ?? o"
+                class="radio-item"
+                :class="{ active: radioState[group[0].key] === (o.value ?? o) }"
+              >
+                <input type="radio" :name="group[0].key" :value="o.value ?? o" :checked="radioState[group[0].key] === (o.value ?? o)" @change="radioState[group[0].key] = o.value ?? o" />
+                <span>{{ o.label || o }}</span>
+              </label>
+            </div>
+            <textarea
+              v-else-if="group[0].type === 'textarea'"
+              v-model="formValues[group[0].key]"
+              :name="group[0].key"
+              :rows="group[0].rows || 3"
+              :placeholder="group[0].placeholder || ''"
+              :required="isFieldRequired(group[0])"
+              :disabled="!isFieldVisible(group[0])"
+            />
+            <input
+              v-else
+              v-model="formValues[group[0].key]"
+              :type="group[0].type === 'password' ? 'password' : 'text'"
+              :name="group[0].key"
+              :placeholder="group[0].placeholder || ''"
+              :required="isFieldRequired(group[0])"
+              :disabled="!isFieldVisible(group[0])"
+              ref="firstInput"
+            />
+          </div>
+        </template>
+        <div v-if="d.errorMessage" class="form-error">{{ d.errorMessage }}</div>
         <div class="modal-actions">
           <button type="button" class="btn-secondary" @click="ui.resolveDialog(null)">{{ t('common.cancel') }}</button>
-          <button type="submit">{{ ui.dialog.submitLabel || t('common.ok') }}</button>
+          <button type="submit" :disabled="submitting">
+            <span v-if="submitting" class="spinner" style="width:14px;height:14px;"></span>
+            {{ submitting ? '' : (d.submitLabel || t('common.ok')) }}
+          </button>
         </div>
       </form>
     </div>
-  </div>
+    </div>
+  </template>
 </template>
 
 <style scoped>
@@ -115,4 +246,32 @@ function handleFormSubmit(ev) {
   margin-top: 12px; font-size: 13px; cursor: pointer;
 }
 .confirm-opt input { width: auto; margin: 0; }
+.radio-group { display: flex; flex-direction: row; gap: 8px; }
+.radio-item {
+  display: inline-flex !important; align-items: center; gap: 6px;
+  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); margin-bottom: 0 !important;
+}
+.radio-item input { width: auto; margin: 0; }
+.radio-item.active {
+  border-color: var(--accent); color: var(--accent);
+  background: rgba(59,130,246,0.08);
+}
+.form-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--danger);
+}
+.form-row-half {
+  display: flex;
+  gap: 12px;
+}
+.form-row-half .field {
+  flex: 1;
+}
 </style>

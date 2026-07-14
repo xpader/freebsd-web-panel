@@ -1,16 +1,17 @@
 // UI store — toast notifications + imperative dialogs (confirm, alert, formModal).
 //
-// Dialogs are pushed to a reactive queue. A single DialogHost component
-// renders the active dialog and resolves the caller's Promise on dismissal.
+// Dialogs use a stack: multiple dialogs can coexist (e.g. an alert on top
+// of a form). DialogHost renders all stacked dialogs. resolveDialog pops
+// the topmost dialog and resolves its Promise.
 
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 
-let dialogId = 0;
+let dialogSeq = 0;
 
 export const useUiStore = defineStore('ui', () => {
   const toasts = ref([]);
-  const dialog = ref(null); // single active dialog at a time
+  const dialogs = ref([]);
 
   let toastSeq = 0;
 
@@ -26,23 +27,22 @@ export const useUiStore = defineStore('ui', () => {
     toasts.value = toasts.value.filter((t) => t.id !== id);
   }
 
-  /**
-   * Show a dialog and return a Promise.
-   * @param {object} cfg - { type: 'confirm'|'alert'|'form', ... }
-   */
   function showDialog(cfg) {
     return new Promise((resolve) => {
-      const id = ++dialogId;
-      dialog.value = { ...cfg, id, resolve };
+      const id = ++dialogSeq;
+      dialogs.value.push({ ...cfg, id, resolve });
     });
   }
 
   function resolveDialog(value) {
-    if (dialog.value) {
-      dialog.value.resolve(value);
-      dialog.value = null;
+    if (dialogs.value.length) {
+      const d = dialogs.value[dialogs.value.length - 1];
+      dialogs.value.pop();
+      d.resolve(value);
     }
   }
 
-  return { toasts, dialog, showToast, dismissToast, showDialog, resolveDialog };
+  const dialog = computed(() => dialogs.value[dialogs.value.length - 1] || null);
+
+  return { toasts, dialogs, dialog, showToast, dismissToast, showDialog, resolveDialog };
 });

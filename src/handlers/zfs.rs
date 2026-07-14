@@ -26,6 +26,9 @@ static RE_DISK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9]+$")
 static RE_POOL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_.\-]+$").unwrap());
 static RE_POOL_CREATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z][a-zA-Z0-9_.\-]*$").unwrap());
 static RE_DEVICE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9\-]+$").unwrap());
+static RE_PROP_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\t(\S+)\s+(YES|NO)\s+(YES|NO)\s+(.+)$").unwrap()
+});
 
 /// Validate a dataset/pool/snapshot name. ZFS names allow alphanumerics,
 /// '/', '_', '-', '.', ':' (for snapshots '@') and no leading dot.
@@ -387,6 +390,8 @@ fn build_dataset_tree(flat: Vec<Dataset>) -> Vec<Dataset> {
 #[derive(Debug, Deserialize)]
 pub struct DatasetCreateBody {
     pub name: String,
+    #[serde(default)]
+    pub kind: Option<String>,
     pub properties: Option<HashMap<String, String>>,
 }
 
@@ -395,15 +400,36 @@ pub async fn dataset_create(
     body: axum::Json<DatasetCreateBody>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     validate_name(&body.name)?;
+    let kind = body.kind.as_deref().unwrap_or("filesystem");
     let mut args: Vec<String> = vec!["create".into()];
-    if let Some(props) = &body.properties {
-        for (k, v) in props {
-            validate_prop_key(k)?;
-            args.push("-o".into());
-            args.push(format!("{k}={v}"));
+
+    if kind == "volume" {
+        // zfs create -V <volsize> pool/dataset
+        let volsize = body.properties.as_ref()
+            .and_then(|p| p.get("volsize"))
+            .ok_or_else(|| ApiError::BadRequest("volsize is required for volume".into()))?;
+        // Other properties (except volsize) as -o options
+        if let Some(props) = &body.properties {
+            for (k, v) in props {
+                if k == "volsize" { continue; }
+                validate_prop_key(k)?;
+                args.push("-o".into());
+                args.push(format!("{k}={v}"));
+            }
         }
+        args.push("-V".into());
+        args.push(volsize.clone());
+        args.push(body.name.clone());
+    } else {
+        if let Some(props) = &body.properties {
+            for (k, v) in props {
+                validate_prop_key(k)?;
+                args.push("-o".into());
+                args.push(format!("{k}={v}"));
+            }
+        }
+        args.push(body.name.clone());
     }
-    args.push(body.name.clone());
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     cmd::run(ZFS, &arg_refs).await?;
     crate::audit::record(
@@ -461,6 +487,27 @@ pub async fn dataset_set(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct InheritQuery {
+    pub name: String,
+    pub property: String,
+}
+
+pub async fn dataset_inherit(
+    State(state): State<AppState>,
+    Query(q): Query<InheritQuery>,
+) -> ApiResult<StatusCode> {
+    let name = &q.name;
+    validate_name(name)?;
+    validate_prop_key(&q.property)?;
+    cmd::run(ZFS, &["inherit", &q.property, name]).await?;
+    crate::audit::record(
+        &state, None, "POST", "/api/zfs/dataset/inherit", 200,
+        Some(format!("inherited {} on {}", q.property, name)),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn dataset_properties(Query(q): Query<NameQuery>) -> ApiResult<Json<Vec<Property>>> {
     let name = &q.name;
     validate_name(name)?;
@@ -481,6 +528,65 @@ pub async fn dataset_properties(Query(q): Query<NameQuery>) -> ApiResult<Json<Ve
         })
         .collect();
     Ok(Json(props))
+}
+
+#[derive(Debug, Serialize)]
+pub struct PropSchema {
+    pub enums: HashMap<String, Vec<String>>,
+    pub booleans: Vec<String>,
+    pub readonly: Vec<String>,
+}
+
+/// Return the editable property schema for ZFS datasets by parsing the
+/// usage output of `zfs get` (which lists every property with its EDIT
+/// flag, INHERIT flag, and allowed VALUES).  The command exits with a
+/// non-zero status — that is expected; we capture stderr where the
+/// property table lives.
+pub async fn dataset_prop_schema() -> ApiResult<Json<PropSchema>> {
+    let output = cmd::run_output(ZFS, &["get"]).await?;
+
+    // The property table is printed to stderr.
+    let text = {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("PROPERTY") {
+            stderr.into_owned()
+        } else {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+    };
+
+    let mut enums = HashMap::new();
+    let mut booleans = Vec::new();
+    let mut readonly = Vec::new();
+
+    for line in text.lines() {
+        let Some(caps) = RE_PROP_LINE.captures(line) else {
+            continue;
+        };
+        let name = caps[1].to_string();
+        let editable = &caps[2] == "YES";
+        let values = caps[4].trim().to_string();
+
+        // Skip parameterised properties (userused@…, written#…, etc.)
+        if name.contains('@') || name.contains('#') || name.contains("...") {
+            continue;
+        }
+
+        if !editable {
+            readonly.push(name);
+        } else if values == "on | off" {
+            booleans.push(name);
+        } else if values.contains('|') && !values.starts_with('<') {
+            let options: Vec<String> = values
+                .split('|')
+                .map(|s| s.trim().to_string())
+                .collect();
+            enums.insert(name, options);
+        }
+        // else: free-text input (e.g. <size>, <path>) — not tracked
+    }
+
+    Ok(Json(PropSchema { enums, booleans, readonly }))
 }
 
 #[derive(Debug, Serialize)]

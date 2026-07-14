@@ -516,6 +516,24 @@ tr.row-clickable { cursor: pointer; }
   white-space: normal;
   box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3);
 }
+.field-tooltip::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 10px;
+  border: 6px solid transparent;
+  border-right-color: var(--border);
+  border-left: 0;
+}
+.field-tooltip::after {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 10px;
+  border: 6px solid transparent;
+  border-right-color: var(--bg-elev2);
+  border-left: 0;
+}
 
 /* ---- UUID tooltip ---- */
 .uuid-tip { position: relative; cursor: pointer; border-bottom: 1px dashed var(--text-dim); user-select: none; }
