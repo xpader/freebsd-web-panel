@@ -30,7 +30,8 @@
 |---|---|---|
 | `pool_list` | `zpool list -H -p` | 所有 pool 摘要（tab 分隔，精确数值） |
 | `pool_status` | `zpool status <name>` + `zpool list -H -p <name>` | 详细状态 + VDEV 树 + 容量/碎片/去重数据（合并两个命令输出） |
-| `pool_create` | `zpool create -f [-o ashift=N] [-o prop=val] <name> <vdev_spec>` | 创建存储池，支持 mirror/raidz1-3/单盘多组 vdev |
+| `pool_create` | `zpool create -f [-o ashift=N] [-o prop=val] <name> <vdev_spec>` | 创建存储池，支持 mirror/raidz1-3/单盘多组 vdev。成功后自动设置 `zfs_enable="YES"`（`sysrc::ensure_yes`）确保重启后 ZFS 服务启动 |
+| `pool_import` | `zpool import ...` | 导入已有存储池。成功后同样自动设置 `zfs_enable="YES"` |
 | `pool_destroy` | `zpool destroy [-f] <name>` | 销毁存储池，query: `?force=<bool>` |
 | `available_disks` | `geom disk list` + `zpool status` | 可用磁盘列表（过滤已在 pool 中的磁盘，标记 in_use + 所属 pool） |
 | `pool_add_vdev` | `zpool add [-f] <name> <vdev_spec>` | 向已有 pool 添加 vdev 组，body: `{vdevs, force?}` |
@@ -166,6 +167,7 @@ CSS：`.sub-group` / `.sub-group-header`（`cursor: pointer`，hover 高亮，�
 ## 外部依赖
 
 - 系统命令：`/sbin/zfs`、`/sbin/zpool`
+- `/usr/sbin/sysrc`（通过 `crate::sysrc` 模块，确保 `zfs_enable="YES"`）
 - crate：`regex`（名称校验）、`std::process::Command`
 
 ## 已知限制

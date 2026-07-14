@@ -21,9 +21,9 @@
 | [12-i18n.md](12-i18n.md) | 国际化：i18next 多语言（中文/英文）、顶栏国旗切换 | `web/js/i18n/`, `web/js/ui/layout.js`, `web/vendor/i18next.min.js` |
 | [13-sysinfo.md](13-sysinfo.md) | sysctl(3) 共享读取器：CPU/内存/温度/负载（替代子进程） | `src/sysinfo.rs` |
 | [14-terminal.md](14-terminal.md) | Web 终端：WebSocket ↔ FreeBSD PTY（xterm.js 前端，root 登录 shell） | `src/terminal.rs`, `web/js/pages/terminal.js`, `web/vendor/xterm/` |
-| [15-rcconf.md](15-rcconf.md) | RC 配置：列出/新增/修改/删除 rc.conf 变量（sysrc） | `handlers/rcconf.rs`, `web/js/pages/rcconf.js` |
+| [15-rcconf.md](15-rcconf.md) | RC 配置：列出/新增/修改/删除 rc.conf 变量（sysrc 异步 API） | `handlers/rcconf.rs`, `frontend/src/pages/RcconfPage.vue` |
 | [16-crontab.md](16-crontab.md) | 定时任务：列出/新增/修改/删除/启停 crontab 条目（crontab） | `handlers/crontab.rs`, `web/js/pages/cron.js` |
-| [17-network.md](17-network.md) | 网络接口管理（只读）：接口列表/路由表/默认网关（getifaddrs + sysctl，无子进程） | `handlers/network.rs`, `web/js/pages/network.js` |
+| [17-network.md](17-network.md) | 网络接口管理：接口列表/路由表/默认网关（IPv4+IPv6 读写）、rc.conf 配置（DHCP/SLAAC/Static）、虚拟接口创建/销毁 | `handlers/network.rs`, `frontend/src/pages/NetworkPage.vue` |
 | [18-services.md](18-services.md) | 服务管理：列出 rc.d 服务（启用/运行状态）、start/stop/restart 控制 | `handlers/services.rs`, `web/js/pages/services.js` |
 | [19-sysctl.md](19-sysctl.md) | sysctl 浏览：列出全部内核参数（值/类型/描述/修改状态），搜索+分页 | `handlers/sysctl.rs`, `web/js/pages/sysctl.js` |
 | [20-jail.md](20-jail.md) | Jail 容器：libjail FFI 运行时查询、基础系统管理（导入/镜像创建：ZFS Clone/unionfs/sharedfs） | `jail.rs`, `handlers/jails.rs`, `web/js/pages/jails.js` |
@@ -32,6 +32,7 @@
 | [23-bhyve.md](23-bhyve.md) | Bhyve 虚拟机管理：VM 列表/详情/创建/启停、串口控制台（cu + nmdm）、VNC 代理（WS→TCP）、镜像/交换机/数据存储/模板/ISO 列表 | `bhyve.rs`, `handlers/bhyve.rs`, `terminal.rs`, `frontend/src/pages/Bhyve*.vue` |
 | [24-cmd.md](24-cmd.md) | 命令执行封装：spawn_blocking 统一封装、async/sync 函数选择、管道 FD 死锁问题 | `cmd.rs` |
 | [25-memory.md](25-memory.md) | 内存占用与性能优化：流式 I/O、静态正则缓存、UTF-8 双分配修复、jemalloc 行为分析 | `handlers/files.rs`, `handlers/zfs.rs`, `cmd.rs` |
+| [26-sysrc.md](26-sysrc.md) | sysrc 统一封装：rc.conf 读写的唯一入口，同步+异步 API、export 解析器 | `sysrc.rs` |
 
 ## 文档规范
 

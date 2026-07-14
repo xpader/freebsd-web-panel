@@ -141,6 +141,7 @@ pub struct JailRuntime {
 3. 备份 jail.conf
 4. 生成 jail.conf 块（智能省略全局默认参数）
 5. 原子写入 jail.conf
+6. 若 `auto_start=true`：将名称加入 rc.conf `jail_list`（`sysrc::set_forget`），并确保 `jail_enable="YES"`（`sysrc::ensure_yes`），使重启后 jail 自动启动
 
 jail.conf 块生成示例（hostname 与 name 不同时才输出）：
 ```
@@ -156,6 +157,8 @@ testjail {
 - `jail_start(name)` → `POST /api/jails/{name}/start` — `jail -c`
 - `jail_stop(name)` → `POST /api/jails/{name}/stop` — `jail -r`
 - `jail_delete(name)` → `DELETE /api/jails/{name}?remove_files=true|false`
+
+**jail_update 自动启动**：当编辑 handler（`PUT /api/jails/{name}`）收到 `auto_start` 字段时，将名称加入/移出 rc.conf `jail_list`，并在开启自动启动时确保 `jail_enable="YES"`（`sysrc::ensure_yes`）。
 
 **删除流程**：
 1. 停止 jail（如运行中）

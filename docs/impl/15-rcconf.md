@@ -2,32 +2,32 @@
 
 ## 概述
 
-列出、新增、修改、删除 FreeBSD `rc.conf` 中的启动配置变量。所有操作都通过系统自带的 `/usr/sbin/sysrc` 完成，不直接拼接或写文件。前端提供表格视图，每项可单独编辑或删除，并带新增入口与键/值筛选。
+列出、新增、修改、删除 FreeBSD `rc.conf` 中的启动配置变量。所有操作通过 `src/sysrc.rs` 统一封装模块完成（详见 [26-sysrc.md](26-sysrc.md)），底层调用系统自带的 `/usr/sbin/sysrc`，不直接拼接或写文件。前端提供表格视图，每项可单独编辑或删除，并带新增入口与键/值筛选。
 
 ## 实现细节
 
 ### 后端 `src/handlers/rcconf.rs`
 
-全部走 `sysrc`，用 `Command::new().arg()` 传参，禁止 shell 拼接。
+全部走 `crate::sysrc` 异步 API，用 `Command::new().arg()` 传参，禁止 shell 拼接。
 
 #### 读（列表）
 
-- 命令：`sysrc -e -a`
+- 调用 `sysrc::list_all_async()`（底层：`sysrc -e -a`）
   - `-a`（小写）：只列出**非默认值**的变量（即用户在 rc.conf 文件里显式设置的，不含 `/etc/defaults/rc.conf` 的几百项默认）。
   - `-e`：导出格式 `KEY="VALUE"`，便于稳定解析。
-- 解析：每行按第一个 `=` 切分得到 key 与 raw value；raw value 若被双引号包裹则去掉首尾引号并反转义（`\"`→`"`、`\\`→`\`，单遍 char 游标处理，避免替换顺序 bug）。
+- 解析由 `sysrc` 模块内部的 `parse_export_lines` / `parse_export_line` / `unescape` 完成。
 - 结果按 key 字母序排序。
 
 #### 写（新增/修改）
 
-- 命令：`sysrc KEY=VALUE`（单个 arg 形式 `format!("{}={}", key, value)`）。
+- 调用 `sysrc::set_async(key, value)`（底层：`sysrc KEY=VALUE`）。
 - sysrc 默认写入 `rc_conf_files` 的第一个可写文件，即 `/etc/rc.conf`。
-- 写入后用 `sysrc -n KEY` 回读实际生效值，作为响应返回（sysrc 可能对值做规范化）。
+- 写入后用 `sysrc::get_async(key)` 回读实际生效值，作为响应返回（sysrc 可能对值做规范化）。
 - 新增与修改是同一操作（sysrc 语义即 create-or-update），故共用 `PUT`。
 
 #### 删除
 
-- 命令：`sysrc -x KEY`，从 rc.conf 文件中移除该变量。
+- 调用 `sysrc::delete_async(key)`（底层：`sysrc -x KEY`），从 rc.conf 文件中移除该变量。
 
 #### 输入校验
 

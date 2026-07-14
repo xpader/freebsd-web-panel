@@ -68,7 +68,8 @@ flags 从任意记录的 `ifa_flags` 读取（同一接口所有记录的 flags 
 | GET | `/api/network/interfaces` | 全部接口列表（含 groups/description/status/members） |
 | GET | `/api/network/interfaces/{name}` | 单接口详情（404 if not found） |
 | GET | `/api/network/routes` | 完整路由表（IPv4 + IPv6） |
-| GET | `/api/network/gateway` | 默认网关（运行时值 + rc.conf 持久值） |
+| GET | `/api/network/gateway` | 默认网关 IPv4+IPv6（运行时值 + rc.conf 持久值） |
+| PUT | `/api/network/gateway` | 设置/清除默认网关（IPv4 + IPv6 独立控制，写 rc.conf + 应用路由） |
 | GET | `/api/network/dns` | DNS 配置（解析 `/etc/resolv.conf`） |
 
 ### 接口配置管理
@@ -111,7 +112,10 @@ NetworkInterface {
 BridgeMember { name: String, info: String }
 IpConfig { address, netmask, prefix_len, broadcast, is_alias }
 Route { destination, gateway, flags, interface, expire }
-DefaultGateway { gateway: Option, interface: Option, configured: Option }
+DefaultGateway {
+    gateway: Option, interface: Option, configured: Option,         // IPv4
+    gateway6: Option, interface6: Option, configured6: Option,      // IPv6
+}
 ```
 
 ### rc.conf 解析配置
@@ -121,7 +125,8 @@ IfaceRcConfConfig {
     interface: String, is_bridge: bool, is_lagg: bool, is_up: bool,
     ipv4: Option<String>, ipv4_netmask: Option<String>,
     ipv4_aliases: Vec<RcIpv4Alias>,     // { address, netmask }
-    ipv6: Vec<RcIpv6Entry>,             // { address, prefixlen }
+    ipv6_mode: String,                  // "static" | "slaac"
+    ipv6: Vec<RcIpv6Entry>,             // { address, prefixlen }（slaac 模式下为空）
     bridge_members: Vec<String>,
     lagg_proto: Option<String>, lagg_ports: Vec<String>,
     mtu: Option<u32>, description: Option<String>,
@@ -133,7 +138,15 @@ IfaceRcConfConfig {
 
 **解析**（`parse_iface_rcconf`）：从 `sysrc -e -a` 输出提取 `ifconfig_<name>`、`ifconfig_<name>_aliases`、`ifconfig_<name>_ipv6` 三个键，用 `parse_ifconfig_tokens` 将值字符串解析为结构化字段。
 
-**写入**（`build_primary_value` 等）：将结构化配置重建为 ifconfig 值字符串，通过 `sysrc KEY=VALUE` 写入。description 用单引号包裹（`description 'Hello World'`）以区分空格分隔的其他参数。
+**IPv4 模式检测**：主值包含 `DHCP` 或 `SYNCDHCP` → `ipv4_mode = "dhcp"`，前端隐藏 IP/掩码输入；否则为 `static`。
+
+**IPv6 模式检测**：`ifconfig_<name>_ipv6` 值含 `accept_rtadv` → `ipv6_mode = "slaac"`（无静态地址条目），前端隐藏静态 IPv6 输入；否则为 `static`。
+
+**写入**（`build_primary_value` / `build_ipv6_value`）：
+- IPv4 DHCP → `ifconfig_<name>="DHCP"`（或 `SYNCDHCP`）
+- IPv6 SLAAC → `ifconfig_<name>_ipv6="inet6 accept_rtadv"`
+- IPv6 static → `build_ipv6_value("static", entries)` 拼接 `inet6 <addr> prefixlen <pl>` 条目
+- description 用单引号包裹（`description 'Hello World'`）以区分空格分隔的其他参数。
 
 **配置应用**（`apply_ifconfig`）：
 1. 先用 `read_interfaces()` 读取当前运行时状态
@@ -141,9 +154,24 @@ IfaceRcConfConfig {
 3. 应用 LAGG 协议和端口（跳过已有端口）
 4. 应用 bridge 成员（跳过已有成员、其他 bridge 的成员）
 5. 应用 IPv4 别名（跳过已有地址）
-6. 应用 IPv6 条目（跳过已有地址）
+6. 应用 IPv6 条目（跳过已有地址）——SLAAC 模式跳过此步
 
 **PUT 流程**：先 ifconfig 应用 → 成功后写 rc.conf。ifconfig 失败则不写 rc.conf，返回错误。
+
+### 默认网关设置
+
+`set_default_gateway()` → `PUT /api/network/gateway`
+
+请求体 `SetGatewayBody { gateway: Option<String>, gateway6: Option<String> }`。两个 family 独立处理，仅提供的字段被更新：
+
+| 场景 | rc.conf 操作 | 路由操作 |
+|---|---|---|
+| 设置 IPv4 | `sysrc defaultrouter=<gw>` | `route change default <gw>`（失败则 `route add`） |
+| 清除 IPv4 | `sysrc -x defaultrouter` | `route delete default` |
+| 设置 IPv6 | `sysrc ipv6_defaultrouter=<gw>` | `route -6 change default <gw>`（失败则 `route -6 add`） |
+| 清除 IPv6 | `sysrc -x ipv6_defaultrouter` | `route -6 delete default` |
+
+设置前用 `validate_ip` 校验 IP 地址格式。
 
 ## 配置按钮可见性规则
 
@@ -176,16 +204,20 @@ IfaceRcConfConfig {
 1. 工具栏：创建接口按钮 + 刷新按钮
 2. 物理接口卡片网格（含详情/配置/销毁按钮）
 3. 虚拟接口卡片网格（同上）
-4. 默认网关卡片
+4. 默认网关卡片（IPv4 + IPv6 运行时值，配置按钮打开网关设置弹窗）
 5. 路由表（IPv4/IPv6 分段）
+
+### 网关设置弹窗
+
+通过 `useFormModal` 实现，两个字段：IPv4 网关 + IPv6 网关。预填 rc.conf 中 `defaultrouter` / `ipv6_defaultrouter` 的值。仅修改的字段会包含在 PUT 请求中。
 
 ### 配置弹窗
 
 - 接口属性：描述、MTU、Media、Mediaopt
 - UP 勾选框
-- IPv4 配置（地址 + 子网掩码）
-- IPv4 别名列表（可增删）
-- IPv6 配置列表（可增删）
+- IPv4 模式切换：DHCP / Static 药丸选择器（`.radio-pill-group`），Static 模式显示 IP + 子网掩码输入
+- IPv4 别名列表（可增删，`.form-table` 表格布局）
+- IPv6 模式切换：SLAAC / Static 药丸选择器，SLAAC 模式隐藏静态输入；Static 模式显示地址 + 前缀长度列表（可增删）
 - LAGG 配置（仅 lagg 接口）：协议下拉 + 端口下拉列表
 - Bridge 成员（仅 bridge 接口）：成员下拉列表
 - 保存按钮：先应用后持久化
@@ -201,13 +233,14 @@ IfaceRcConfConfig {
 | 文件 | 说明 |
 |---|---|
 | `src/handlers/network.rs` | 全部 handler + getifaddrs/sysctl/ioctl 解析 + rc.conf 解析/写入/应用 |
-| `src/app.rs` | 路由注册（11 条 network 路由） |
+| `src/app.rs` | 路由注册（12 条 network 路由） |
 | `frontend/src/pages/NetworkPage.vue` | 接口卡片 + 路由表 + 网关 + 详情弹窗 + 配置弹窗 + 创建弹窗 |
 | `frontend/src/i18n/translations.js` | `net.*` 命名空间（en + zh） |
-| `frontend/src/assets/app.css` | `.net-iface`、`.config-section`、`.config-grid`、`.checkbox-row` 等样式 |
+| `frontend/src/assets/app.css` | `.net-iface`、`.config-section`、`.config-grid`、`.checkbox-row`、`.radio-pill-group`、`.form-table` 等样式 |
 
 ## 已知限制
 
 - DHCP/SYNCDHCP 配置在 ifconfig apply 时跳过（由 dhclient 管理）
+- IPv6 SLAAC 配置在 ifconfig apply 时跳过（由内核 RTADV 处理）
 - 删除别名/成员需手动销毁后重建（ifconfig 无原子"替换"语义）
 - 部分边缘路由的 gateway 显示为空（IPv6 零长度网关地址）
