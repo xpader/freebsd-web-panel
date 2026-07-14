@@ -120,6 +120,7 @@ export const MENU = [
 export const SETTINGS = [
   { path: '/users', labelKey: 'topbar.panelUsers', icon: 'fa-solid fa-user-gear' },
   { path: '/audit', labelKey: 'topbar.auditLog', icon: 'fa-solid fa-list-ul' },
+  ...(import.meta.env.DEV ? [{ path: '/dialog-demo', label: '对话框演示', icon: 'fa-solid fa-window-restore' }] : []),
 ];
 
 // Determine which top-level group a path belongs to.

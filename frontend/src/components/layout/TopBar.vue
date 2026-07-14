@@ -95,7 +95,7 @@ onMounted(() => {
           :href="'#' + s.path"
           @click="settingsOpen = false"
         >
-          <span class="icon"><i :class="s.icon"></i></span>{{ t(s.labelKey) }}
+          <span class="icon"><i :class="s.icon"></i></span>{{ s.labelKey ? t(s.labelKey) : s.label }}
         </a>
       </div>
     </div>

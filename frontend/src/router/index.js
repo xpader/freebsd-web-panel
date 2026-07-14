@@ -52,6 +52,7 @@ import ZfsSnapshotsPage from '../pages/ZfsSnapshotsPage.vue';
 import PackagesPage from '../pages/PackagesPage.vue';
 import PackageDetailPage from '../pages/PackageDetailPage.vue';
 import PkgReposPage from '../pages/PkgReposPage.vue';
+import DialogDemoPage from '../pages/DialogDemoPage.vue';
 import NotFoundPage from '../pages/NotFoundPage.vue';
 
 const routes = [
@@ -65,6 +66,7 @@ const routes = [
       { path: '', redirect: '/dashboard' },
       { path: 'dashboard', name: 'dashboard', component: DashboardPage },
       { path: 'shell', name: 'shell', component: ShellPage },
+      { path: 'dialog-demo', name: 'dialog-demo', component: DialogDemoPage },
       { path: 'users', name: 'users', component: UsersPage },
       { path: 'audit', name: 'audit', component: AuditPage },
       { path: 'monitor', name: 'monitor-cpu', component: MonitorCpuPage },

@@ -44,7 +44,7 @@ const itemStates = computed(() =>
     <!-- Collapsible group -->
     <div v-if="item.children" :class="['sub-group', { expanded: itemStates[i].expanded }]">
       <div class="sub-group-header" @click="$router.push(item.children[0].path)">
-        <span class="icon"><i :class="item.icon"></i></span>{{ t(item.labelKey) }}
+        <span class="icon"><i :class="item.icon"></i></span>{{ item.labelKey ? t(item.labelKey) : item.label }}
         <span class="sub-arrow">
           <i :class="itemStates[i].expanded ? 'fa-solid fa-caret-down' : 'fa-solid fa-caret-right'"></i>
         </span>
@@ -56,7 +56,7 @@ const itemStates = computed(() =>
           :href="'#' + c.path"
           :class="['sub-item', { active: itemStates[i].activeChildIdx === ci }]"
         >
-          <span class="icon"><i :class="c.icon"></i></span>{{ t(c.labelKey) }}
+          <span class="icon"><i :class="c.icon"></i></span>{{ c.labelKey ? t(c.labelKey) : c.label }}
         </a>
       </div>
     </div>
@@ -67,7 +67,7 @@ const itemStates = computed(() =>
       :href="'#' + item.path"
       :class="{ active: itemStates[i].active }"
     >
-      <span class="icon"><i :class="item.icon"></i></span>{{ t(item.labelKey) }}
+      <span class="icon"><i :class="item.icon"></i></span>{{ item.labelKey ? t(item.labelKey) : item.label }}
     </a>
   </template>
 </template>

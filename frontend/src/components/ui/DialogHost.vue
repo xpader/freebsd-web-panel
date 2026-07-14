@@ -1,34 +1,26 @@
 <script setup>
 import { ref, reactive, nextTick, watch } from 'vue';
-import { useUiStore } from '../../stores/ui.js';
+import { ui } from '../../stores/ui.js';
 import { useI18n } from 'vue-i18n';
 import FieldHelp from './FieldHelp.vue';
-
-const ui = useUiStore();
 const { t } = useI18n();
 
 const firstInput = ref(null);
 const submitting = ref(false);
 const radioState = reactive({});
-const radioOwner = ref(null);
 const formValues = reactive({});
 
-watch(() => ui.dialogs.length, () => {
-  const d = ui.dialog;
+watch(() => ui.dialog, (d) => {
   if (!d || d.type !== 'form') return;
-  // Reset state when a different form becomes the top dialog.
-  if (radioOwner.value !== d.id) {
-    Object.keys(radioState).forEach(k => delete radioState[k]);
-    Object.keys(formValues).forEach(k => delete formValues[k]);
-    radioOwner.value = d.id;
-    for (const f of (d.fields || [])) {
-      formValues[f.key] = f.value ?? '';
-      if (f.type === 'radio') radioState[f.key] = f.value ?? f.options?.[0]?.value ?? '';
-    }
-    nextTick(() => {
-      if (firstInput.value) firstInput.value.focus();
-    });
+  Object.keys(radioState).forEach(k => delete radioState[k]);
+  Object.keys(formValues).forEach(k => delete formValues[k]);
+  for (const f of (d.fields || [])) {
+    formValues[f.key] = f.value ?? '';
+    if (f.type === 'radio') radioState[f.key] = f.value ?? f.options?.[0]?.value ?? '';
   }
+  nextTick(() => {
+    if (firstInput.value) firstInput.value.focus();
+  });
 }, { immediate: true });
 
 function handleConfirm(d) {
@@ -102,14 +94,13 @@ function groupedFields(d) {
 </script>
 
 <template>
-  <template v-for="d in ui.dialogs" :key="d.id">
-    <div class="modal-overlay">
+  <div v-if="ui.dialog" class="modal-overlay">
     <!-- Confirm dialog -->
-    <div v-if="d.type === 'confirm'" class="modal">
-      <h3>{{ d.title }}</h3>
-      <p class="text-dim">{{ d.message }}</p>
+    <div v-if="ui.dialog.type === 'confirm'" class="modal">
+      <h3>{{ ui.dialog.title }}</h3>
+      <p class="text-dim">{{ ui.dialog.message }}</p>
       <label
-        v-for="o in (d.options || [])"
+        v-for="o in (ui.dialog.options || [])"
         :key="o.key"
         class="confirm-opt"
       >
@@ -117,26 +108,26 @@ function groupedFields(d) {
         <span>{{ o.label }}</span>
       </label>
       <div class="modal-actions">
-        <button class="btn-secondary" @click="ui.resolveDialog(d.options?.length ? { confirmed: false } : false)">{{ t('common.cancel') }}</button>
-        <button class="btn-danger" @click="handleConfirm(d)">{{ t('common.confirm') }}</button>
+        <button class="btn-secondary" @click="ui.resolveDialog(ui.dialog.options?.length ? { confirmed: false } : false)">{{ t('common.cancel') }}</button>
+        <button class="btn-danger" @click="handleConfirm(ui.dialog)">{{ t('common.confirm') }}</button>
       </div>
     </div>
 
     <!-- Alert dialog -->
-    <div v-else-if="d.type === 'alert'" class="modal">
-      <h3>{{ d.title }}</h3>
-      <p class="text-dim">{{ d.message }}</p>
+    <div v-else-if="ui.dialog.type === 'alert'" class="modal">
+      <h3>{{ ui.dialog.title }}</h3>
+      <p class="text-dim">{{ ui.dialog.message }}</p>
       <div class="modal-actions">
         <button class="btn-secondary" @click="ui.resolveDialog()">{{ t('common.ok') }}</button>
       </div>
     </div>
 
     <!-- Form modal -->
-    <div v-else-if="d.type === 'form'" class="modal">
-      <h3>{{ d.title }}</h3>
-      <form @submit.prevent="handleFormSubmit($event, d)">
+    <div v-else-if="ui.dialog.type === 'form'" class="modal">
+      <h3>{{ ui.dialog.title }}</h3>
+      <form @submit.prevent="handleFormSubmit($event, ui.dialog)">
         <!-- Group consecutive half-width fields into rows -->
-        <template v-for="(group, gi) in groupedFields(d)" :key="gi">
+        <template v-for="(group, gi) in groupedFields(ui.dialog)" :key="gi">
           <div v-if="group.length > 1" class="form-row-half">
             <div v-for="f in group" :key="f.key" class="field" v-show="isFieldVisible(f)">
               <label>{{ f.label }}<span v-if="isFieldRequired(f)" style="color:var(--danger)"> *</span>
@@ -226,37 +217,41 @@ function groupedFields(d) {
             />
           </div>
         </template>
-        <div v-if="d.errorMessage" class="form-error">{{ d.errorMessage }}</div>
+        <div v-if="ui.dialog.errorMessage" class="form-error">{{ ui.dialog.errorMessage }}</div>
         <div class="modal-actions">
           <button type="button" class="btn-secondary" @click="ui.resolveDialog(null)">{{ t('common.cancel') }}</button>
           <button type="submit" :disabled="submitting">
             <span v-if="submitting" class="spinner" style="width:14px;height:14px;"></span>
-            {{ submitting ? '' : (d.submitLabel || t('common.ok')) }}
+            {{ submitting ? '' : (ui.dialog.submitLabel || t('common.ok')) }}
           </button>
         </div>
       </form>
     </div>
-    </div>
-  </template>
+  </div>
 </template>
 
 <style scoped>
 .confirm-opt {
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 12px; font-size: 13px; cursor: pointer;
+  display: flex !important; align-items: center; gap: 8px;
+  margin-top: 0; margin-bottom: 0; font-size: 13px; cursor: pointer;
+  padding: 6px 12px; border-radius: var(--radius);
+  transition: background 0.15s;
 }
+.confirm-opt:first-of-type { margin-top: 12px; }
+.confirm-opt:hover { background: var(--bg-elev2); }
 .confirm-opt input { width: auto; margin: 0; }
 .radio-group { display: flex; flex-direction: row; gap: 8px; }
 .radio-item {
   display: inline-flex !important; align-items: center; gap: 6px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--bg); margin-bottom: 0 !important;
+  border-radius: var(--radius);
+  margin-bottom: 0 !important;
+  transition: background 0.15s, color 0.15s;
 }
+.radio-item:hover { background: var(--bg-elev2); }
 .radio-item input { width: auto; margin: 0; }
 .radio-item.active {
-  border-color: var(--accent); color: var(--accent);
-  background: rgba(59,130,246,0.08);
+  color: var(--accent); background: rgba(59,130,246,0.08);
 }
 .form-error {
   background: rgba(239, 68, 68, 0.1);

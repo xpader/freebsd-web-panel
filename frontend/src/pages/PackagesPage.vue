@@ -131,8 +131,7 @@ async function doDelete(name) {
 }
 
 // Simple confirm using ui store
-import { useUiStore } from '../stores/ui.js';
-const ui = useUiStore();
+import { ui } from '../stores/ui.js';
 function confirmDialogCustom(title, message) {
   return ui.showDialog({ type: 'confirm', title, message });
 }
