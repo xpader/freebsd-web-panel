@@ -146,6 +146,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/monitor/latest", get(crate::monitor::latest))
         // --- Debug / diagnostics ---
         .route("/api/debug/jemalloc-stats", get(handlers::debug::jemalloc_stats))
+        .route("/api/debug/tokio-metrics", get(handlers::debug::tokio_metrics))
         // --- pkg (package management) ---
         .route("/api/pkg/packages", get(handlers::pkg::list_packages))
         .route("/api/pkg/search", get(handlers::pkg::search))

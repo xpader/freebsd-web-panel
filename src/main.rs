@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         audit,
         web_root: Some(config.server.web_root.clone()),
+        tokio_accumulator: Arc::new(parking_lot::Mutex::new(Default::default())),
     };
 
     let user_count = {
@@ -79,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("no users yet — first-run setup required via the web UI");
     }
     let app = build(state.clone());
-    monitor::spawn_collector(state);
+    monitor::spawn_collector(state.clone());
+    handlers::debug::spawn_tokio_accumulator(state);
 
     // Parse listen address.
     let addr: SocketAddr = config.server.listen.parse().map_err(|e| {

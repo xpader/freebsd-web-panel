@@ -9,16 +9,20 @@ const { t } = useI18n();
 const alert = useAlert();
 
 const stats = ref(null);
+const tokio = ref(null);
 const loading = ref(true);
 const lastUpdate = ref(null);
 const autoRefresh = ref(false);
-const showDetails = ref(false);
 let timer = null;
 
 async function load() {
   try {
-    const res = await api.get('/api/debug/jemalloc-stats');
-    stats.value = res;
+    const [memRes, tokioRes] = await Promise.all([
+      api.get('/api/debug/jemalloc-stats'),
+      api.get('/api/debug/tokio-metrics'),
+    ]);
+    stats.value = memRes;
+    tokio.value = tokioRes;
     lastUpdate.value = new Date();
     loading.value = false;
   } catch (e) {
@@ -60,6 +64,19 @@ const residentRatio = computed(() => {
   return (r / a).toFixed(2);
 });
 
+function fmtDuration(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return ms + ' ms';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + ' s';
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return m + ' m ' + rs + ' s';
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return h + ' h ' + rm + ' m';
+}
+
 // 四类内存分类（基于进程 RSS）：
 //   在用       = allocated               程序真正使用的（jemalloc 内）
 //   其它       = process_rss - resident   非 jemalloc：代码段、调试符号、栈、共享库
@@ -86,7 +103,7 @@ const memBreakdown = computed(breakdown);
 <template>
   <div class="page-header">
     <div>
-      <h1>FWP {{ t('debug.title') }}</h1>
+      <h1>FWP {{ t('common.status') }}</h1>
       <p>{{ t('debug.subtitle') }}</p>
     </div>
     <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
@@ -165,11 +182,10 @@ const memBreakdown = computed(breakdown);
 
     <!-- ── 技术细节 ───────────────────────────────────── -->
     <div class="card debug-details">
-      <div class="debug-details-toggle" @click="showDetails = !showDetails">
-        <i :class="showDetails ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
-        {{ t('debug.detailsTitle') }}
+      <div class="debug-details-title">
+        <i class="fa-solid fa-flask"></i> {{ t('debug.detailsTitle') }}
       </div>
-      <div v-if="showDetails" class="debug-details-body">
+      <div class="debug-details-body">
         <p class="text-dim" style="margin:0 0 10px 0;">{{ t('debug.detailsIntro') }}</p>
         <div class="debug-grid">
           <div class="debug-stat">
@@ -203,9 +219,9 @@ const memBreakdown = computed(breakdown);
             <div class="debug-hint">{{ t('debug.retainedHint') }}</div>
           </div>
           <div class="debug-stat">
-            <div class="debug-label">{{ t('debug.processRss') }}</div>
+            <div class="debug-label">{{ t('debug.totalRss') }}</div>
             <div class="debug-value">{{ stats.process_rss == null ? '—' : fmtBytes(stats.process_rss) }}</div>
-            <div class="debug-hint">{{ t('debug.processRssHint') }}</div>
+            <div class="debug-hint">{{ t('debug.totalRssHint') }}</div>
           </div>
         </div>
         <div class="debug-summary">
@@ -222,6 +238,60 @@ const memBreakdown = computed(breakdown);
             <span class="text-dim" style="margin-left:8px;">
               (resident ÷ allocated；{{ t('debug.ratioHint') }})
             </span>
+          </div>
+        </div>
+
+        <!-- Tokio runtime -->
+        <div v-if="tokio" class="debug-tokio-section">
+          <div class="debug-tokio-title">
+            <i class="fa-solid fa-bolt"></i> {{ t('debug.tokioTitle') }}
+          </div>
+          <div class="debug-grid">
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioWorkers') }}</div>
+              <div class="debug-value">{{ tokio.workers_count }}</div>
+              <div class="debug-hint">{{ t('debug.tokioWorkersHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioLiveTasks') }}</div>
+              <div class="debug-value">{{ tokio.live_tasks_count }}</div>
+              <div class="debug-hint">{{ t('debug.tokioLiveTasksHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioTotalPolls') }}</div>
+              <div class="debug-value">{{ tokio.total_polls_count.toLocaleString() }}</div>
+              <div class="debug-hint">{{ t('debug.tokioTotalPollsHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioBusyDuration') }}</div>
+              <div class="debug-value">{{ fmtDuration(tokio.total_busy_duration_ms) }}</div>
+              <div class="debug-hint">{{ t('debug.tokioBusyDurationHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioGlobalQueue') }}</div>
+              <div class="debug-value">{{ tokio.global_queue_depth }}</div>
+              <div class="debug-hint">{{ t('debug.tokioGlobalQueueHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioLocalQueue') }}</div>
+              <div class="debug-value">{{ tokio.total_local_queue_depth }}</div>
+              <div class="debug-hint">{{ t('debug.tokioLocalQueueHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioStealCount') }}</div>
+              <div class="debug-value">{{ tokio.total_steal_count.toLocaleString() }}</div>
+              <div class="debug-hint">{{ t('debug.tokioStealCountHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioBlockingQueue') }}</div>
+              <div class="debug-value">{{ tokio.blocking_queue_depth }}</div>
+              <div class="debug-hint">{{ t('debug.tokioBlockingQueueHint') }}</div>
+            </div>
+            <div class="debug-stat">
+              <div class="debug-label">{{ t('debug.tokioBlockingThreads') }}</div>
+              <div class="debug-value">{{ tokio.blocking_threads_count }}</div>
+              <div class="debug-hint">{{ t('debug.tokioBlockingThreadsHint') }}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -344,22 +414,17 @@ const memBreakdown = computed(breakdown);
 .dot-cached   { background: #f59e0b; }
 .dot-overhead { background: var(--text-dim); }
 
-/* ── Collapsible technical details ───────────────────── */
+/* ── Technical details section ───────────────────────── */
 .debug-details {
   padding: 0;
 }
-.debug-details-toggle {
+.debug-details-title {
   padding: 12px 16px;
-  cursor: pointer;
-  user-select: none;
   color: var(--text);
   font-weight: 500;
   border-bottom: 1px solid var(--border);
 }
-.debug-details-toggle:hover {
-  background: var(--bg-elev2);
-}
-.debug-details-toggle i {
+.debug-details-title i {
   width: 14px;
   margin-right: 6px;
   color: var(--text-dim);
@@ -420,5 +485,23 @@ const memBreakdown = computed(breakdown);
   color: var(--accent);
   min-width: 90px;
   display: inline-block;
+}
+
+/* ── Tokio runtime section ─────────────────────────────── */
+.debug-tokio-section {
+  margin-top: 16px;
+  border-top: 1px dashed var(--border);
+  padding-top: 14px;
+}
+.debug-tokio-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.debug-tokio-title i {
+  width: 14px;
+  margin-right: 4px;
+  color: #60a5fa;
 }
 </style>

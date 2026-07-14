@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::audit::AuditLog;
 use crate::config::Config;
 use crate::db::Db;
+use crate::handlers::debug::TokioMetricsAccum;
 
 /// Shared state accessible to all handlers.
 #[derive(Clone)]
@@ -14,6 +15,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub audit: Option<Arc<AuditLog>>,
     pub web_root: Option<PathBuf>,
+    pub tokio_accumulator: Arc<parking_lot::Mutex<TokioMetricsAccum>>,
 }
 
 impl AppState {

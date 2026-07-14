@@ -117,3 +117,53 @@ pub async fn jemalloc_stats() -> ApiResult<Json<JemallocStats>> {
         process_rss: get_process_rss(),
     }))
 }
+
+/// Cumulative tokio runtime metrics, accumulated by a background task.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TokioMetricsAccum {
+    pub workers_count: usize,
+    pub live_tasks_count: usize,
+    pub total_polls_count: u64,
+    pub total_busy_duration_ms: u64,
+    pub global_queue_depth: usize,
+    pub total_local_queue_depth: usize,
+    pub total_steal_count: u64,
+    pub blocking_queue_depth: usize,
+    pub blocking_threads_count: usize,
+    pub elapsed_ms: u64,
+}
+
+/// Spawn a background task that polls tokio runtime metrics every 3 seconds
+/// and accumulates the deltas into the shared accumulator in `AppState`.
+pub fn spawn_tokio_accumulator(state: crate::state::AppState) {
+    let accum = state.tokio_accumulator.clone();
+    tokio::spawn(async move {
+        let handle = tokio::runtime::Handle::current();
+        let monitor = tokio_metrics::RuntimeMonitor::new(&handle);
+        let mut it = monitor.intervals();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if let Some(m) = it.next() {
+                let mut a = accum.lock();
+                a.workers_count = m.workers_count;
+                a.live_tasks_count = m.live_tasks_count;
+                a.total_polls_count += m.total_polls_count;
+                a.total_busy_duration_ms += m.total_busy_duration.as_millis() as u64;
+                a.global_queue_depth = m.global_queue_depth;
+                a.total_local_queue_depth = m.total_local_queue_depth;
+                a.total_steal_count += m.total_steal_count;
+                a.blocking_queue_depth = m.blocking_queue_depth;
+                a.blocking_threads_count = m.blocking_threads_count;
+                a.elapsed_ms += m.elapsed.as_millis() as u64;
+            }
+        }
+    });
+}
+
+/// GET /api/debug/tokio-metrics
+pub async fn tokio_metrics(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+) -> ApiResult<Json<TokioMetricsAccum>> {
+    let a = state.tokio_accumulator.lock().clone();
+    Ok(Json(a))
+}
