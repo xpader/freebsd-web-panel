@@ -17,6 +17,7 @@
 | [80-roadmap.md](80-roadmap.md) | **分阶段实施路线图**（Phase 0–8，验收标准，依赖关系图） |
 | [90-monitoring.md](90-monitoring.md) | 监控模块设计（时序采集、SQLite 存储、图表、告警规则、通知渠道） |
 | [22-pkg-repos.md](22-pkg-repos.md) | PKG 软件源配置管理设计（仓库 CRUD、UCL 配置、镜像模板、`pkg update` 后台任务） |
+| [18-firewall.md](18-firewall.md) | **防火墙设计（双驱动 ipfw/pf、驱动切换、结构化规则 CRUD、黑白名单模式、rc.conf 初始化）** |
 
 ## 架构一图速览
 
@@ -34,11 +35,12 @@ Rust 单二进制 (axum + tokio)
 ## 关键决策摘要
 
 1. **后端 Rust + Axum**：单二进制、FFI 调 libjail、强类型、tokio 异步。
-2. **前端原生 SPA**：无构建链，ES Modules + Pico.css，由 Axum 托管/嵌入二进制。
+2. **前端 Vue 3 SPA**：Composition API + Vite 构建，由 rust-embed 内嵌进二进制。
 3. **Jail 走 libjail 系统调用**（`jailparam_set/get/all` + `jail_remove`）+ 自写 jail.conf 解析器，**零第三方工具依赖**——满足你的约束。
 4. **Bhyve 走 vm-bhyve**：按你的要求复用 1.7.3。
-5. **安全**：默认仅监听 127.0.0.1、TLS 自签、token/PAM 认证、审计日志、子进程参数白名单防注入。
-6. **分 8 阶段交付**，Phase 0 完成后各子系统可并行开发。
+5. **防火墙双驱动**：ipfw / pf 可选可切换，结构化规则 CRUD，黑白名单模式（[详见 18-firewall.md](18-firewall.md)）。
+6. **安全**：自带用户体系（Argon2id + session token）、审计日志、子进程参数白名单防注入。
+7. **分 8 阶段交付**，Phase 0 完成后各子系统可并行开发。
 
 ---
 

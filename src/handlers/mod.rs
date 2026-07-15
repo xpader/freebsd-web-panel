@@ -6,6 +6,7 @@ pub mod crontab;
 pub mod debug;
 pub mod files;
 pub mod filesystem;
+pub mod firewall;
 pub mod jails;
 pub mod mod_stubs;
 pub mod network;

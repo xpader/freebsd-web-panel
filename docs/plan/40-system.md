@@ -155,31 +155,9 @@ struct Route {
 | POST | `/api/services/:name/restart` | 重启 |
 | POST | `/api/services/:name/reload` | 重载 |
 
-## 5. 防火墙（pf）
+## 5. 防火墙（ipfw / pf）
 
-### 5.1 实现
-
-- 状态：`pfctl -s info`（运行状态 + 计数器）
-- 规则：`pfctl -sr`（规则集）/ `pfctl -sn`（NAT）
-- 表：`pfctl -t <table> -T show`
-- 加载/重载：`pfctl -f /etc/pf.conf`
-- 启停：`pfctl -e` / `pfctl -d`
-- 配置：解析 `/etc/pf.conf`（宏、表、规则；语法较复杂，初版做只读展示 + 基本编辑）
-
-### 5.2 API
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/pf/status` | pf 运行状态 |
-| GET | `/api/pf/rules` | 规则列表 |
-| GET | `/api/pf/nat` | NAT 规则 |
-| GET | `/api/pf/tables` | 表列表 |
-| GET | `/api/pf/tables/:name` | 表内容 |
-| POST | `/api/pf/enable` | 启用 |
-| POST | `/api/pf/disable` | 禁用 |
-| POST | `/api/pf/reload` | 重载规则 |
-| GET | `/api/pf.conf` | 读取配置文件 |
-| PUT | `/api/pf.conf` | 写入配置文件 + 校验（`pfctl -n -f`） |
+> 详细设计已拆分到 [18-firewall.md](18-firewall.md)，支持双驱动选择与切换、结构化规则 CRUD、黑白名单模式、rc.conf 初始化管理。
 
 ## 6. 实现里程碑
 

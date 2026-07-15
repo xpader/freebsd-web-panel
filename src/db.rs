@@ -77,6 +77,37 @@ fn migrate(conn: &Connection) -> ApiResult<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_samples_query
             ON metric_samples(category, name, ts);
+
+        CREATE TABLE IF NOT EXISTS firewall_rules (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            driver      TEXT    NOT NULL,
+            position    INTEGER NOT NULL DEFAULT 0,
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            action      TEXT    NOT NULL,
+            direction   TEXT    NOT NULL,
+            protocol    TEXT    NOT NULL,
+            src_kind    TEXT    NOT NULL,
+            src_value   TEXT    NOT NULL DEFAULT '',
+            src_port    TEXT,
+            dst_kind    TEXT    NOT NULL,
+            dst_value   TEXT    NOT NULL DEFAULT '',
+            dst_port    TEXT,
+            interface   TEXT,
+            log         INTEGER NOT NULL DEFAULT 0,
+            icmp_type   TEXT,
+            description TEXT,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_firewall_rules_driver
+            ON firewall_rules(driver);
+        CREATE INDEX IF NOT EXISTS idx_firewall_rules_position
+            ON firewall_rules(driver, position);
+
+        CREATE TABLE IF NOT EXISTS firewall_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         "#,
     )?;
 

@@ -37,7 +37,7 @@ function handleConfirm(d) {
 }
 
 async function handleFormSubmit(ev, d) {
-  const result = { ...formValues };
+  const result = { ...formValues, ...radioState };
   if (d.submitHandler) {
     submitting.value = true;
     d.errorMessage = null;
@@ -54,17 +54,26 @@ async function handleFormSubmit(ev, d) {
   }
 }
 
+function getFieldValue(key) {
+  if (key in radioState) return radioState[key];
+  return formValues[key];
+}
+
 function isFieldVisible(f) {
   if (!f.showIf) return true;
   const [key, val] = Object.entries(f.showIf)[0];
-  return radioState[key] === val;
+  const cur = getFieldValue(key);
+  if (Array.isArray(val)) return val.includes(cur);
+  return cur === val;
 }
 
 function isFieldRequired(f) {
   if (f.required) return true;
   if (f.requiredIf) {
     const [key, val] = Object.entries(f.requiredIf)[0];
-    return radioState[key] === val;
+    const cur = getFieldValue(key);
+    if (Array.isArray(val)) return val.includes(cur);
+    return cur === val;
   }
   return false;
 }

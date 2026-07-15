@@ -8,6 +8,7 @@ mod cmd;
 mod config;
 mod db;
 mod error;
+mod firewall_gen;
 mod handlers;
 mod ifutil;
 mod jail;

@@ -33,6 +33,7 @@
 | [24-cmd.md](24-cmd.md) | 命令执行封装：spawn_blocking 统一封装、async/sync 函数选择、管道 FD 死锁问题 | `cmd.rs` |
 | [25-memory.md](25-memory.md) | 内存占用与性能优化：流式 I/O、静态正则缓存、UTF-8 双分配修复、jemalloc 行为分析 | `handlers/files.rs`, `handlers/zfs.rs`, `cmd.rs` |
 | [26-sysrc.md](26-sysrc.md) | sysrc 统一封装：rc.conf 读写的唯一入口，同步+异步 API、export 解析器 | `sysrc.rs` |
+| [27-firewall.md](27-firewall.md) | 防火墙管理：双驱动（ipfw/pf）选择与切换、结构化规则 CRUD、黑白名单模式、ICMP 类型/端口转换 | `firewall_gen.rs`, `handlers/firewall.rs`, `frontend/src/pages/PfPage.vue` |
 
 ## 文档规范
 

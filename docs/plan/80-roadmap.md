@@ -140,16 +140,21 @@ Phase 8  打包与部署             ── rc.d 脚本、pkg 集成、文档
 
 ---
 
-## Phase 6 — 防火墙 pf
+## Phase 6 — 防火墙（ipfw / pf 双驱动）
 
-- 状态查询（`pfctl -s info`）
-- 规则/NAT/表只读
-- 启停 + 重载
-- pf.conf 编辑（`pfctl -n -f` 校验）
+> 详细设计见 [18-firewall.md](18-firewall.md)
+
+- 驱动选择（ipfw 或 pf）、可切换
+- 黑白名单模式（ipfw: sysctl `default_to_accept`；pf: `block all` 规则）
+- 结构化规则 CRUD（表单式增删改 + 语法生成）
+- rc.conf 初始化与切换管理
+- 配置文件生成 + 语法校验（`ipfw -n` / `pfctl -n -f`）+ 加载
 
 ### 验收
-- 状态/规则与 `pfctl` 输出一致
-- 编辑 pf.conf 后语法校验通过再保存
+- 初始化 ipfw → rc.conf 正确写入 → 规则生效 → `ipfw list` 一致
+- 切换到 pf → ipfw 禁用 → pf 启用 → `pfctl -sr` 一致
+- 黑白名单模式切换 → 默认策略变化正确
+- 规则增删改 → 应用后配置文件正确生成且语法通过校验
 
 ---
 
