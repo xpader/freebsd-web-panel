@@ -19,6 +19,11 @@ export function useAlert() {
     ui.showDialog({ type: 'alert', title, message });
 }
 
+export function useCodePreview() {
+  return (title, content) =>
+    ui.showDialog({ type: 'code', title, content });
+}
+
 export function useFormModal() {
   return (title, fields, opts = {}) =>
     ui.showDialog({

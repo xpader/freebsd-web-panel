@@ -25,7 +25,9 @@ import DnsPage from '../pages/DnsPage.vue';
 import ServicesPage from '../pages/ServicesPage.vue';
 import AccountsUsersPage from '../pages/AccountsUsersPage.vue';
 import AccountsGroupsPage from '../pages/AccountsGroupsPage.vue';
-import PfPage from '../pages/PfPage.vue';
+import FirewallRulesPage from '../pages/FirewallRulesPage.vue';
+import FirewallTablesPage from '../pages/FirewallTablesPage.vue';
+import FirewallSettingsPage from '../pages/FirewallSettingsPage.vue';
 import BhyveVmsPage from '../pages/BhyveVmsPage.vue';
 import BhyveCreatePage from '../pages/BhyveCreatePage.vue';
 import BhyveDetailPage from '../pages/BhyveDetailPage.vue';
@@ -82,7 +84,11 @@ const routes = [
       { path: 'network', name: 'network', component: NetworkPage },
       { path: 'network/dns', name: 'dns', component: DnsPage },
       { path: 'services', name: 'services', component: ServicesPage },
-      { path: 'pf', name: 'pf', component: PfPage },
+      { path: 'pf', redirect: '/firewall/rules' },
+      { path: 'firewall', redirect: '/firewall/rules' },
+      { path: 'firewall/rules', name: 'firewall-rules', component: FirewallRulesPage },
+      { path: 'firewall/tables', name: 'firewall-tables', component: FirewallTablesPage },
+      { path: 'firewall/settings', name: 'firewall-settings', component: FirewallSettingsPage },
       { path: 'bhyve', redirect: '/bhyve/vms' },
       { path: 'bhyve/vms', name: 'bhyve-vms', component: BhyveVmsPage },
       { path: 'bhyve/create', name: 'bhyve-create', component: BhyveCreatePage },

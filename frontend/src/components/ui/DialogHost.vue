@@ -131,6 +131,15 @@ function groupedFields(d) {
       </div>
     </div>
 
+    <!-- Code/preview dialog -->
+    <div v-else-if="ui.dialog.type === 'code'" class="modal modal-wide">
+      <h3>{{ ui.dialog.title }}</h3>
+      <pre class="code-dialog-content mono">{{ ui.dialog.content }}</pre>
+      <div class="modal-actions">
+        <button class="btn-secondary" @click="ui.resolveDialog()">{{ t('common.close') }}</button>
+      </div>
+    </div>
+
     <!-- Form modal -->
     <div v-else-if="ui.dialog.type === 'form'" class="modal">
       <h3>{{ ui.dialog.title }}</h3>

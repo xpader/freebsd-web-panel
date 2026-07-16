@@ -110,6 +110,39 @@ pub enum AddressKind {
     Single,
     Cidr,
     Me,
+    Table,
+}
+
+// ── IP table types ──
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IpTableEntry {
+    pub id: i64,
+    pub table_id: i64,
+    pub address: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IpTable {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub entries: Vec<IpTableEntry>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TableBody {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EntryBody {
+    pub address: String,
 }
 
 // ── core structs ───────────────────────────────────────────────────
@@ -356,6 +389,151 @@ pub fn reorder_rules(
     Ok(())
 }
 
+// ── IP table CRUD ──────────────────────────────────────────────────
+
+pub fn list_tables(conn: &Connection) -> ApiResult<Vec<IpTable>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, description, created_at, updated_at \
+         FROM firewall_tables ORDER BY name ASC",
+    )?;
+    let mut tables: Vec<IpTable> = stmt
+        .query_map([], |r| {
+            Ok(IpTable {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                description: r.get(2)?,
+                created_at: r.get(3)?,
+                updated_at: r.get(4)?,
+                entries: Vec::new(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    // Load entries for each table in one pass
+    let mut entry_stmt = conn.prepare(
+        "SELECT id, table_id, address, created_at \
+         FROM firewall_table_entries ORDER BY id ASC",
+    )?;
+    let entries: Vec<(i64, IpTableEntry)> = entry_stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(1)?,
+                IpTableEntry {
+                    id: r.get(0)?,
+                    table_id: r.get(1)?,
+                    address: r.get(2)?,
+                    created_at: r.get(3)?,
+                },
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for table in &mut tables {
+        table.entries = entries
+            .iter()
+            .filter(|(tid, _)| *tid == table.id)
+            .map(|(_, e)| e.clone())
+            .collect();
+    }
+
+    Ok(tables)
+}
+
+pub fn get_table_by_name(conn: &Connection, name: &str) -> ApiResult<Option<IpTable>> {
+    let tables = list_tables(conn)?;
+    Ok(tables.into_iter().find(|t| t.name == name))
+}
+
+pub fn create_table(
+    conn: &Connection,
+    body: &TableBody,
+    now: i64,
+) -> ApiResult<i64> {
+    conn.execute(
+        "INSERT INTO firewall_tables (name, description, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?3)",
+        params![body.name, body.description, now],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_table(
+    conn: &Connection,
+    id: i64,
+    body: &TableBody,
+    now: i64,
+) -> ApiResult<()> {
+    let n = conn.execute(
+        "UPDATE firewall_tables SET name = ?1, description = ?2, updated_at = ?3 WHERE id = ?4",
+        params![body.name, body.description, now, id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("firewall table not found".into()));
+    }
+    Ok(())
+}
+
+pub fn delete_table(conn: &Connection, id: i64) -> ApiResult<()> {
+    let n = conn.execute(
+        "DELETE FROM firewall_tables WHERE id = ?1",
+        params![id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("firewall table not found".into()));
+    }
+    Ok(())
+}
+
+pub fn add_entry(
+    conn: &Connection,
+    table_id: i64,
+    address: &str,
+    now: i64,
+) -> ApiResult<i64> {
+    conn.execute(
+        "INSERT INTO firewall_table_entries (table_id, address, created_at) VALUES (?1, ?2, ?3)",
+        params![table_id, address, now],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn delete_entry(conn: &Connection, table_id: i64, entry_id: i64) -> ApiResult<()> {
+    let n = conn.execute(
+        "DELETE FROM firewall_table_entries WHERE id = ?1 AND table_id = ?2",
+        params![entry_id, table_id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("table entry not found".into()));
+    }
+    Ok(())
+}
+
+/// Validate a table name: alphanumeric + underscore/hyphen, 1-32 chars, start with letter.
+pub fn validate_table_name(name: &str) -> ApiResult<()> {
+    let re = regex::Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]{0,31}$").unwrap();
+    if !re.is_match(name) {
+        return Err(ApiError::BadRequest(
+            "table name must start with a letter, contain only alphanumeric, underscore, or hyphen (max 32 chars)".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate an IP/CIDR address for table entries.
+pub fn validate_address(addr: &str) -> ApiResult<()> {
+    if addr.is_empty() || addr.len() > 50 {
+        return Err(ApiError::BadRequest("invalid address".into()));
+    }
+    let re = regex::Regex::new(
+        r"^[0-9a-fA-F:.]+(/\d{1,3})?$",
+    ).unwrap();
+    if !re.is_match(addr) {
+        return Err(ApiError::BadRequest("invalid IP/CIDR address".into()));
+    }
+    Ok(())
+}
+
 // ── config generation ──────────────────────────────────────────────
 
 fn header(driver: FirewallDriver, mode: FirewallMode) -> String {
@@ -380,6 +558,7 @@ fn address_ipfw(addr: &AddressSpec) -> String {
         AddressKind::Any => "any".into(),
         AddressKind::Me => "me".into(),
         AddressKind::Single | AddressKind::Cidr => addr.value.clone(),
+        AddressKind::Table => format!("table\\({}\\)", addr.value),
     }
 }
 
@@ -392,6 +571,7 @@ fn address_pf(addr: &AddressSpec, af: &str) -> String {
             let _ = af;
             addr.value.clone()
         }
+        AddressKind::Table => format!("<{}>", addr.value),
     }
 }
 
@@ -421,9 +601,21 @@ fn is_ipv6(addr: &str) -> bool {
 }
 
 /// Generate the full ipfw shell script from enabled rules.
-pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode) -> String {
+pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> String {
     let mut buf = header(FirewallDriver::Ipfw, mode);
     buf.push_str("ipfw -q flush\n\n");
+
+    // IP tables
+    if !tables.is_empty() {
+        buf.push_str("# --- IP Tables ---\n");
+        for table in tables {
+            buf.push_str(&format!("ipfw -q table {} flush\n", table.name));
+            for entry in &table.entries {
+                buf.push_str(&format!("ipfw -q table {} add {}\n", table.name, entry.address));
+            }
+            buf.push('\n');
+        }
+    }
 
     for (i, rule) in rules.iter().filter(|r| r.enabled).enumerate() {
         let number = ((i + 1) * 100) as u32;
@@ -502,8 +694,12 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode) -> String {
     }
 
     // Default policy rule at 65534 (before kernel default 65535).
-    // Whitelist: deny all; Blacklist: allow all (overrides kernel default_to_accept=0).
+    // Whitelist: allow outbound + deny all inbound; Blacklist: allow all.
     if mode == FirewallMode::Whitelist {
+        // Allow all outbound traffic (mirrors pf's "pass out quick all keep state").
+        // Without this, HTTP responses to in-flight connections are dropped.
+        buf.push_str("# [65000] Allow all outbound (whitelist mode)\n");
+        buf.push_str("ipfw -q add 65000 allow ip from any to any out keep-state\n\n");
         buf.push_str("# [65534] Default deny (whitelist mode)\n");
         buf.push_str("ipfw -q add 65534 deny ip from any to any\n\n");
     } else {
@@ -515,8 +711,22 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode) -> String {
 }
 
 /// Generate the full pf.conf from enabled rules.
-pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode) -> String {
+pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> String {
     let mut buf = header(FirewallDriver::Pf, mode);
+
+    // IP tables (must be declared before rules that reference them)
+    if !tables.is_empty() {
+        buf.push_str("# --- IP Tables ---\n");
+        for table in tables {
+            let addrs: Vec<&str> = table.entries.iter().map(|e| e.address.as_str()).collect();
+            if addrs.is_empty() {
+                buf.push_str(&format!("table <{}> persist\n", table.name));
+            } else {
+                buf.push_str(&format!("table <{}> {{ {} }}\n", table.name, addrs.join(", ")));
+            }
+        }
+        buf.push('\n');
+    }
 
     if mode == FirewallMode::Whitelist {
         buf.push_str(
@@ -547,29 +757,40 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode) -> String {
 
         let proto_str = proto_pf(rule.protocol);
 
-        // Address family detection
-        let af = if rule.source.kind == AddressKind::Me || rule.destination.kind == AddressKind::Me
-        {
-            "inet"
+        // ICMP type matching requires an explicit address family. For rules
+        // referencing a table, omit AF so a mixed IPv4/IPv6 table can match.
+        let has_table = rule.source.kind == AddressKind::Table
+            || rule.destination.kind == AddressKind::Table;
+        let af = if rule.protocol == RuleProtocol::Icmp {
+            Some("inet")
+        } else if rule.protocol == RuleProtocol::Icmpv6 {
+            Some("inet6")
+        } else if has_table {
+            None
+        } else if rule.source.kind == AddressKind::Me || rule.destination.kind == AddressKind::Me {
+            Some("inet")
         } else {
             let src_v6 = rule.source.kind != AddressKind::Any
                 && is_ipv6(&rule.source.value);
             let dst_v6 = rule.destination.kind != AddressKind::Any
                 && is_ipv6(&rule.destination.value);
             if src_v6 || dst_v6 {
-                "inet6"
+                Some("inet6")
             } else {
-                "inet"
+                Some("inet")
             }
         };
 
-        let mut parts: Vec<String> = vec![action.into(), dir.into(), "quick".into(), af.into()];
+        let mut parts: Vec<String> = vec![action.into(), dir.into(), "quick".into()];
+        if let Some(af) = af {
+            parts.push(af.into());
+        }
         if let Some(p) = proto_str {
             parts.push(format!("proto {p}"));
         }
 
-        let src = address_pf(&rule.source, af);
-        let dst = address_pf(&rule.destination, af);
+        let src = address_pf(&rule.source, af.unwrap_or("inet"));
+        let dst = address_pf(&rule.destination, af.unwrap_or("inet"));
 
         let src_port = rule
             .source_port
@@ -611,7 +832,7 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode) -> String {
             .unwrap_or_default();
 
         let state = if rule.action == RuleAction::Allow && proto_str == Some("tcp") {
-            " flags S/SA keep state"
+            " flags any keep state"
         } else if rule.action == RuleAction::Allow {
             " keep state"
         } else {
@@ -634,14 +855,15 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode) -> String {
 }
 
 /// Convert user port spec (e.g. "80,443,8080-8090") to ipfw syntax.
-/// ipfw: single → "80", range → "8080-8090", multiple → "{ 80 443 8080-8090 }"
+/// ipfw uses comma-separated ports directly: single → "80", range → "8080-8090",
+/// multiple → "80,443,8080-8090". Curly braces in ipfw are OR-lists (rule-level),
+/// NOT port lists, so must not be used here.
 fn port_to_ipfw(spec: &str) -> String {
-    let parts: Vec<&str> = spec.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-    match parts.len() {
-        0 => spec.to_string(),
-        1 => parts[0].to_string(),
-        _ => format!("{{ {} }}", parts.join(" ")),
-    }
+    spec.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Convert user port spec (e.g. "80,443,8080-8090") to pf syntax.
@@ -716,6 +938,12 @@ pub fn validate_rule_body(body: &RuleBody) -> ApiResult<()> {
             return Err(ApiError::BadRequest("source address value required".into()));
         }
     }
+    if matches!(body.source.kind, AddressKind::Table) {
+        if body.source.value.is_empty() {
+            return Err(ApiError::BadRequest("source table name required".into()));
+        }
+        validate_table_name(&body.source.value)?;
+    }
     if matches!(
         body.destination.kind,
         AddressKind::Single | AddressKind::Cidr
@@ -725,6 +953,12 @@ pub fn validate_rule_body(body: &RuleBody) -> ApiResult<()> {
                 "destination address value required".into(),
             ));
         }
+    }
+    if matches!(body.destination.kind, AddressKind::Table) {
+        if body.destination.value.is_empty() {
+            return Err(ApiError::BadRequest("destination table name required".into()));
+        }
+        validate_table_name(&body.destination.value)?;
     }
 
     // Description
@@ -761,8 +995,8 @@ pub fn ensure_module(driver: FirewallDriver) -> ApiResult<()> {
 }
 
 /// Apply ipfw rules: generate file, then load.
-pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode) -> ApiResult<()> {
-    let content = generate_ipfw(rules, mode);
+pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
+    let content = generate_ipfw(rules, mode, tables);
 
     // Write to real path (atomic via temp + rename)
     let tmp = format!("{IPFW_RULES_PATH}.tmp");
@@ -776,8 +1010,8 @@ pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode) -> ApiResult<()> {
 }
 
 /// Apply pf rules: generate file, validate with pfctl -n, then load.
-pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode) -> ApiResult<()> {
-    let content = generate_pf(rules, mode);
+pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
+    let content = generate_pf(rules, mode, tables);
 
     // Write to temp file and validate
     let tmp = format!("{PF_CONF_PATH}.tmp");
@@ -796,13 +1030,16 @@ pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode) -> ApiResult<()> {
 }
 
 /// Enable firewall at runtime (does not modify rc.conf).
+/// Rules must already be loaded via Apply before calling this.
 pub fn enable_firewall(driver: FirewallDriver) -> ApiResult<()> {
     match driver {
         FirewallDriver::Ipfw => {
             cmd::run_sync(SYSCTL, &["net.inet.ip.fw.enable=1"])?;
         }
         FirewallDriver::Pf => {
-            // pfctl -e returns "pf enabled" on stdout and exits 0
+            // pfctl -e enables pf. Rules should already be loaded via Apply.
+            // Do NOT pfctl -f here — it flushes the state table and kills
+            // the current HTTP connection, making the API appear to hang.
             cmd::run_sync(PFCTL, &["-e"])?;
         }
     }
@@ -845,7 +1082,7 @@ pub fn set_ipfw_mode(_mode: FirewallMode) -> ApiResult<()> {
 
 /// Initialize ipfw: write rc.conf entries, load module, generate config file.
 /// Does NOT load rules or enable the firewall — both happen via Apply/Enable.
-pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule]) -> ApiResult<()> {
+pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()> {
     use crate::sysrc;
 
     sysrc::set("firewall_enable", "YES").map_err(|e| ApiError::Command(e))?;
@@ -855,14 +1092,18 @@ pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule]) -> ApiResult<()> {
 
     ensure_module(FirewallDriver::Ipfw)?;
 
+    // kldload ipfw enables ipfw by default (net.inet.ip.fw.enable defaults to 1)
+    // with a default-deny rule 65535. Explicitly disable to avoid blocking all traffic.
+    disable_firewall(FirewallDriver::Ipfw)?;
+
     // Only generate the file — do NOT load it into the kernel yet.
-    let content = generate_ipfw(rules, mode);
+    let content = generate_ipfw(rules, mode, tables);
     atomic_write(IPFW_RULES_PATH, &content)?;
     Ok(())
 }
 
 /// Initialize pf: write rc.conf entries, load module, load rules.
-pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule]) -> ApiResult<()> {
+pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()> {
     use crate::sysrc;
 
     sysrc::set("pf_enable", "YES").map_err(|e| ApiError::Command(e))?;
@@ -871,7 +1112,7 @@ pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule]) -> ApiResult<()> {
     ensure_module(FirewallDriver::Pf)?;
 
     // Only generate the file — do NOT load it into the kernel yet.
-    let content = generate_pf(rules, mode);
+    let content = generate_pf(rules, mode, tables);
     atomic_write(PF_CONF_PATH, &content)?;
     Ok(())
 }
@@ -906,9 +1147,10 @@ pub fn preview_config(
     driver: FirewallDriver,
     rules: &[FirewallRule],
     mode: FirewallMode,
+    tables: &[IpTable],
 ) -> String {
     match driver {
-        FirewallDriver::Ipfw => generate_ipfw(rules, mode),
-        FirewallDriver::Pf => generate_pf(rules, mode),
+        FirewallDriver::Ipfw => generate_ipfw(rules, mode, tables),
+        FirewallDriver::Pf => generate_pf(rules, mode, tables),
     }
 }

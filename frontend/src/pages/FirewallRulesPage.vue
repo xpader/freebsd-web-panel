@@ -2,20 +2,20 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import { useToast, useAlert, useConfirm, useFormModal, useCodePreview } from '../composables/useDialog.js';
 
 const { t } = useI18n();
 const toast = useToast();
 const alert = useAlert();
 const confirm = useConfirm();
 const formModal = useFormModal();
+const codePreview = useCodePreview();
 
 const status = ref(null);
 const rules = ref([]);
-const configPreview = ref('');
+const tables = ref([]);
 const loading = ref(true);
 const rulesLoading = ref(false);
-const configLoading = ref(false);
 
 const initialized = computed(() => status.value?.initialized);
 
@@ -41,22 +41,29 @@ async function loadRules() {
   }
 }
 
-async function loadConfig() {
-  if (!initialized.value) return;
-  configLoading.value = true;
+async function loadTables() {
   try {
-    const data = await api.get('/api/firewall/config');
-    configPreview.value = data.content;
+    tables.value = await api.get('/api/firewall/tables');
   } catch (e) {
-    configPreview.value = '';
-  } finally {
-    configLoading.value = false;
+    tables.value = [];
   }
 }
 
 async function loadAll() {
   await loadStatus();
-  await Promise.all([loadRules(), loadConfig()]);
+  await Promise.all([loadRules(), loadTables()]);
+}
+
+async function showConfigPreview() {
+  try {
+    const data = await api.get('/api/firewall/config');
+    codePreview(
+      t('firewall.configPreview'),
+      data.content,
+    );
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  }
 }
 
 async function doInitialize() {
@@ -113,66 +120,8 @@ async function doToggleEnabled() {
   }
 }
 
-async function doSettings() {
-  const curDriver = status.value.driver;
-  const curMode = status.value.mode;
-  const result = await formModal(t('nav.firewallSettings'), [
-    {
-      key: 'driver',
-      label: t('firewall.driver'),
-      type: 'radio',
-      options: [
-        { value: 'ipfw', label: 'ipfw' },
-        { value: 'pf', label: 'pf' },
-      ],
-      value: curDriver,
-    },
-    {
-      key: 'mode',
-      label: t('firewall.mode'),
-      type: 'radio',
-      options: [
-        { value: 'whitelist', label: t('firewall.whitelist') },
-        { value: 'blacklist', label: t('firewall.blacklist') },
-      ],
-      value: curMode,
-    },
-  ], { submitLabel: t('common.save') });
-
-  if (!result) return;
-
-  // Switch driver if changed
-  if (result.driver && result.driver !== curDriver) {
-    if (!await confirm(t('firewall.switchConfirmTitle'),
-        t('firewall.switchConfirm', { from: curDriver, to: result.driver }))) return;
-    try {
-      status.value = await api.post('/api/firewall/switch', { driver: result.driver });
-      toast.toast(t('firewall.switched', { driver: result.driver }));
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-      return;
-    }
-  }
-
-  // Switch mode if changed
-  const targetMode = result.mode;
-  if (targetMode && targetMode !== curMode) {
-    const warnMsg = targetMode === 'whitelist'
-      ? t('firewall.modeSwitchWhitelistWarn')
-      : t('firewall.modeSwitchBlacklistWarn');
-    if (!await confirm(t('firewall.modeConfirmTitle'), warnMsg)) return;
-    try {
-      status.value = await api.put('/api/firewall/mode', { mode: targetMode });
-      toast.toast(t('firewall.modeSwitched'));
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-    }
-  }
-
-  await loadAll();
-}
-
 function makeFields(rule = null) {
+  const tableOptions = tables.value.map(tb => ({ value: tb.name, label: tb.name }));
   return [
     { key: 'description', label: t('common.description'), value: rule?.description || '', placeholder: 'Allow HTTP' },
     {
@@ -248,6 +197,7 @@ function makeFields(rule = null) {
         { value: 'me', label: t('firewall.addrMe') },
         { value: 'single', label: t('firewall.addrSingle') },
         { value: 'cidr', label: t('firewall.addrCidr') },
+        { value: 'table', label: t('firewall.addrTable') },
       ],
     },
     {
@@ -263,6 +213,12 @@ function makeFields(rule = null) {
       requiredIf: { srcKind: ['cidr'] },
     },
     {
+      key: 'srcTable', label: t('firewall.addrTable'), type: 'select', value: rule?.source?.kind === 'table' ? rule.source.value : '', half: true,
+      options: tableOptions,
+      showIf: { srcKind: ['table'] },
+      requiredIf: { srcKind: ['table'] },
+    },
+    {
       key: 'srcPort', label: t('firewall.srcPort'), value: rule?.source_port || '', half: true,
       placeholder: '80 or 1024-65535 or 53,80,443-450',
       showIf: { protocol: ['tcp', 'udp'] },
@@ -274,6 +230,7 @@ function makeFields(rule = null) {
         { value: 'me', label: t('firewall.addrMe') },
         { value: 'single', label: t('firewall.addrSingle') },
         { value: 'cidr', label: t('firewall.addrCidr') },
+        { value: 'table', label: t('firewall.addrTable') },
       ],
     },
     {
@@ -289,6 +246,12 @@ function makeFields(rule = null) {
       requiredIf: { dstKind: ['cidr'] },
     },
     {
+      key: 'dstTable', label: t('firewall.addrTable'), type: 'select', value: rule?.destination?.kind === 'table' ? rule.destination.value : '', half: true,
+      options: tableOptions,
+      showIf: { dstKind: ['table'] },
+      requiredIf: { dstKind: ['table'] },
+    },
+    {
       key: 'dstPort', label: t('firewall.dstPort'), value: rule?.destination_port || '', half: true,
       placeholder: '80 or 443,8080 or 80,443,8080-8090',
       showIf: { protocol: ['tcp', 'udp'] },
@@ -302,8 +265,8 @@ function extractBody(result) {
   const dstKind = result.dstKind;
   const proto = result.protocol;
 
-  const srcValue = srcKind === 'single' ? (result.srcValue || '') : srcKind === 'cidr' ? (result.srcValueCidr || '') : '';
-  const dstValue = dstKind === 'single' ? (result.dstValue || '') : dstKind === 'cidr' ? (result.dstValueCidr || '') : '';
+  const srcValue = srcKind === 'single' ? (result.srcValue || '') : srcKind === 'cidr' ? (result.srcValueCidr || '') : srcKind === 'table' ? (result.srcTable || '') : '';
+  const dstValue = dstKind === 'single' ? (result.dstValue || '') : dstKind === 'cidr' ? (result.dstValueCidr || '') : dstKind === 'table' ? (result.dstTable || '') : '';
 
   let srcPort = null, dstPort = null;
   if (proto === 'tcp' || proto === 'udp') {
@@ -334,26 +297,28 @@ function extractBody(result) {
 }
 
 async function doAddRule() {
+  if (tables.value.length === 0) await loadTables();
   const result = await formModal(t('firewall.addRuleTitle'), makeFields(), { submitLabel: t('common.create') });
   if (!result) return;
   try {
     await api.post('/api/firewall/rules', extractBody(result));
     toast.toast(t('firewall.ruleAdded'));
     status.value.pending_apply = true;
-    await Promise.all([loadRules(), loadConfig()]);
+    await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 }
 
 async function doEditRule(rule) {
+  if (tables.value.length === 0) await loadTables();
   const result = await formModal(t('firewall.editRuleTitle'), makeFields(rule), { submitLabel: t('common.save') });
   if (!result) return;
   try {
     await api.put(`/api/firewall/rules/${rule.id}`, extractBody(result));
     toast.toast(t('firewall.ruleUpdated'));
     status.value.pending_apply = true;
-    await Promise.all([loadRules(), loadConfig()]);
+    await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
@@ -365,7 +330,7 @@ async function doDeleteRule(rule) {
     await api.del(`/api/firewall/rules/${rule.id}`);
     toast.toast(t('firewall.ruleDeleted'));
     status.value.pending_apply = true;
-    await Promise.all([loadRules(), loadConfig()]);
+    await loadRules();
   } catch (e) {
     await alert(t('common.deleteFailed'), e.message || t('common.deleteFailed'));
   }
@@ -375,7 +340,7 @@ async function doToggleRule(rule) {
   try {
     await api.put(`/api/firewall/rules/${rule.id}/toggle`);
     status.value.pending_apply = true;
-    await Promise.all([loadRules(), loadConfig()]);
+    await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
@@ -389,7 +354,7 @@ async function doMoveRule(index, direction) {
   try {
     await api.put('/api/firewall/rules/reorder', { ordered_ids: ids });
     status.value.pending_apply = true;
-    await Promise.all([loadRules(), loadConfig()]);
+    await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
@@ -401,7 +366,6 @@ async function doApply() {
     toast.toast(t('firewall.applied'));
     status.value.pending_apply = false;
     await loadStatus();
-    await loadConfig();
   } catch (e) {
     await alert(t('firewall.applyFailed'), e.message || t('firewall.applyFailed'));
   }
@@ -416,6 +380,7 @@ function addrLabel(spec) {
   if (!spec) return '\u2014';
   if (spec.kind === 'any') return t('firewall.addrAny');
   if (spec.kind === 'me') return t('firewall.addrMe');
+  if (spec.kind === 'table') return `<${spec.value}>`;
   return spec.value || '\u2014';
 }
 
@@ -435,16 +400,18 @@ onUnmounted(() => clearInterval(pollTimer));
 <template>
   <div class="page-header">
     <div class="flex">
-      <h1>{{ t('nav.pf') }}</h1>
+      <h1>{{ t('firewall.rulesTitle') }}</h1>
       <p class="text-dim" style="margin:0;font-size:13px;">{{ t('firewall.subtitle') }}</p>
     </div>
     <div v-if="initialized" class="flex btn-group" style="margin-left:auto;">
-      <button :class="status.enabled ? 'btn-danger' : ''" @click="doToggleEnabled">
-        <i :class="status.enabled ? 'fa-solid fa-stop' : 'fa-solid fa-play'"></i>
-        {{ status.enabled ? t('common.stop') : t('common.start') }}
+      <button @click="doApply" v-if="status.pending_apply">
+        <i class="fa-solid fa-check"></i> {{ t('firewall.applyRules') }}
       </button>
-      <button class="btn-secondary" @click="doSettings">
-        <i class="fa-solid fa-gear"></i> {{ t('nav.firewallSettings') }}
+      <button @click="doAddRule">
+        <i class="fa-solid fa-plus"></i> {{ t('firewall.addRule') }}
+      </button>
+      <button class="btn-secondary" @click="showConfigPreview">
+        <i class="fa-solid fa-eye"></i> {{ t('firewall.configPreview') }}
       </button>
       <button class="btn-secondary" @click="loadAll">
         <i class="fa-solid fa-rotate"></i> {{ t('common.refresh') }}
@@ -502,12 +469,6 @@ onUnmounted(() => clearInterval(pollTimer));
           </span>
         </div>
         <div class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('firewall.moduleLoaded') }}</span>
-          <span :class="['badge', status.module_loaded ? 'badge-success' : 'badge-warn']">
-            {{ status.module_loaded ? t('common.yes') : t('common.no') }}
-          </span>
-        </div>
-        <div class="flex" style="gap:6px;align-items:center;">
           <span class="text-dim" style="font-size:12px;">{{ t('firewall.ruleCount') }}</span>
           <strong class="mono">{{ status.rules_count }}</strong>
         </div>
@@ -515,22 +476,16 @@ onUnmounted(() => clearInterval(pollTimer));
           <span class="text-dim" style="font-size:12px;">{{ t('firewall.pendingApply') }}</span>
           <span class="badge badge-warn">{{ t('common.yes') }}</span>
         </div>
+        <div class="flex btn-group" style="margin-left:auto;">
+          <button :class="['btn-sm', status.enabled ? 'btn-danger' : 'btn-secondary']" @click="doToggleEnabled">
+            <i :class="status.enabled ? 'fa-solid fa-stop' : 'fa-solid fa-play'"></i>
+            {{ status.enabled ? t('common.stop') : t('common.start') }}
+          </button>
+        </div>
       </div>
     </div>
 
     <div class="card" style="padding:0;">
-      <div class="toolbar" style="padding:12px 16px;">
-        <h3 style="margin:0;">{{ t('firewall.rulesTitle') }}</h3>
-        <div class="flex"></div>
-        <div class="btn-group">
-          <button @click="doApply" v-if="status.pending_apply">
-            <i class="fa-solid fa-check"></i> {{ t('firewall.applyRules') }}
-          </button>
-          <button @click="doAddRule">
-            <i class="fa-solid fa-plus"></i> {{ t('firewall.addRule') }}
-          </button>
-        </div>
-      </div>
       <table>
         <thead>
           <tr>
@@ -585,16 +540,6 @@ onUnmounted(() => clearInterval(pollTimer));
         </tbody>
       </table>
     </div>
-
-    <div class="card">
-      <div class="toolbar" style="padding:0 0 12px 0;">
-        <h3 style="margin:0;">{{ t('firewall.configPreview') }}</h3>
-        <div class="flex"></div>
-        <span class="text-dim">{{ status.driver === 'ipfw' ? '/etc/ipfw.rules' : '/etc/pf.conf' }}</span>
-      </div>
-      <pre class="config-preview mono" v-if="configPreview">{{ configPreview }}</pre>
-      <div v-else class="empty">{{ configLoading ? t('common.loading') : t('common.noData') }}</div>
-    </div>
   </template>
 </template>
 
@@ -632,15 +577,5 @@ onUnmounted(() => clearInterval(pollTimer));
 }
 .row-disabled {
   opacity: 0.5;
-}
-.config-preview {
-  background: var(--bg-elev2);
-  padding: 12px 16px;
-  border-radius: var(--radius);
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-x: auto;
-  max-height: 400px;
-  overflow-y: auto;
 }
 </style>

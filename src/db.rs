@@ -108,6 +108,24 @@ fn migrate(conn: &Connection) -> ApiResult<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS firewall_tables (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,
+            description TEXT,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS firewall_table_entries (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_id   INTEGER NOT NULL,
+            address    TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (table_id) REFERENCES firewall_tables(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_fw_table_entries
+            ON firewall_table_entries(table_id);
         "#,
     )?;
 

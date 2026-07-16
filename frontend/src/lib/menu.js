@@ -49,7 +49,16 @@ export const MENU = [
     items: [
       { path: '/network', labelKey: 'nav.networkIf', icon: 'fa-solid fa-ethernet' },
       { path: '/network/dns', labelKey: 'nav.networkDns', icon: 'fa-solid fa-server' },
-      { path: '/pf', labelKey: 'nav.pf', icon: 'fa-solid fa-shield-halved' },
+      {
+        path: '/firewall',
+        labelKey: 'nav.pf',
+        icon: 'fa-solid fa-shield-halved',
+        children: [
+          { path: '/firewall/rules', labelKey: 'nav.firewallRules', icon: 'fa-solid fa-list' },
+          { path: '/firewall/tables', labelKey: 'nav.firewallTables', icon: 'fa-solid fa-table-list' },
+          { path: '/firewall/settings', labelKey: 'nav.firewallSettings', icon: 'fa-solid fa-gear' },
+        ],
+      },
     ],
   },
   {
