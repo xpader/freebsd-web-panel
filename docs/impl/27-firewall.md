@@ -105,7 +105,7 @@ CREATE TABLE firewall_table_entries (
 - 黑名单模式：`set skip on lo0`（pf 默认放行）
 - 用户规则使用 `quick`（首个匹配生效，与 ipfw 语义一致）
 - `set skip on lo0` 必须在 `block all` 前面
-- allow 规则一律加 `keep state`（不用 `flags S/SA`——否则启用后现有连接的非 SYN 包无法创建 state，命中 `block all` 被丢弃）
+- TCP allow 规则加 `flags any keep state`；普通 `keep state` 会被 pf 隐式解析为 `flags S/SA`，使启用 PF 后现有连接的 ACK 无法匹配并被 `block all` 丢弃。其他 allow 规则加 `keep state`
 - ICMP 类型用数字（FreeBSD pf 不接受名字）
 - 地址族判定优先级：ICMP → inet/inet6（`icmp-type` 必需）；Table 引用 → 省略 AF（支持混合 IPv4/IPv6）；其余按地址内容检测 v4/v6
 - 离散/连续端口转换：`80,443,8080-8090` → `{ 80, 443, 8080:8090 }`
