@@ -42,6 +42,9 @@ pub fn open(path: &Path) -> ApiResult<Db> {
 }
 
 fn migrate(conn: &Connection) -> ApiResult<()> {
+    // ── Base schema ───────────────────────────────────────────────────
+    // Core tables that every database must have.  Always idempotent.
+    // Feature-specific tables are created by versioned migrations.
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS users (
@@ -63,11 +66,6 @@ fn migrate(conn: &Connection) -> ApiResult<()> {
         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
-        CREATE TABLE IF NOT EXISTS meta (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS metric_samples (
             ts       INTEGER NOT NULL,
             category TEXT NOT NULL,
@@ -78,77 +76,146 @@ fn migrate(conn: &Connection) -> ApiResult<()> {
         CREATE INDEX IF NOT EXISTS idx_samples_query
             ON metric_samples(category, name, ts);
 
-        CREATE TABLE IF NOT EXISTS firewall_rules (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            position    INTEGER NOT NULL DEFAULT 0,
-            enabled     INTEGER NOT NULL DEFAULT 1,
-            action      TEXT    NOT NULL,
-            direction   TEXT    NOT NULL,
-            protocol    TEXT    NOT NULL,
-            src_kind    TEXT    NOT NULL,
-            src_value   TEXT    NOT NULL DEFAULT '',
-            src_port    TEXT,
-            dst_kind    TEXT    NOT NULL,
-            dst_value   TEXT    NOT NULL DEFAULT '',
-            dst_port    TEXT,
-            interface   TEXT,
-            log         INTEGER NOT NULL DEFAULT 0,
-            icmp_type   TEXT,
-            description TEXT,
-            created_at  INTEGER NOT NULL,
-            updated_at  INTEGER NOT NULL
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version    INTEGER PRIMARY KEY,
+            applied_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_firewall_rules_position
-            ON firewall_rules(position);
-
-        CREATE TABLE IF NOT EXISTS firewall_state (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS firewall_tables (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL UNIQUE,
-            description TEXT,
-            created_at  INTEGER NOT NULL,
-            updated_at  INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS firewall_table_entries (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            table_id   INTEGER NOT NULL,
-            address    TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (table_id) REFERENCES firewall_tables(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_fw_table_entries
-            ON firewall_table_entries(table_id);
         "#,
     )?;
 
-    // One-time purge: legacy net samples whose interface name contains '*'
-    // (e.g. "bge0*.rx"). The '*' suffix in `netstat -i` output marks
-    // interfaces without the UP flag; `read_net_counters()` now strips it
-    // before writing, so these rows are stale leftovers from before that fix.
-    let purged: Option<String> = conn
+    // ── Versioned migrations ─────────────────────────────────────────
+    //
+    // Each migration is a standalone function.  To add a new one:
+    //   1. Write a `fn mN(conn) -> ApiResult<()>` in the migrations module.
+    //   2. Append it to MIGRATIONS with the next sequential version.
+    // Rules:
+    //   - Versions are sequential: 1, 2, 3, …  Never reuse or skip.
+    //   - Never edit a published migration — add a new one instead.
+    //   - Migrations run inside a transaction and are recorded in
+    //     schema_version, so each runs at most once.
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let current: i64 = conn
         .query_row(
-            "SELECT value FROM meta WHERE key = 'migration_net_star_purged'",
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
             [],
             |r| r.get(0),
         )
-        .optional()?;
-    if purged.is_none() {
-        conn.execute(
-            "DELETE FROM metric_samples WHERE category = 'net' AND name LIKE '%*%'",
-            [],
+        .unwrap_or(0);
+
+    for m in migrations::MIGRATIONS {
+        if current >= m.version {
+            continue;
+        }
+        tracing::info!("db migration {}: {}", m.version, m.desc);
+        let tx = conn.unchecked_transaction()?;
+        (m.func)(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
+            params![m.version, now],
         )?;
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('migration_net_star_purged', '1')",
-            [],
-        )?;
+        tx.commit()?;
     }
 
     Ok(())
+}
+
+// ── migrations ─────────────────────────────────────────────────────
+
+mod migrations {
+    use crate::error::ApiResult;
+    use rusqlite::Connection;
+
+    pub struct Migration {
+        pub version: i64,
+        pub desc: &'static str,
+        pub func: fn(&Connection) -> ApiResult<()>,
+    }
+
+    pub const MIGRATIONS: &[Migration] = &[
+        Migration {
+            version: 1,
+            desc: "firewall: create firewall tables in current form",
+            func: m1,
+        },
+    ];
+
+    /// v1: Create firewall tables (rules, state, tables, table entries).
+    fn m1(conn: &Connection) -> ApiResult<()> {
+        // ── firewall_state ──
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS firewall_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // ── firewall_tables ──
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS firewall_tables (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL UNIQUE,
+                description TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        // ── firewall_table_entries ──
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS firewall_table_entries (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_id   INTEGER NOT NULL,
+                address    TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (table_id) REFERENCES firewall_tables(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fw_table_entries
+                ON firewall_table_entries(table_id)",
+            [],
+        )?;
+
+        // ── firewall_rules ──
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS firewall_rules (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                position    INTEGER NOT NULL DEFAULT 0,
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                action      TEXT    NOT NULL,
+                direction   TEXT    NOT NULL,
+                protocol    TEXT    NOT NULL,
+                src_kind    TEXT    NOT NULL,
+                src_value   TEXT    NOT NULL DEFAULT '',
+                src_port    TEXT,
+                dst_kind    TEXT    NOT NULL,
+                dst_value   TEXT    NOT NULL DEFAULT '',
+                dst_port    TEXT,
+                interface   TEXT,
+                log         INTEGER NOT NULL DEFAULT 0,
+                icmp_type   TEXT,
+                description TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_firewall_rules_position
+                ON firewall_rules(position)",
+            [],
+        )?;
+
+        Ok(())
+    }
 }
 
 pub fn user_count(conn: &Connection) -> ApiResult<i64> {

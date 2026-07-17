@@ -65,7 +65,7 @@ src/
 ├── app.rs            # 路由组装 + 回退到 web_assets
 ├── config.rs         # Config 结构体 + TOML 加载/创建
 ├── error.rs          # ApiError → HTTP 响应；ApiResult<T> = Result<T, ApiError>
-├── db.rs             # SQLite 打开 + 自由函数（user_count、get_user 等）
+├── db.rs             # SQLite 打开 + 版本化迁移系统 + 自由函数（user_count、get_user 等）
 ├── auth.rs           # 密码哈希（argon2）、session token、require_auth 中间件、
 │                     # AuthUser 提取器（FromRequestParts）
 ├── audit.rs          # 追加式 JSON 审计日志（parking_lot::Mutex<File>）

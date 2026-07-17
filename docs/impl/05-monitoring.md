@@ -47,8 +47,8 @@ CPU delta 使用 `MONITOR_CPU`（独立的 `LazyLock<Mutex<Option<CpuState>>>`�
 
 `MONITOR_NET` 与仪表盘的 `LAST_NET` 独立，避免互相干扰 delta。
 
-> **旧数据残留与清理**：
-> - **`*` 后缀**：`netstat -i` 输出中接口名后的 `*` 表示该接口未 UP（如 `bge0*`）。早期 `read_net_counters()` 未剥离该后缀，导致 DB 同时存在 `bge0*` 与 `bge0` 两套序列，前端画出重复曲线。`read_net_counters()` 已修正为 `trim_end_matches('*')`；`db.rs::migrate()` 中设有一次性迁移（meta key `migration_net_star_purged`），首次启动时删除 `name LIKE '%*%'` 的 net 采样，从根上清除残留。
+> **已知问题**：
+> - **`*` 后缀**：`netstat -i` 输出中接口名后的 `*` 表示该接口未 UP（如 `bge0*`）。早期 `read_net_counters()` 未剥离该后缀，导致 DB 同时存在 `bge0*` 与 `bge0` 两套序列，前端画出重复曲线。`read_net_counters()` 已修正为 `trim_end_matches('*')`。
 
 ### 写入
 
