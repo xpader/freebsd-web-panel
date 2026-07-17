@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, nextTick, watch } from 'vue';
+import { ref, reactive, nextTick, watch, onUnmounted } from 'vue';
 import { ui } from '../../stores/ui.js';
 import { useI18n } from 'vue-i18n';
 import FieldHelp from './FieldHelp.vue';
@@ -9,6 +9,36 @@ const firstInput = ref(null);
 const submitting = ref(false);
 const radioState = reactive({});
 const formValues = reactive({});
+
+// Countdown dialog state
+const countdownSecs = ref(0);
+const countdownPct = ref(100);
+let countdownTimer = null;
+
+watch(() => ui.dialog, (d) => {
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  if (!d) return;
+  if (d.type === 'countdown') {
+    const total = d.timeoutSeconds || 60;
+    const endTime = d.expiresAt * 1000;
+    countdownSecs.value = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+    countdownPct.value = (countdownSecs.value / total) * 100;
+    countdownTimer = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+      countdownSecs.value = remaining;
+      countdownPct.value = (remaining / total) * 100;
+      if (remaining <= 0) {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        ui.resolveDialog('rollback');
+      }
+    }, 500);
+  }
+}, { immediate: true });
+
+onUnmounted(() => {
+  if (countdownTimer) clearInterval(countdownTimer);
+});
 
 watch(() => ui.dialog, (d) => {
   if (!d || d.type !== 'form') return;
@@ -137,6 +167,26 @@ function groupedFields(d) {
       <pre class="code-dialog-content mono">{{ ui.dialog.content }}</pre>
       <div class="modal-actions">
         <button class="btn-secondary" @click="ui.resolveDialog()">{{ t('common.close') }}</button>
+      </div>
+    </div>
+
+    <!-- Countdown confirm dialog -->
+    <div v-else-if="ui.dialog.type === 'countdown'" class="modal">
+      <h3>{{ ui.dialog.title }}</h3>
+      <p class="text-dim">{{ ui.dialog.message }}</p>
+      <div class="countdown-bar-container">
+        <div class="countdown-bar" :style="{ width: countdownPct + '%' }"></div>
+      </div>
+      <p style="text-align:center;font-size:28px;font-weight:bold;margin:12px 0;">
+        {{ countdownSecs }}s
+      </p>
+      <div class="modal-actions">
+        <button class="btn-danger" @click="ui.resolveDialog('rollback')">
+          <i class="fa-solid fa-rotate-left"></i> {{ t('firewall.rollbackNow') }}
+        </button>
+        <button @click="ui.resolveDialog('confirm')">
+          <i class="fa-solid fa-check"></i> {{ t('firewall.keepChanges') }}
+        </button>
       </div>
     </div>
 
@@ -286,5 +336,19 @@ function groupedFields(d) {
 }
 .form-row-half .field {
   flex: 1;
+}
+.countdown-bar-container {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-elev2);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 16px 0 4px 0;
+}
+.countdown-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.5s linear;
+  border-radius: 4px;
 }
 </style>

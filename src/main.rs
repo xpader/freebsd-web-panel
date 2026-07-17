@@ -81,6 +81,28 @@ async fn main() -> anyhow::Result<()> {
     if user_count == 0 {
         tracing::warn!("no users yet — first-run setup required via the web UI");
     }
+
+    // Safety check: if the previous process died with an unconfirmed firewall
+    // change pending, roll it back now (the timer task was lost on restart).
+    if let Some(p) = crate::firewall_gen::get_pending_apply() {
+        if p.status == "pending" {
+            tracing::warn!(
+                "found unconfirmed firewall change on startup — rolling back"
+            );
+            let driver = p.driver;
+            let backup = p.backup_config.clone();
+            let was_enabled = p.was_enabled;
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                crate::firewall_gen::rollback(driver, &backup, was_enabled)
+            })
+            .await
+            {
+                tracing::error!(error = ?e, "startup rollback task failed");
+            }
+            crate::firewall_gen::clear_pending_apply();
+        }
+    }
+
     let app = build(state.clone());
     monitor::spawn_collector(state.clone());
     handlers::debug::spawn_tokio_accumulator(state);

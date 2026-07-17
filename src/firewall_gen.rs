@@ -157,7 +157,6 @@ pub struct AddressSpec {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FirewallRule {
     pub id: i64,
-    pub driver: FirewallDriver,
     pub position: u32,
     pub enabled: bool,
     pub action: RuleAction,
@@ -219,7 +218,7 @@ pub fn set_state(conn: &Connection, key: &str, value: &str) -> ApiResult<()> {
 
 pub fn list_rules(conn: &Connection) -> ApiResult<Vec<FirewallRule>> {
     let mut stmt = conn.prepare(
-        "SELECT id, driver, position, enabled, action, direction, protocol, \
+        "SELECT id, position, enabled, action, direction, protocol, \
          src_kind, src_value, src_port, dst_kind, dst_value, dst_port, \
          interface, log, icmp_type, description, created_at, updated_at \
          FROM firewall_rules ORDER BY position ASC",
@@ -228,33 +227,31 @@ pub fn list_rules(conn: &Connection) -> ApiResult<Vec<FirewallRule>> {
         .query_map([], |r| {
             Ok(FirewallRule {
                 id: r.get(0)?,
-                driver: FirewallDriver::from_str(&r.get::<_, String>(1)?)
-                    .unwrap_or(FirewallDriver::Ipfw),
-                position: r.get::<_, i64>(2)? as u32,
-                enabled: r.get::<_, i64>(3)? != 0,
-                action: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or(RuleAction::Allow),
-                direction: serde_json::from_str(&r.get::<_, String>(5)?)
+                position: r.get::<_, i64>(1)? as u32,
+                enabled: r.get::<_, i64>(2)? != 0,
+                action: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or(RuleAction::Allow),
+                direction: serde_json::from_str(&r.get::<_, String>(4)?)
                     .unwrap_or(RuleDirection::In),
-                protocol: serde_json::from_str(&r.get::<_, String>(6)?)
+                protocol: serde_json::from_str(&r.get::<_, String>(5)?)
                     .unwrap_or(RuleProtocol::Any),
                 source: AddressSpec {
-                    kind: serde_json::from_str(&r.get::<_, String>(7)?)
+                    kind: serde_json::from_str(&r.get::<_, String>(6)?)
                         .unwrap_or(AddressKind::Any),
-                    value: r.get(8)?,
+                    value: r.get(7)?,
                 },
-                source_port: r.get(9)?,
+                source_port: r.get(8)?,
                 destination: AddressSpec {
-                    kind: serde_json::from_str(&r.get::<_, String>(10)?)
+                    kind: serde_json::from_str(&r.get::<_, String>(9)?)
                         .unwrap_or(AddressKind::Any),
-                    value: r.get(11)?,
+                    value: r.get(10)?,
                 },
-                destination_port: r.get(12)?,
-                interface: r.get(13)?,
-                log: r.get::<_, i64>(14)? != 0,
-                icmp_type: r.get(15)?,
-                description: r.get(16)?,
-                created_at: r.get(17)?,
-                updated_at: r.get(18)?,
+                destination_port: r.get(11)?,
+                interface: r.get(12)?,
+                log: r.get::<_, i64>(13)? != 0,
+                icmp_type: r.get(14)?,
+                description: r.get(15)?,
+                created_at: r.get(16)?,
+                updated_at: r.get(17)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -289,10 +286,10 @@ pub fn create_rule(
     let pos = next_position(conn)?;
     conn.execute(
         "INSERT INTO firewall_rules \
-         (driver, position, enabled, action, direction, protocol, \
+         (position, enabled, action, direction, protocol, \
           src_kind, src_value, src_port, dst_kind, dst_value, dst_port, \
           interface, log, icmp_type, description, created_at, updated_at) \
-         VALUES ('ipfw', ?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+         VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
         params![
             pos,
             serde_json::to_string(&body.action).unwrap_or_default(),
@@ -733,7 +730,7 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
             "# Default policy: block all inbound, allow all outbound (whitelist mode)\n\
              set skip on lo0\n\
              block all\n\
-             pass out quick all keep state\n\n",
+             pass out quick all flags any keep state\n\n",
         );
     } else {
         buf.push_str(
@@ -1153,4 +1150,96 @@ pub fn preview_config(
         FirewallDriver::Ipfw => generate_ipfw(rules, mode, tables),
         FirewallDriver::Pf => generate_pf(rules, mode, tables),
     }
+}
+
+// ── anti-lockout: backup + rollback ────────────────────────────────
+
+/// Timeout in seconds before auto-rollback.
+pub const APPLY_TIMEOUT_SECS: i64 = 60;
+
+/// Path to the pending-apply JSON file.
+const PENDING_APPLY_PATH: &str = "/var/db/fwp/firewall_pending.json";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingApply {
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub operation: String,
+    pub driver: FirewallDriver,
+    pub was_enabled: bool,
+    pub backup_config: String,
+    pub status: String,
+}
+
+/// Write the pending-apply state as a JSON file.
+pub fn create_pending_apply(
+    operation: &str,
+    driver: FirewallDriver,
+    was_enabled: bool,
+    backup_config: &str,
+    now: i64,
+) -> ApiResult<()> {
+    let pending = PendingApply {
+        created_at: now,
+        expires_at: now + APPLY_TIMEOUT_SECS,
+        operation: operation.to_string(),
+        driver,
+        was_enabled,
+        backup_config: backup_config.to_string(),
+        status: "pending".to_string(),
+    };
+    let json = serde_json::to_string_pretty(&pending)
+        .map_err(|e| ApiError::Internal(format!("serialize pending: {e}")))?;
+    atomic_write(PENDING_APPLY_PATH, &json)?;
+    Ok(())
+}
+
+/// Read the pending-apply state from the JSON file, if it exists.
+pub fn get_pending_apply() -> Option<PendingApply> {
+    let data = fs::read_to_string(PENDING_APPLY_PATH).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+/// Delete the pending-apply file (used on confirm or after rollback).
+pub fn clear_pending_apply() {
+    let _ = fs::remove_file(PENDING_APPLY_PATH);
+}
+
+/// Read the current config file content for backup.
+pub fn read_config_file(driver: FirewallDriver) -> String {
+    let path = match driver {
+        FirewallDriver::Ipfw => IPFW_RULES_PATH,
+        FirewallDriver::Pf => PF_CONF_PATH,
+    };
+    fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Restore a backed-up config and revert runtime state.
+/// This runs local system commands — does not depend on network connectivity.
+pub fn rollback(driver: FirewallDriver, backup_config: &str, was_enabled: bool) -> ApiResult<()> {
+    let path = match driver {
+        FirewallDriver::Ipfw => IPFW_RULES_PATH,
+        FirewallDriver::Pf => PF_CONF_PATH,
+    };
+
+    // Restore the backup config file.
+    atomic_write(path, backup_config)?;
+
+    // Reload it into the kernel.
+    match driver {
+        FirewallDriver::Ipfw => {
+            cmd::run_sync(SH, &[path])?;
+        }
+        FirewallDriver::Pf => {
+            cmd::run_sync(PFCTL, &["-f", path])?;
+        }
+    }
+
+    // If the firewall was NOT enabled before the operation, disable it now.
+    if !was_enabled {
+        disable_firewall(driver)?;
+    }
+
+    tracing::warn!("firewall rollback completed (driver={driver:?}, was_enabled={was_enabled})");
+    Ok(())
 }

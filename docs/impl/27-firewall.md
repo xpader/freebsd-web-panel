@@ -50,13 +50,14 @@ struct FirewallRule {
 
 ```sql
 CREATE TABLE firewall_rules (
-    id, driver, position, enabled,
+    id, position, enabled,
     action, direction, protocol,
     src_kind, src_value, src_port,
     dst_kind, dst_value, dst_port,
     interface, log, icmp_type, description,
     created_at, updated_at
 );
+-- 所有规则统一存储，切换引擎时共用同一套规则，不按引擎分表
 
 CREATE TABLE firewall_state (
     key TEXT PRIMARY KEY,
@@ -83,7 +84,7 @@ CREATE TABLE firewall_table_entries (
 );
 ```
 
-> **注意**：`driver` 列保留但不再用于过滤——所有规则统一存储，切换引擎时共用同一套规则。
+> **注意**：规则与引擎完全解耦，所有规则统一存储。切换引擎时共用同一套规则，不按引擎分表。
 
 ### 规则生成
 
@@ -94,18 +95,18 @@ CREATE TABLE firewall_table_entries (
 - 白名单模式在规则 65534 前加 `ipfw -q add 65000 allow ip from any to any out keep-state`（放行出站，否则启用后 HTTP 响应出站包被 deny，导致连接挂起）
 - 白名单模式末尾加 `ipfw -q add 65534 deny ip from any to any`
 - 黑名单模式末尾加 `ipfw -q add 65534 allow ip from any to any`
-- allow 规则自动加 `keep-state`
+- allow 规则自动加 `keep-state`（deny/reject 规则不加）
 - ICMP 类型用数字（ipfw 不接受名字）
 - 多端口用逗号分隔：`80,443,8080-8090` 直接传递（ipfw 的花括号 `{ }` 是规则级 OR-list，不是端口列表）
 
 **pf**（`generate_pf`）— 生成 `/etc/pf.conf`：
 - 先生成 IP 名单声明：`table <NAME> { addr1, addr2 }` 或 `table <NAME> persist`（空名单）
 - 名单引用语法：`<NAME>`
-- 白名单模式：`block all` + `pass out quick all keep state` + `set skip on lo0`
+- 白名单模式：`set skip on lo0` + `block all` + `pass out quick all flags any keep state`
 - 黑名单模式：`set skip on lo0`（pf 默认放行）
 - 用户规则使用 `quick`（首个匹配生效，与 ipfw 语义一致）
 - `set skip on lo0` 必须在 `block all` 前面
-- TCP allow 规则加 `flags any keep state`；普通 `keep state` 会被 pf 隐式解析为 `flags S/SA`，使启用 PF 后现有连接的 ACK 无法匹配并被 `block all` 丢弃。其他 allow 规则加 `keep state`
+- **状态保持（keep state）自动判断**：allow + TCP → `flags any keep state`；allow + UDP/ICMP → 裸 `keep state`；allow + `any` 协议 → 裸 `keep state`（对无连接协议无实际效果，但不影响正确性）；deny/reject → 不加。PF 会将裸 `keep state` 隐式归一化为 `flags S/SA keep state`，所以 TCP 必须显式写 `flags any`，确保 PF 在已有连接中途启用时，出站 ACK 包（非 SYN）也能创建状态、不被 `block all` 丢弃。白名单出站基线规则 `pass out quick all flags any keep state` 同理
 - ICMP 类型用数字（FreeBSD pf 不接受名字）
 - 地址族判定优先级：ICMP → inet/inet6（`icmp-type` 必需）；Table 引用 → 省略 AF（支持混合 IPv4/IPv6）；其余按地址内容检测 v4/v6
 - 离散/连续端口转换：`80,443,8080-8090` → `{ 80, 443, 8080:8090 }`
@@ -138,10 +139,11 @@ CREATE TABLE firewall_table_entries (
 
 ### 启用/禁用
 
-**enable**：确保当前驱动 `*_enable=YES`，对方 `*_enable=NO`，然后仅翻转运行时开关（不重新加载规则——规则已由之前的 Apply 或 Switch 加载到内核内存中）。
+**enable**：确保当前驱动 `*_enable=YES`，对方 `*_enable=NO`，备份配置文件，创建 pending 记录，然后仅翻转运行时开关（不重新加载规则——规则已由之前的 Apply 或 Switch 加载到内核内存中），最后 spawn 倒计时定时器。
 - ipfw: `sysctl net.inet.ip.fw.enable=1`
 - pf: `pfctl -e`
 - **不在此处调用 `pfctl -f`**——会刷新 state table 杀死当前 HTTP 连接
+- **防锁死**：enable 必定触发倒计时（`was_enabled=false`，回滚时禁用防火墙）
 
 **disable**：运行时禁用 + rc.conf 设为 `NO`。
 - ipfw: `sysctl net.inet.ip.fw.enable=0` + `sysrc firewall_enable=NO`
@@ -165,11 +167,67 @@ CREATE TABLE firewall_table_entries (
 
 ### Apply 流程
 
-1. 从 DB 读取所有 enabled 规则
-2. 调用生成器生成配置文件内容
-3. 原子写入配置文件（临时文件 → rename）
-4. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `pfctl -f /etc/pf.conf`）
-5. 设 `rules_dirty=0`
+1. 检查是否有 pending confirm（如有则拒绝——`409 Conflict`）
+2. 从 DB 读取所有 enabled 规则
+3. 检查防火墙当前是否已启用
+4. **备份当前配置文件内容**（读 `/etc/pf.conf` 或 `/etc/ipfw.rules` 全文）
+5. 调用生成器生成配置文件内容
+6. 原子写入配置文件（临时文件 → rename）
+7. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `pfctl -f /etc/pf.conf`）
+8. 设 `rules_dirty=0`
+9. **如果防火墙已启用**：
+   - 创建 `firewall_pending_apply` 记录（备份配置 + `was_enabled=true` + `expires_at=now+60s`）
+   - spawn 倒计时任务（`tokio::spawn(sleep 60s)` → 检查 pending → 自动 rollback）
+   - 返回 `pending_confirm: { expires_at, timeout_seconds }`
+10. **如果防火墙未启用**：直接返回（规则加载但不强制，无需倒计时）
+
+### 防锁死机制（anti-lockout）
+
+**目的**：防止用户 apply 或 enable 新规则后，规则阻断了管理连接（HTTP/SSH），导致无法远程恢复。
+
+**机制**：备份 → 应用 → 倒计时确认 → 超时自动回滚。
+
+**数据结构**：`/var/db/fwp/firewall_pending.json`（JSON 文件，原子写入）：
+```json
+{
+  "created_at": 1705312200,
+  "expires_at": 1705312260,
+  "operation": "apply",
+  "driver": "pf",
+  "was_enabled": true,
+  "backup_config": "# Managed by ...\nblock all\n...",
+  "status": "pending"
+}
+```
+> 使用独立 JSON 文件而非 DB 表，因为 pending 数据是临时性的，不需要持久化 schema，且便于排查时直接查看。
+
+**触发条件**：
+| 操作 | 防火墙已启用 | 触发倒计时 |
+|---|---|---|
+| apply | 是 | 是 |
+| apply | 否 | 否（规则不强制执行，安全） |
+| enable | — | 是 |
+| switch | — | 否（结果保持 disabled） |
+
+**回滚流程**（`rollback()` in `firewall_gen.rs`）：
+1. 将 `backup_config` 写回配置文件（原子写入）
+2. 重新加载配置（ipfw: `sh /etc/ipfw.rules`；pf: `pfctl -f`）
+3. 如果 `was_enabled=false`：禁用防火墙（`disable_firewall`）
+4. 删除 `/var/db/fwp/firewall_pending.json`
+
+> 回滚通过进程内 `tokio::spawn(sleep)` 定时器触发，执行本地系统命令（`pfctl`/`sysctl`），不经过网络。即使新规则阻断了所有网络流量，本地命令仍可执行。
+
+**启动安全检查**：`main.rs` 启动时检查 `/var/db/fwp/firewall_pending.json` 是否存在。如果有（说明进程非正常退出，定时器丢失），立即回滚。
+
+**API**：
+- `POST /api/firewall/confirm` — 确认变更有效，清除 pending 记录
+- `POST /api/firewall/rollback` — 用户主动回滚，恢复备份配置
+
+**前端**：
+- apply/enable 返回 `pending_confirm` 时，弹出倒计时对话框（`countdown` 类型）
+- 对话框显示剩余秒数和进度条，提供「保留变更」和「立即恢复」按钮
+- 倒计时归零自动触发 rollback
+- 如果 apply 请求因连接中断而失败，前端通过 status 轮询检测 `pending_confirm` 并弹出对话框
 
 ### 文件结构
 
@@ -186,8 +244,8 @@ frontend/src/
 │   ├── FirewallTablesPage.vue   # IP 名单管理（可折叠列表 + 条目增删）
 │   └── FirewallSettingsPage.vue # 设置（引擎切换 + 模式切换 + 启动/停止按钮）
 ├── lib/menu.js                  # 两级菜单：/firewall → rules/tables/settings
-├── composables/useDialog.js     # 新增 useCodePreview() 配置预览弹窗
-└── components/ui/DialogHost.vue # 新增 code 弹窗类型（宽模态 + <pre> 展示配置内容）
+├── composables/useDialog.js     # useCodePreview() + useCountdown() 倒计时弹窗
+└── components/ui/DialogHost.vue # code 弹窗 + countdown 倒计时确认弹窗
 ```
 
 ## API
@@ -206,7 +264,9 @@ frontend/src/
 | DELETE | `/api/firewall/rules/{id}` | 删除规则 |
 | PUT | `/api/firewall/rules/{id}/toggle` | 启用/禁用规则 |
 | PUT | `/api/firewall/rules/reorder` | 重排序 `{ ordered_ids }` |
-| POST | `/api/firewall/apply` | 生成配置 + 加载规则 |
+| POST | `/api/firewall/apply` | 生成配置 + 加载规则（已启用时触发防锁死倒计时） |
+| POST | `/api/firewall/confirm` | 确认变更有效，清除 pending 记录 |
+| POST | `/api/firewall/rollback` | 回滚到备份配置 |
 | GET | `/api/firewall/config` | 预览生成的配置文件内容 |
 | GET | `/api/firewall/tables` | 列出所有 IP 名单（含条目） |
 | POST | `/api/firewall/tables` | 创建 IP 名单 `{ name, description }` |
@@ -231,10 +291,12 @@ frontend/src/
 
 ## 已知限制 / TODO
 
-1. **不支持 NAT/转发规则** — 仅过滤规则
-2. **不导入已有配置** — 初始化时生成空白规则集（仅默认策略）
+1. **不支持 NAT/转发规则** — 仅过滤规则（P2-E 计划）
+2. **不导入已有配置** — 初始化时生成空白规则集（P2-F 计划）
 3. **pf 的 `(self)` 地址** — 表示本机所有 IP，不支持指定接口地址
-4. **无规则可达性分析** — 不检测规则冲突或冗余
+4. **无规则可达性分析** — 不检测规则冲突或冗余（P2-B 计划）
 5. **ipfw 的 `default_to_accept` boot tunable** — 不修改 loader.conf，通过规则 65534 在运行时控制
-6. **删除被规则引用的名单** — 不检查引用关系，删除后 pf apply 会因 table 未定义而失败（ipfw 则该 table 匹配空集）
+6. **删除被规则引用的名单** — 不检查引用关系，删除后 pf apply 会因 table 未定义而失败（ipfw 则该 table 匹配空集）（P2-B 计划引用完整性检查）
 7. **ipfw table 持久化** — 依赖规则脚本重建，不使用 `ipfw table ... add` 的持久化机制
+8. **无配置备份/版本历史** — 当前防锁死机制仅保留最近一次备份，不支持历史版本浏览（P2-D 计划）
+9. **模式切换不触发倒计时** — `set_mode` 直接重新加载规则（pf）或切换默认策略（ipfw），不走防锁死流程

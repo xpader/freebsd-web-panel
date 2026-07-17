@@ -24,6 +24,11 @@ export function useCodePreview() {
     ui.showDialog({ type: 'code', title, content });
 }
 
+export function useCountdown() {
+  return (title, message, expiresAt, timeoutSeconds) =>
+    ui.showDialog({ type: 'countdown', title, message, expiresAt, timeoutSeconds });
+}
+
 export function useFormModal() {
   return (title, fields, opts = {}) =>
     ui.showDialog({

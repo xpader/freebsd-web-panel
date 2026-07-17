@@ -24,6 +24,15 @@ pub struct FirewallStatus {
     pub module_loaded: bool,
     pub rules_count: i64,
     pub pending_apply: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_confirm: Option<PendingConfirmInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingConfirmInfo {
+    pub expires_at: i64,
+    pub timeout_seconds: i64,
+    pub operation: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +82,58 @@ async fn is_dirty(state: &AppState) -> bool {
         .unwrap_or(false)
 }
 
+/// Check for a pending apply confirmation.
+async fn get_pending_confirm() -> Option<PendingConfirmInfo> {
+    let p = fw::get_pending_apply()?;
+    if p.status != "pending" {
+        return None;
+    }
+    Some(PendingConfirmInfo {
+        expires_at: p.expires_at,
+        timeout_seconds: fw::APPLY_TIMEOUT_SECS,
+        operation: p.operation,
+    })
+}
+
+/// Reject if there is an unconfirmed pending apply.
+async fn check_no_pending() -> ApiResult<()> {
+    if get_pending_confirm().await.is_some() {
+        return Err(ApiError::Conflict(
+            "firewall change pending confirmation".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Spawn the auto-rollback timer for a pending apply.
+fn spawn_rollback_timer() {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(
+            fw::APPLY_TIMEOUT_SECS as u64,
+        ))
+        .await;
+
+        if let Some(p) = fw::get_pending_apply() {
+            if p.status == "pending" {
+                tracing::warn!("firewall apply timeout — auto-rolling back");
+                let driver = p.driver;
+                let backup = p.backup_config.clone();
+                let was_enabled = p.was_enabled;
+                let result = tokio::task::spawn_blocking(move || {
+                    fw::rollback(driver, &backup, was_enabled)
+                })
+                .await;
+
+                fw::clear_pending_apply();
+
+                if let Err(e) = result {
+                    tracing::error!(error = ?e, "rollback task panicked");
+                }
+            }
+        }
+    });
+}
+
 // ── handlers ───────────────────────────────────────────────────────
 
 /// GET /api/firewall/status
@@ -106,6 +167,7 @@ pub async fn status(State(state): State<AppState>) -> ApiResult<Json<FirewallSta
         module_loaded,
         rules_count,
         pending_apply: is_dirty(&state).await,
+        pending_confirm: get_pending_confirm().await,
     }))
 }
 
@@ -171,6 +233,7 @@ pub async fn initialize(
             module_loaded: true,
             rules_count: count,
             pending_apply: false,
+            pending_confirm: None,
         }),
     ))
 }
@@ -250,6 +313,7 @@ pub async fn switch(
         module_loaded: true,
         rules_count: count,
         pending_apply: false,
+        pending_confirm: None,
     }))
 }
 
@@ -262,21 +326,33 @@ pub async fn enable(
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
 
+    check_no_pending().await?;
+
+    // Backup current config file before enabling.
+    let backup_config = {
+        let d = driver;
+        tokio::task::spawn_blocking(move || fw::read_config_file(d))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+    };
+
+    let now = state.now_ts();
+    fw::create_pending_apply("enable", driver, false, &backup_config, now)?;
+
     let d = driver;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        // Ensure active driver rc.conf is YES, inactive is NO
         crate::sysrc::set("firewall_enable", if d == FirewallDriver::Ipfw { "YES" } else { "NO" })
             .map_err(|e| ApiError::Command(e))?;
         crate::sysrc::set("pf_enable", if d == FirewallDriver::Pf { "YES" } else { "NO" })
             .map_err(|e| ApiError::Command(e))?;
-        // Just flip the switch — rules are already loaded in memory from
-        // a prior Apply or Switch. Do NOT re-apply here: pfctl -f flushes
-        // the state table and kills the current HTTP connection.
         fw::enable_firewall(d)?;
         Ok(())
     })
         .await
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    // Start auto-rollback timer.
+    spawn_rollback_timer();
 
     audit::record(
         &state,
@@ -284,7 +360,7 @@ pub async fn enable(
         "POST",
         "/api/firewall/enable",
         200,
-        Some(format!("enabled firewall ({driver:?})")),
+        Some(format!("enabled firewall ({driver:?}) — pending confirm")),
     );
 
     let conn = state.db.lock().await;
@@ -299,6 +375,7 @@ pub async fn enable(
         module_loaded: true,
         rules_count: count,
         pending_apply: is_dirty(&state).await,
+        pending_confirm: get_pending_confirm().await,
     }))
 }
 
@@ -349,6 +426,7 @@ pub async fn disable(
         module_loaded: true,
         rules_count: count,
         pending_apply: is_dirty(&state).await,
+        pending_confirm: None,
     }))
 }
 
@@ -416,6 +494,7 @@ pub async fn set_mode(
         module_loaded: true,
         rules_count: count,
         pending_apply: false,
+        pending_confirm: None,
     }))
 }
 
@@ -598,9 +677,25 @@ pub async fn apply(
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
 
+    check_no_pending().await?;
+
     let (rules, tables): (Vec<fw::FirewallRule>, Vec<fw::IpTable>) = {
         let conn = state.db.lock().await;
         (fw::list_rules(&conn)?, fw::list_tables(&conn)?)
+    };
+
+    // Check if firewall is currently enabled — if so, we need anti-lockout.
+    let d0 = driver;
+    let is_enabled = tokio::task::spawn_blocking(move || fw::is_firewall_enabled(d0))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+
+    // Backup current config before applying.
+    let backup_config = {
+        let d = driver;
+        tokio::task::spawn_blocking(move || fw::read_config_file(d))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
     };
 
     let rules_clone = rules.clone();
@@ -621,6 +716,21 @@ pub async fn apply(
         fw::set_state(&conn, "rules_dirty", "0")?;
     }
 
+    // If firewall was enabled, set up pending confirmation + auto-rollback.
+    let pending_confirm = if is_enabled {
+        let now = state.now_ts();
+        fw::create_pending_apply("apply", driver, true, &backup_config, now)?;
+        spawn_rollback_timer();
+
+        serde_json::json!({
+            "expires_at": now + fw::APPLY_TIMEOUT_SECS,
+            "timeout_seconds": fw::APPLY_TIMEOUT_SECS,
+            "operation": "apply",
+        })
+    } else {
+        serde_json::Value::Null
+    };
+
     audit::record(
         &state,
         Some(&auth.username),
@@ -634,6 +744,7 @@ pub async fn apply(
         "applied": true,
         "driver": driver,
         "rules_count": rules.iter().filter(|r| r.enabled).count(),
+        "pending_confirm": pending_confirm,
     })))
 }
 
@@ -824,4 +935,128 @@ pub async fn delete_entry(
     );
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/firewall/confirm
+pub async fn confirm(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<FirewallStatus>> {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
+    let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
+
+    let pending = fw::get_pending_apply();
+    if pending.is_none() || pending.as_ref().unwrap().status != "pending" {
+        return Err(ApiError::BadRequest("no pending firewall change".into()));
+    }
+    fw::clear_pending_apply();
+
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        "/api/firewall/confirm",
+        200,
+        Some(format!("confirmed firewall change ({driver:?})")),
+    );
+
+    let conn = state.db.lock().await;
+    let count = fw::count_enabled_rules(&conn)?;
+    drop(conn);
+
+    let (enabled, module_loaded) = {
+        let d = driver;
+        tokio::task::spawn_blocking(move || (fw::is_firewall_enabled(d), d.module_loaded()))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+    };
+
+    Ok(Json(FirewallStatus {
+        driver: Some(driver),
+        initialized: true,
+        enabled,
+        mode: Some(mode),
+        module_loaded,
+        rules_count: count,
+        pending_apply: is_dirty(&state).await,
+        pending_confirm: None,
+    }))
+}
+
+/// POST /api/firewall/rollback
+pub async fn rollback(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<FirewallStatus>> {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
+    let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
+
+    // If no pending file exists, the auto-rollback timer already fired.
+    // Return current status instead of erroring (idempotent rollback).
+    let p = match fw::get_pending_apply().filter(|p| p.status == "pending") {
+        Some(p) => p,
+        None => {
+            let conn = state.db.lock().await;
+            let count = fw::count_enabled_rules(&conn)?;
+            drop(conn);
+            let (enabled, module_loaded) = {
+                let d = driver;
+                tokio::task::spawn_blocking(move || (fw::is_firewall_enabled(d), d.module_loaded()))
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+            };
+            return Ok(Json(FirewallStatus {
+                driver: Some(driver),
+                initialized: true,
+                enabled,
+                mode: Some(mode),
+                module_loaded,
+                rules_count: count,
+                pending_apply: is_dirty(&state).await,
+                pending_confirm: None,
+            }));
+        }
+    };
+
+    let rollback_driver = p.driver;
+    let backup = p.backup_config.clone();
+    let was_enabled = p.was_enabled;
+    tokio::task::spawn_blocking(move || fw::rollback(rollback_driver, &backup, was_enabled))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    fw::clear_pending_apply();
+
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        "/api/firewall/rollback",
+        200,
+        Some(format!("rolled back firewall change ({driver:?})")),
+    );
+
+    let conn = state.db.lock().await;
+    let count = fw::count_enabled_rules(&conn)?;
+    drop(conn);
+
+    let (enabled, module_loaded) = {
+        let d = p.driver;
+        tokio::task::spawn_blocking(move || (fw::is_firewall_enabled(d), d.module_loaded()))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+    };
+
+    Ok(Json(FirewallStatus {
+        driver: Some(p.driver),
+        initialized: true,
+        enabled,
+        mode: Some(mode),
+        module_loaded,
+        rules_count: count,
+        pending_apply: is_dirty(&state).await,
+        pending_confirm: None,
+    }))
 }

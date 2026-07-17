@@ -2,7 +2,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { useToast, useAlert, useConfirm, useFormModal, useCodePreview } from '../composables/useDialog.js';
+import { useToast, useAlert, useConfirm, useFormModal, useCodePreview, useCountdown } from '../composables/useDialog.js';
+import { ui } from '../stores/ui.js';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -10,6 +11,7 @@ const alert = useAlert();
 const confirm = useConfirm();
 const formModal = useFormModal();
 const codePreview = useCodePreview();
+const countdown = useCountdown();
 
 const status = ref(null);
 const rules = ref([]);
@@ -51,7 +53,7 @@ async function loadTables() {
 
 async function loadAll() {
   await loadStatus();
-  await Promise.all([loadRules(), loadTables()]);
+  await loadRules();
 }
 
 async function showConfigPreview() {
@@ -112,10 +114,43 @@ async function doToggleEnabled() {
     }
   } else {
     try {
-      status.value = await api.post('/api/firewall/enable');
-      toast.toast(t('firewall.enabled'));
+      const resp = await api.post('/api/firewall/enable');
+      status.value = resp;
+      if (resp.pending_confirm) {
+        await showCountdownIfPending(resp);
+      } else {
+        toast.toast(t('firewall.enabled'));
+      }
     } catch (e) {
       await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    }
+  }
+}
+
+async function showCountdownIfPending(resp) {
+  const pc = resp?.pending_confirm;
+  if (!pc) return;
+  const action = await countdown(
+    t('firewall.confirmTitle'),
+    t('firewall.confirmMessage'),
+    pc.expires_at,
+    pc.timeout_seconds,
+  );
+  if (action === 'confirm') {
+    try {
+      status.value = await api.post('/api/firewall/confirm');
+      toast.toast(t('firewall.confirmed'));
+    } catch (e) {
+      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+      await loadStatus();
+    }
+  } else {
+    try {
+      status.value = await api.post('/api/firewall/rollback');
+      toast.toast(t('firewall.rolledBack'));
+    } catch (e) {
+      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+      await loadStatus();
     }
   }
 }
@@ -362,12 +397,22 @@ async function doMoveRule(index, direction) {
 
 async function doApply() {
   try {
-    await api.post('/api/firewall/apply');
-    toast.toast(t('firewall.applied'));
+    const resp = await api.post('/api/firewall/apply');
     status.value.pending_apply = false;
+    if (resp.pending_confirm) {
+      await showCountdownIfPending(resp);
+    } else {
+      toast.toast(t('firewall.applied'));
+    }
     await loadStatus();
   } catch (e) {
-    await alert(t('firewall.applyFailed'), e.message || t('firewall.applyFailed'));
+    // Connection may have been lost — poll status to check for pending_confirm.
+    await loadStatus();
+    if (status.value?.pending_confirm) {
+      await showCountdownIfPending(status.value);
+    } else {
+      await alert(t('firewall.applyFailed'), e.message || t('firewall.applyFailed'));
+    }
   }
 }
 
@@ -392,7 +437,16 @@ function protoLabel(p) {
 let pollTimer = null;
 onMounted(() => {
   loadAll();
-  pollTimer = setInterval(loadStatus, 5000);
+  pollTimer = setInterval(async () => {
+    // Only poll when there's an active pending confirmation (countdown timer running).
+    // Otherwise the page is static — status was already loaded on mount.
+    if (status.value?.pending_confirm && !ui.dialog) {
+      await loadStatus();
+      if (status.value?.pending_confirm) {
+        showCountdownIfPending(status.value);
+      }
+    }
+  }, 5000);
 });
 onUnmounted(() => clearInterval(pollTimer));
 </script>

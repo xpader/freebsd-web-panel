@@ -2,13 +2,15 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import { useToast, useAlert, useConfirm, useFormModal, useCountdown } from '../composables/useDialog.js';
+import { ui } from '../stores/ui.js';
 
 const { t } = useI18n();
 const toast = useToast();
 const alert = useAlert();
 const confirm = useConfirm();
 const formModal = useFormModal();
+const countdown = useCountdown();
 
 const status = ref(null);
 const loading = ref(true);
@@ -71,10 +73,43 @@ async function doToggleEnabled() {
     }
   } else {
     try {
-      status.value = await api.post('/api/firewall/enable');
-      toast.toast(t('firewall.enabled'));
+      const resp = await api.post('/api/firewall/enable');
+      status.value = resp;
+      if (resp.pending_confirm) {
+        await showCountdownIfPending(resp);
+      } else {
+        toast.toast(t('firewall.enabled'));
+      }
     } catch (e) {
       await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    }
+  }
+}
+
+async function showCountdownIfPending(resp) {
+  const pc = resp?.pending_confirm;
+  if (!pc) return;
+  const action = await countdown(
+    t('firewall.confirmTitle'),
+    t('firewall.confirmMessage'),
+    pc.expires_at,
+    pc.timeout_seconds,
+  );
+  if (action === 'confirm') {
+    try {
+      status.value = await api.post('/api/firewall/confirm');
+      toast.toast(t('firewall.confirmed'));
+    } catch (e) {
+      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+      await loadStatus();
+    }
+  } else {
+    try {
+      status.value = await api.post('/api/firewall/rollback');
+      toast.toast(t('firewall.rolledBack'));
+    } catch (e) {
+      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+      await loadStatus();
     }
   }
 }
@@ -110,7 +145,15 @@ async function doSwitchMode(newMode) {
 let pollTimer = null;
 onMounted(() => {
   loadStatus();
-  pollTimer = setInterval(loadStatus, 5000);
+  pollTimer = setInterval(async () => {
+    // Only poll when there's an active pending confirmation (countdown timer running).
+    if (status.value?.pending_confirm && !ui.dialog) {
+      await loadStatus();
+      if (status.value?.pending_confirm) {
+        showCountdownIfPending(status.value);
+      }
+    }
+  }, 5000);
 });
 onUnmounted(() => clearInterval(pollTimer));
 </script>

@@ -1,12 +1,5 @@
 <script setup>
-import { onMounted } from 'vue';
-import { useAuthStore } from './stores/auth.js';
-
-const auth = useAuthStore();
-
-onMounted(() => {
-  if (auth.isLoggedIn()) auth.fetchUser();
-});
+// User info is loaded globally in the router guard and shared via Pinia.
 </script>
 
 <template>

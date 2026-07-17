@@ -27,6 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function fetchUser() {
     if (!token.value) return null;
+    if (user.value) return user.value;
     try {
       user.value = await api.get('/api/auth/me');
       return user.value;

@@ -45,7 +45,6 @@ function closeOnClick(e) {
 
 onMounted(() => {
   document.addEventListener('click', closeOnClick);
-  if (auth.isLoggedIn() && !auth.user) auth.fetchUser();
 });
 </script>
 

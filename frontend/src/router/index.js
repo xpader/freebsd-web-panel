@@ -144,6 +144,9 @@ router.beforeEach(async (to) => {
     return setup ? { name: 'setup' } : { name: 'login' };
   }
 
+  // Load user info once via Pinia (shared across all components).
+  if (!auth.user) await auth.fetchUser();
+
   return true;
 });
 
