@@ -198,7 +198,7 @@ CREATE TABLE firewall_table_entries (
 
 **`effective_state()`**：读取规则/表时，优先返回 staging（若存在），否则返回 DB。所有 list_rules、list_tables、config 预览、apply 都使用此函数。
 
-**`regen_config()`**：从 DB 读取规则 + 表，调用 `write_config_only()` 生成配置文件但不加载到内核。防火墙未启用时使用，确保配置文件始终与 DB 一致。
+**`regen_config()`**：从 DB 读取规则 + 表，调用 `write_config_only()` 生成配置文件但不加载到内核。防火墙未启用时使用，确保配置文件始终与 DB 一致。PF 路径仅 `atomic_write` 不做 `pfctl -n` 校验（PF 模块可能未加载，`/dev/pf` 不存在时校验会卡住）；ipfw 路径同理只写文件。校验延迟到 apply/enable 时执行。
 
 ### Apply 流程
 
@@ -208,13 +208,14 @@ CREATE TABLE firewall_table_entries (
 4. **备份当前配置文件内容**（读 `/etc/pf.conf` 或 `/etc/ipfw.rules` 全文）
 5. 调用生成器生成配置文件内容
 6. 原子写入配置文件（临时文件 → rename）
-7. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `service pf reload` = `pfctl -n -f` 验证 + `pfctl -f` 加载）
+7. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `service pf reload` = `pfctl -n -f` 验证 + `pfctl -f` 加载，然后 `pfctl -F states` 刷新状态表——强制断开旧连接，使新规则立即对所有连接生效）
 8. 清除 `rules_dirty` 标记（历史遗留，暂存机制已接管 pending_apply 语义）
 9. **如果防火墙已启用**：
    - 写入 `/var/db/fwp/firewall_pending.json`（备份配置 + `was_enabled=true` + `expires_at=now+60s`）
    - **staging 文件保留不删除**——confirm 时提交到 DB，rollback 时丢弃
    - spawn 倒计时任务（`tokio::spawn(sleep 60s)` → 检查 pending → 自动 rollback）
    - 返回 `pending_confirm: { expires_at, timeout_seconds, operation }`
+   - **响应头附加 `Connection: close`**——告诉浏览器不复用此 TCP 连接。因 apply 后 `pfctl -F states` 会杀死当前连接，浏览器需重新建连发后续请求
 10. **如果防火墙未启用**：直接返回（规则加载但不强制，无需倒计时）
 
 ### 防锁死机制（anti-lockout）
@@ -258,6 +259,7 @@ CREATE TABLE firewall_table_entries (
 **API**：
 - `POST /api/firewall/confirm` — 确认变更有效：清除 pending 记录 + staging 写入 DB（全量 replace）+ 删除 staging
 - `POST /api/firewall/rollback` — 用户主动回滚：恢复备份配置 + 清除 pending 记录 + 删除 staging（DB 从未改动）
+- `POST /api/firewall/discard` — 丢弃未提交的 staging 变更：仅删除 staging 文件（DB 从未改动，无 pending 记录）。与 rollback 的区别：discard 在 apply 之前使用（规则尚未加载到内核），rollback 在 apply 之后使用（规则已加载、需恢复备份）
 
 **前端**：
 - apply/enable 返回 `pending_confirm` 时，弹出倒计时对话框（`countdown` 类型）
@@ -307,6 +309,7 @@ frontend/src/
 | POST | `/api/firewall/apply` | 生成配置 + 加载规则（已启用时触发防锁死倒计时） |
 | POST | `/api/firewall/confirm` | 确认变更有效，清除 pending 记录 |
 | POST | `/api/firewall/rollback` | 回滚到备份配置 |
+| POST | `/api/firewall/discard` | 丢弃未提交的 staging 变更（仅删 staging 文件）|
 | GET | `/api/firewall/config` | 预览生成的配置文件内容 |
 | GET | `/api/firewall/tables` | 列出所有 IP 名单（含条目） |
 | POST | `/api/firewall/tables` | 创建 IP 名单 `{ name, description }` |
