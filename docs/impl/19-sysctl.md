@@ -77,7 +77,7 @@ struct SysctlEntry {
 - 修改项：橙色 "Modified" 徽章 + 行高亮
 - 可写项：蓝色 "Writable" 徽章
 - 可写参数显示「编辑」按钮；已持久化参数显示「重置」按钮
-- 编辑流程：formModal 输入新值 → 确认是否持久化 → PUT API
+- 编辑流程：formModal 输入新值 → PUT API（运行时生效 + 持久化到 sysctl.conf）
 - 重置流程：确认对话框 → DELETE API（从 sysctl.conf 移除）
 
 源码：`web/js/pages/sysctl.js`
@@ -87,7 +87,7 @@ struct SysctlEntry {
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/sysctl` | 列出全部 sysctl（按名称排序），可选 `?q=` 过滤 |
-| PUT | `/api/sysctl/{name}` | 设置运行时值，可选 `persist: true` 持久化到 sysctl.conf |
+| PUT | `/api/sysctl/{name}` | 设置运行时值并持久化到 sysctl.conf（重启后仍生效） |
 | DELETE | `/api/sysctl/{name}` | 从 sysctl.conf 移除（恢复默认值，重启后生效） |
 
 ### 备份机制

@@ -580,11 +580,10 @@ fn remove_from_sysctl_conf(name: &str) -> ApiResult<()> {
 #[derive(Debug, Deserialize)]
 pub struct SetBody {
     pub value: String,
-    pub persist: Option<bool>,
 }
 
-/// PUT /api/sysctl/{name} — set a sysctl value at runtime, optionally persisting
-/// to /etc/sysctl.conf (with backup).
+/// PUT /api/sysctl/{name} — set a sysctl value at runtime AND persist it to
+/// /etc/sysctl.conf (with backup) so the change survives reboot.
 pub async fn set(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -622,15 +621,12 @@ pub async fn set(
         )));
     }
 
-    // Set runtime value.
+    // Set runtime value (takes effect immediately).
     set_runtime_value(&mib, typ, &body.value)?;
 
-    // Persist to sysctl.conf if requested.
-    let persist = body.persist.unwrap_or(false);
-    if persist {
-        backup_sysctl_conf(&state);
-        upsert_sysctl_conf(&name, &body.value)?;
-    }
+    // Always persist to sysctl.conf so the change survives reboot.
+    backup_sysctl_conf(&state);
+    upsert_sysctl_conf(&name, &body.value)?;
 
     audit::record(
         &state,
@@ -638,11 +634,7 @@ pub async fn set(
         "PUT",
         &format!("/api/sysctl/{name}"),
         200,
-        Some(format!(
-            "set sysctl '{name}' = '{}'{}",
-            body.value,
-            if persist { " (persisted)" } else { "" }
-        )),
+        Some(format!("set sysctl '{name}' = '{}' (persisted)", body.value)),
     );
 
     // Read back current value.
