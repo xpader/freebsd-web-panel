@@ -89,11 +89,18 @@ async function doToggleEnabled() {
 async function showCountdownIfPending(resp) {
   const pc = resp?.pending_confirm;
   if (!pc) return;
+  const isEnable = pc.operation === 'enable';
   const action = await countdown(
-    t('firewall.confirmTitle'),
-    t('firewall.confirmMessage'),
+    isEnable ? t('firewall.confirmTitleEnable') : t('firewall.confirmTitle'),
+    isEnable ? t('firewall.confirmMessageEnable') : t('firewall.confirmMessage'),
     pc.expires_at,
     pc.timeout_seconds,
+    {
+      rollbackLabel: isEnable ? t('firewall.rollbackNowEnable') : t('firewall.rollbackNowApply'),
+      confirmLabel: isEnable ? t('firewall.keepChangesEnable') : t('firewall.keepChangesApply'),
+      probeUrl: '/api/firewall/status',
+      warningMessage: t('firewall.serverUnreachable'),
+    },
   );
   if (action === 'confirm') {
     try {

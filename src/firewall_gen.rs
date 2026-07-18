@@ -5,7 +5,6 @@
 //! rules + firewall state.
 
 use std::fs;
-use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -14,11 +13,13 @@ use crate::error::{ApiError, ApiResult};
 
 // ── binary paths ───────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const IPFW: &str = "/sbin/ipfw";
 const PFCTL: &str = "/sbin/pfctl";
 const KLDLOAD: &str = "/sbin/kldload";
 const KLDSTAT: &str = "/sbin/kldstat";
 const SYSCTL: &str = "/sbin/sysctl";
+const SERVICE: &str = "/usr/sbin/service";
 const SH: &str = "/bin/sh";
 
 const IPFW_RULES_PATH: &str = "/etc/ipfw.rules";
@@ -115,7 +116,7 @@ pub enum AddressKind {
 
 // ── IP table types ──
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IpTableEntry {
     pub id: i64,
     pub table_id: i64,
@@ -123,7 +124,7 @@ pub struct IpTableEntry {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IpTable {
     pub id: i64,
     pub name: String,
@@ -154,7 +155,7 @@ pub struct AddressSpec {
     pub value: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FirewallRule {
     pub id: i64,
     pub position: u32,
@@ -256,6 +257,40 @@ pub fn list_rules(conn: &Connection) -> ApiResult<Vec<FirewallRule>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Replace all rules in DB with the given list (for staging confirm).
+pub fn replace_all_rules(conn: &Connection, rules: &[FirewallRule]) -> ApiResult<()> {
+    conn.execute("DELETE FROM firewall_rules", [])?;
+    for (i, rule) in rules.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO firewall_rules \
+             (id, position, enabled, action, direction, protocol, \
+              src_kind, src_value, src_port, dst_kind, dst_value, dst_port, \
+              interface, log, icmp_type, description, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
+            params![
+                rule.id,
+                i as i64,
+                rule.enabled as i64,
+                serde_json::to_string(&rule.action).unwrap_or_default(),
+                serde_json::to_string(&rule.direction).unwrap_or_default(),
+                serde_json::to_string(&rule.protocol).unwrap_or_default(),
+                serde_json::to_string(&rule.source.kind).unwrap_or_default(),
+                rule.source.value,
+                rule.source_port,
+                serde_json::to_string(&rule.destination.kind).unwrap_or_default(),
+                rule.destination.value,
+                rule.destination_port,
+                rule.interface,
+                rule.log as i64,
+                rule.icmp_type,
+                rule.description,
+                rule.created_at,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn count_enabled_rules(conn: &Connection) -> ApiResult<i64> {
@@ -437,9 +472,25 @@ pub fn list_tables(conn: &Connection) -> ApiResult<Vec<IpTable>> {
     Ok(tables)
 }
 
-pub fn get_table_by_name(conn: &Connection, name: &str) -> ApiResult<Option<IpTable>> {
-    let tables = list_tables(conn)?;
-    Ok(tables.into_iter().find(|t| t.name == name))
+/// Replace all tables + entries in DB with the given list (for staging confirm).
+pub fn replace_all_tables(conn: &Connection, tables: &[IpTable]) -> ApiResult<()> {
+    conn.execute("DELETE FROM firewall_table_entries", [])?;
+    conn.execute("DELETE FROM firewall_tables", [])?;
+    for table in tables {
+        conn.execute(
+            "INSERT INTO firewall_tables (id, name, description, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![table.id, table.name, table.description, table.created_at, table.updated_at],
+        )?;
+        for entry in &table.entries {
+            conn.execute(
+                "INSERT INTO firewall_table_entries (id, table_id, address, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![entry.id, entry.table_id, entry.address, entry.created_at],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 pub fn create_table(
@@ -730,7 +781,7 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
             "# Default policy: block all inbound, allow all outbound (whitelist mode)\n\
              set skip on lo0\n\
              block all\n\
-             pass out quick all flags any keep state\n\n",
+             pass out quick all flags any keep state (sloppy)\n\n",
         );
     } else {
         buf.push_str(
@@ -829,7 +880,7 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
             .unwrap_or_default();
 
         let state = if rule.action == RuleAction::Allow && proto_str == Some("tcp") {
-            " flags any keep state"
+            " flags any keep state (sloppy)"
         } else if rule.action == RuleAction::Allow {
             " keep state"
         } else {
@@ -991,6 +1042,24 @@ pub fn ensure_module(driver: FirewallDriver) -> ApiResult<()> {
     Ok(())
 }
 
+/// Generate and write config file WITHOUT loading into kernel.
+/// Used when the firewall is disabled — keeps the file ready for next enable.
+pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
+    match driver {
+        FirewallDriver::Ipfw => {
+            let content = generate_ipfw(rules, mode, tables);
+            atomic_write(IPFW_RULES_PATH, &content)?;
+        }
+        FirewallDriver::Pf => {
+            let content = generate_pf(rules, mode, tables);
+            // Just write the file — validation happens at apply/enable time
+            // when the PF module is loaded and /dev/pf exists.
+            atomic_write(PF_CONF_PATH, &content)?;
+        }
+    }
+    Ok(())
+}
+
 /// Apply ipfw rules: generate file, then load.
 pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
     let content = generate_ipfw(rules, mode, tables);
@@ -1006,7 +1075,7 @@ pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]
     Ok(())
 }
 
-/// Apply pf rules: generate file, validate with pfctl -n, then load.
+/// Apply pf rules: generate file, validate, write, then reload via rc.d.
 pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
     let content = generate_pf(rules, mode, tables);
 
@@ -1020,24 +1089,35 @@ pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) 
         return Err(ApiError::Command(format!("pf.conf validation failed: {e}")));
     }
 
-    // All good — move to real path and load
+    // All good — move to real path and reload.
+    // `service pf reload` runs `pfctl -n -f` (redundant check) then `pfctl -f`.
     fs::rename(&tmp, PF_CONF_PATH)?;
-    cmd::run_sync(PFCTL, &["-f", PF_CONF_PATH])?;
+    cmd::run_sync(SERVICE, &["pf", "reload"])?;
+    // Flush state table so old connections are killed — new rules apply
+    // to all connections immediately. The apply HTTP response has already
+    // been sent (with Connection: close), so the browser will reconnect.
+    cmd::run_forget_sync(PFCTL, &["-F", "states"]);
     Ok(())
 }
 
 /// Enable firewall at runtime (does not modify rc.conf).
-/// Rules must already be loaded via Apply before calling this.
+/// Caller must have already set the appropriate rc.conf flags
+/// (e.g. `pf_enable=YES`) so that `service` accepts the start command.
 pub fn enable_firewall(driver: FirewallDriver) -> ApiResult<()> {
     match driver {
         FirewallDriver::Ipfw => {
-            cmd::run_sync(SYSCTL, &["net.inet.ip.fw.enable=1"])?;
+            // `service ipfw start` does (via rc.d/ipfw):
+            //   1. kldload ipfw (required_modules — auto-loaded by rc.subr)
+            //   2. sh /etc/ipfw.rules (load rules from firewall_script)
+            //   3. sysctl net.inet.ip.fw.enable=1 (enable)
+            cmd::run_sync(SERVICE, &["ipfw", "start"])?;
         }
         FirewallDriver::Pf => {
-            // pfctl -e enables pf. Rules should already be loaded via Apply.
-            // Do NOT pfctl -f here — it flushes the state table and kills
-            // the current HTTP connection, making the API appear to hang.
-            cmd::run_sync(PFCTL, &["-e"])?;
+            // `service pf start` does three things (via rc.d/pf):
+            //   1. kldload pf (required_modules="pf" — auto-loaded by rc.subr)
+            //   2. pfctl -F all + pfctl -f /etc/pf.conf (load rules)
+            //   3. pfctl -eq (enable)
+            cmd::run_sync(SERVICE, &["pf", "start"])?;
         }
     }
     Ok(())
@@ -1047,10 +1127,13 @@ pub fn enable_firewall(driver: FirewallDriver) -> ApiResult<()> {
 pub fn disable_firewall(driver: FirewallDriver) -> ApiResult<()> {
     match driver {
         FirewallDriver::Ipfw => {
-            cmd::run_sync(SYSCTL, &["net.inet.ip.fw.enable=0"])?;
+            // `service ipfw stop` runs `sysctl net.inet.ip.fw.enable=0`.
+            // Errors if already stopped, so ignore failure.
+            cmd::run_forget_sync(SERVICE, &["ipfw", "stop"]);
         }
         FirewallDriver::Pf => {
-            // pfctl -d errors if pf is not enabled; ignore failure
+            // pfctl -d disables PF. PF is running at this point, so /dev/pf
+            // exists. Non-zero exit (already disabled) is harmless — ignore.
             cmd::run_forget_sync(PFCTL, &["-d"]);
         }
     }
@@ -1130,15 +1213,6 @@ pub fn deactivate_pf() -> ApiResult<()> {
     Ok(())
 }
 
-/// Read generated config file content for preview.
-pub fn read_config(driver: FirewallDriver) -> ApiResult<String> {
-    let path = match driver {
-        FirewallDriver::Ipfw => IPFW_RULES_PATH,
-        FirewallDriver::Pf => PF_CONF_PATH,
-    };
-    fs::read_to_string(path).map_err(|e| ApiError::NotFound(format!("config file: {e}")))
-}
-
 /// Generate config content without writing to disk (for preview before apply).
 pub fn preview_config(
     driver: FirewallDriver,
@@ -1169,6 +1243,10 @@ pub struct PendingApply {
     pub was_enabled: bool,
     pub backup_config: String,
     pub status: String,
+    /// Snapshot of rule enabled states before the operation (id → enabled).
+    /// Used to restore DB state on rollback of an apply.
+    #[serde(default)]
+    pub rule_snapshot: Vec<(i64, bool)>,
 }
 
 /// Write the pending-apply state as a JSON file.
@@ -1187,6 +1265,7 @@ pub fn create_pending_apply(
         was_enabled,
         backup_config: backup_config.to_string(),
         status: "pending".to_string(),
+        rule_snapshot: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&pending)
         .map_err(|e| ApiError::Internal(format!("serialize pending: {e}")))?;
@@ -1242,4 +1321,40 @@ pub fn rollback(driver: FirewallDriver, backup_config: &str, was_enabled: bool) 
 
     tracing::warn!("firewall rollback completed (driver={driver:?}, was_enabled={was_enabled})");
     Ok(())
+}
+
+// ── staging (uncommitted rule changes when FW is enabled) ──────────
+
+const STAGING_PATH: &str = "/var/db/fwp/firewall_staging.json";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StagingData {
+    rules: Vec<FirewallRule>,
+    tables: Vec<IpTable>,
+}
+
+/// Write staging file with proposed rules + tables.
+pub fn write_staging(rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()> {
+    let data = StagingData { rules: rules.to_vec(), tables: tables.to_vec() };
+    let json = serde_json::to_string_pretty(&data)
+        .map_err(|e| ApiError::Internal(format!("serialize staging: {e}")))?;
+    atomic_write(STAGING_PATH, &json)?;
+    Ok(())
+}
+
+/// Read staging if it exists.
+pub fn read_staging() -> Option<(Vec<FirewallRule>, Vec<IpTable>)> {
+    let data = fs::read_to_string(STAGING_PATH).ok()?;
+    let staging: StagingData = serde_json::from_str(&data).ok()?;
+    Some((staging.rules, staging.tables))
+}
+
+/// Check if staging file exists.
+pub fn has_staging() -> bool {
+    std::path::Path::new(STAGING_PATH).exists()
+}
+
+/// Delete staging file.
+pub fn clear_staging() {
+    let _ = fs::remove_file(STAGING_PATH);
 }

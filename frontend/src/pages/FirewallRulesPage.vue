@@ -130,16 +130,24 @@ async function doToggleEnabled() {
 async function showCountdownIfPending(resp) {
   const pc = resp?.pending_confirm;
   if (!pc) return;
+  const isEnable = pc.operation === 'enable';
   const action = await countdown(
-    t('firewall.confirmTitle'),
-    t('firewall.confirmMessage'),
+    isEnable ? t('firewall.confirmTitleEnable') : t('firewall.confirmTitle'),
+    isEnable ? t('firewall.confirmMessageEnable') : t('firewall.confirmMessage'),
     pc.expires_at,
     pc.timeout_seconds,
+    {
+      rollbackLabel: isEnable ? t('firewall.rollbackNowEnable') : t('firewall.rollbackNowApply'),
+      confirmLabel: isEnable ? t('firewall.keepChangesEnable') : t('firewall.keepChangesApply'),
+      probeUrl: '/api/firewall/status',
+      warningMessage: t('firewall.serverUnreachable'),
+    },
   );
   if (action === 'confirm') {
     try {
       status.value = await api.post('/api/firewall/confirm');
       toast.toast(t('firewall.confirmed'));
+      await loadRules();
     } catch (e) {
       await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
       await loadStatus();
@@ -148,6 +156,7 @@ async function showCountdownIfPending(resp) {
     try {
       status.value = await api.post('/api/firewall/rollback');
       toast.toast(t('firewall.rolledBack'));
+      await loadRules();
     } catch (e) {
       await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
       await loadStatus();
@@ -338,7 +347,7 @@ async function doAddRule() {
   try {
     await api.post('/api/firewall/rules', extractBody(result));
     toast.toast(t('firewall.ruleAdded'));
-    status.value.pending_apply = true;
+    await loadStatus();
     await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -352,7 +361,7 @@ async function doEditRule(rule) {
   try {
     await api.put(`/api/firewall/rules/${rule.id}`, extractBody(result));
     toast.toast(t('firewall.ruleUpdated'));
-    status.value.pending_apply = true;
+    await loadStatus();
     await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -364,7 +373,7 @@ async function doDeleteRule(rule) {
   try {
     await api.del(`/api/firewall/rules/${rule.id}`);
     toast.toast(t('firewall.ruleDeleted'));
-    status.value.pending_apply = true;
+    await loadStatus();
     await loadRules();
   } catch (e) {
     await alert(t('common.deleteFailed'), e.message || t('common.deleteFailed'));
@@ -374,7 +383,7 @@ async function doDeleteRule(rule) {
 async function doToggleRule(rule) {
   try {
     await api.put(`/api/firewall/rules/${rule.id}/toggle`);
-    status.value.pending_apply = true;
+    await loadStatus();
     await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -388,7 +397,7 @@ async function doMoveRule(index, direction) {
   [ids[index], ids[newIdx]] = [ids[newIdx], ids[index]];
   try {
     await api.put('/api/firewall/rules/reorder', { ordered_ids: ids });
-    status.value.pending_apply = true;
+    await loadStatus();
     await loadRules();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -413,6 +422,18 @@ async function doApply() {
     } else {
       await alert(t('firewall.applyFailed'), e.message || t('firewall.applyFailed'));
     }
+  }
+}
+
+async function doDiscard() {
+  if (!await confirm(t('firewall.discard'), t('firewall.discardConfirm'))) return;
+  try {
+    await api.post('/api/firewall/discard');
+    toast.toast(t('firewall.discarded'));
+    await loadStatus();
+    await loadRules();
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 }
 
@@ -460,6 +481,9 @@ onUnmounted(() => clearInterval(pollTimer));
     <div v-if="initialized" class="flex btn-group" style="margin-left:auto;">
       <button @click="doApply" v-if="status.pending_apply">
         <i class="fa-solid fa-check"></i> {{ t('firewall.applyRules') }}
+      </button>
+      <button class="btn-secondary" @click="doDiscard" v-if="status.pending_apply">
+        <i class="fa-solid fa-rotate-left"></i> {{ t('firewall.discard') }}
       </button>
       <button @click="doAddRule">
         <i class="fa-solid fa-plus"></i> {{ t('firewall.addRule') }}

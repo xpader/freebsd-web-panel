@@ -65,7 +65,6 @@ CREATE TABLE firewall_state (
 );
 -- keys: 'active_driver' → 'ipfw'|'pf'
 --       'mode'          → 'whitelist'|'blacklist'
---       'rules_dirty'   → '1'|'0'
 
 CREATE TABLE firewall_tables (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,11 +101,13 @@ CREATE TABLE firewall_table_entries (
 **pf**（`generate_pf`）— 生成 `/etc/pf.conf`：
 - 先生成 IP 名单声明：`table <NAME> { addr1, addr2 }` 或 `table <NAME> persist`（空名单）
 - 名单引用语法：`<NAME>`
-- 白名单模式：`set skip on lo0` + `block all` + `pass out quick all flags any keep state`
+- 白名单模式：`set skip on lo0` + `block all` + `pass out quick all flags any keep state (sloppy)`
 - 黑名单模式：`set skip on lo0`（pf 默认放行）
 - 用户规则使用 `quick`（首个匹配生效，与 ipfw 语义一致）
 - `set skip on lo0` 必须在 `block all` 前面
-- **状态保持（keep state）自动判断**：allow + TCP → `flags any keep state`；allow + UDP/ICMP → 裸 `keep state`；allow + `any` 协议 → 裸 `keep state`（对无连接协议无实际效果，但不影响正确性）；deny/reject → 不加。PF 会将裸 `keep state` 隐式归一化为 `flags S/SA keep state`，所以 TCP 必须显式写 `flags any`，确保 PF 在已有连接中途启用时，出站 ACK 包（非 SYN）也能创建状态、不被 `block all` 丢弃。白名单出站基线规则 `pass out quick all flags any keep state` 同理
+- **状态保持（keep state）自动判断**：allow + TCP → `flags any keep state (sloppy)`；allow + UDP/ICMP → 裸 `keep state`；allow + `any` 协议 → 裸 `keep state`（对无连接协议无实际效果，但不影响正确性）；deny/reject → 不加。
+  - **`flags any`**：让 PF 匹配任意 TCP 标志位的包（包括已有连接的 ACK/PSH），确保 PF 在连接中途启用时非 SYN 包也能匹配规则、创建状态，不被 `block all` 丢弃。
+  - **`(sloppy)`**：使用 PF 的宽松 TCP 状态跟踪（`pf_tcp_track_sloppy`）。标准状态跟踪（`pf_tcp_track_full`）在为已有连接的非 SYN 包创建状态后，会将连接状态设为 `PFTM_TCP_OPENING`（30 秒超时），导致状态在 30 秒内过期。`sloppy` 模式有专门的半连接处理——收到 ACK 时直接将两端设为 `TCPS_ESTABLISHED`（pf.c:6988-6998），超时变为 24 小时。白名单出站基准规则 `pass out quick all flags any keep state (sloppy)` 同理。
 - ICMP 类型用数字（FreeBSD pf 不接受名字）
 - 地址族判定优先级：ICMP → inet/inet6（`icmp-type` 必需）；Table 引用 → 省略 AF（支持混合 IPv4/IPv6）；其余按地址内容检测 v4/v6
 - 离散/连续端口转换：`80,443,8080-8090` → `{ 80, 443, 8080:8090 }`
@@ -139,17 +140,17 @@ CREATE TABLE firewall_table_entries (
 
 ### 启用/禁用
 
-**enable**：确保当前驱动 `*_enable=YES`，对方 `*_enable=NO`，备份配置文件，创建 pending 记录，然后仅翻转运行时开关（不重新加载规则——规则已由之前的 Apply 或 Switch 加载到内核内存中），最后 spawn 倒计时定时器。
-- ipfw: `sysctl net.inet.ip.fw.enable=1`
-- pf: `pfctl -e`
-- **不在此处调用 `pfctl -f`**——会刷新 state table 杀死当前 HTTP 连接
+**enable**：确保当前驱动 `*_enable=YES`，对方 `*_enable=NO`，清除 staging，重生成配置文件，备份配置文件，创建 pending 记录，然后启用防火墙，最后 spawn 倒计时定时器。
+- ipfw: `service ipfw start`（rc.d 脚本自动 `kldload ipfw` + 执行 `/etc/ipfw.rules` + `sysctl net.inet.ip.fw.enable=1`）
+- pf: `service pf start`（rc.d 脚本自动 `kldload pf` + `pfctl -F all` + `pfctl -f /etc/pf.conf` + `pfctl -eq`）
+- **两个引擎都通过 `service start`**：rc.subr 的 `required_modules` 自动加载内核模块，解决重启后模块未加载的问题
 - **防锁死**：enable 必定触发倒计时（`was_enabled=false`，回滚时禁用防火墙）
 
-**disable**：运行时禁用 + rc.conf 设为 `NO`。
-- ipfw: `sysctl net.inet.ip.fw.enable=0` + `sysrc firewall_enable=NO`
-- pf: `pfctl -d`（fire-and-forget，pf 未启用时不报错）+ `sysrc pf_enable=NO`
+**disable**：运行时禁用 + rc.conf 设为 `NO`，同时清除 staging 文件（若有未提交的变更则丢弃）。
+- ipfw: `service ipfw stop`（`sysctl net.inet.ip.fw.enable=0`）+ `sysrc firewall_enable=NO`
+- pf: `pfctl -d`（fire-and-forget）+ `sysrc pf_enable=NO`
 
-**status handler**：`is_firewall_enabled` / `module_loaded` 通过 `spawn_blocking` 调用，避免阻塞 async 线程。
+**status handler**：`is_firewall_enabled` / `module_loaded` 通过 `spawn_blocking` 调用，避免阻塞 async 线程。`pending_apply` 字段反映 staging 文件是否存在。
 
 ### 切换引擎
 
@@ -165,20 +166,55 @@ CREATE TABLE firewall_table_entries (
 2. 重新 apply 规则（ipfw 和 pf 都需要重新生成+加载）
 3. ipfw 模式切换不写 loader.conf/sysctl.conf——通过规则 65534 实现
 
+### 暂存机制（staging）——防火墙已启用时的规则修改
+
+**问题**：防火墙已启用时修改规则后 apply，如果新规则阻断了管理连接，需要回滚到旧规则。但旧规则在 apply 前被新规则覆盖，DB 也已更新——无法恢复。
+
+**设计**：引入 staging 文件（`/var/db/fwp/firewall_staging.json`），类似快照/MVCC：
+
+- **防火墙未启用**：修改规则 → 直接写 DB + 重生成配置文件，无暂存，无「应用变更」按钮
+- **防火墙已启用**：修改规则 → 写 staging 文件（DB 不变），列表显示 staging 内容（若有）
+  - 「应用变更」按钮 = staging 文件存在时显示
+  - **确认** → staging 全量写入 DB（`replace_all_rules` + `replace_all_tables`）+ 删除 staging
+  - **恢复** → 删除 staging（DB 从未改动）+ 恢复备份的配置文件
+
+**staging 文件格式**：全量快照（所有规则 + 所有表），而非增量变更日志。选择快照而非 diff 的原因：
+1. 简单可靠——confirm 时 `replace_all`，rollback 时删文件，不需要处理增删改的逆操作
+2. 无累积误差——多次修改 staging 文件只反映最终状态，不会因为操作日志 replay 出错
+3. 文件极小——几十条规则序列化只有几 KB
+
+**全量写入代价**：confirm 时执行 `DELETE FROM firewall_rules` + 批量 `INSERT`，同样处理 `firewall_tables` 和 `firewall_table_entries`。SQLite 单事务内毫秒级完成。操作频率低（仅用户确认时触发一次），可接受。
+
+**CRUD 行为差异**（`handlers/firewall.rs`）：
+
+| 操作 | 防火墙未启用 | 防火墙已启用 |
+|---|---|---|
+| create_rule | DB INSERT + regen config | staging 新增（内存 Vec 操作）|
+| update_rule | DB UPDATE + regen config | staging 修改（内存 Vec 操作）|
+| delete_rule | DB DELETE + regen config | staging 删除（内存 Vec 操作）|
+| toggle_rule | DB UPDATE + regen config | staging 修改 enabled 字段 |
+| reorder_rules | DB UPDATE position + regen config | staging 修改 position |
+| 表 CRUD | 同上 | 同上 |
+
+**`effective_state()`**：读取规则/表时，优先返回 staging（若存在），否则返回 DB。所有 list_rules、list_tables、config 预览、apply 都使用此函数。
+
+**`regen_config()`**：从 DB 读取规则 + 表，调用 `write_config_only()` 生成配置文件但不加载到内核。防火墙未启用时使用，确保配置文件始终与 DB 一致。
+
 ### Apply 流程
 
 1. 检查是否有 pending confirm（如有则拒绝——`409 Conflict`）
-2. 从 DB 读取所有 enabled 规则
+2. 从 `effective_state()` 读取规则（staging 若存在，否则 DB）
 3. 检查防火墙当前是否已启用
 4. **备份当前配置文件内容**（读 `/etc/pf.conf` 或 `/etc/ipfw.rules` 全文）
 5. 调用生成器生成配置文件内容
 6. 原子写入配置文件（临时文件 → rename）
-7. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `pfctl -f /etc/pf.conf`）
-8. 设 `rules_dirty=0`
+7. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `service pf reload` = `pfctl -n -f` 验证 + `pfctl -f` 加载）
+8. 清除 `rules_dirty` 标记（历史遗留，暂存机制已接管 pending_apply 语义）
 9. **如果防火墙已启用**：
-   - 创建 `firewall_pending_apply` 记录（备份配置 + `was_enabled=true` + `expires_at=now+60s`）
+   - 写入 `/var/db/fwp/firewall_pending.json`（备份配置 + `was_enabled=true` + `expires_at=now+60s`）
+   - **staging 文件保留不删除**——confirm 时提交到 DB，rollback 时丢弃
    - spawn 倒计时任务（`tokio::spawn(sleep 60s)` → 检查 pending → 自动 rollback）
-   - 返回 `pending_confirm: { expires_at, timeout_seconds }`
+   - 返回 `pending_confirm: { expires_at, timeout_seconds, operation }`
 10. **如果防火墙未启用**：直接返回（规则加载但不强制，无需倒计时）
 
 ### 防锁死机制（anti-lockout）
@@ -220,13 +256,17 @@ CREATE TABLE firewall_table_entries (
 **启动安全检查**：`main.rs` 启动时检查 `/var/db/fwp/firewall_pending.json` 是否存在。如果有（说明进程非正常退出，定时器丢失），立即回滚。
 
 **API**：
-- `POST /api/firewall/confirm` — 确认变更有效，清除 pending 记录
-- `POST /api/firewall/rollback` — 用户主动回滚，恢复备份配置
+- `POST /api/firewall/confirm` — 确认变更有效：清除 pending 记录 + staging 写入 DB（全量 replace）+ 删除 staging
+- `POST /api/firewall/rollback` — 用户主动回滚：恢复备份配置 + 清除 pending 记录 + 删除 staging（DB 从未改动）
 
 **前端**：
 - apply/enable 返回 `pending_confirm` 时，弹出倒计时对话框（`countdown` 类型）
-- 对话框显示剩余秒数和进度条，提供「保留变更」和「立即恢复」按钮
+- 对话框标题/描述/按钮文字根据 `operation` 区分：
+  - **apply**（改规则）：标题"确认防火墙变更"，描述"新规则已生效…否则恢复之前的规则"，按钮「恢复规则」/「保持变更」
+  - **enable**（启动）：标题"确认防火墙启动"，描述"防火墙已启动…否则停止防火墙"，按钮「停止」/「保持启动」
 - 倒计时归零自动触发 rollback
+- 确认/恢复后重新加载规则列表（`loadRules()`），显示 DB 真实状态
+- 倒计时弹出 1 秒后探测 `/api/firewall/status`，如果不可达则显示"FWP 服务不可达"警告
 - 如果 apply 请求因连接中断而失败，前端通过 status 轮询检测 `pending_confirm` 并弹出对话框
 
 ### 文件结构
@@ -279,11 +319,21 @@ frontend/src/
 
 - `/sbin/ipfw` — ipfw 规则管理
 - `/sbin/pfctl` — pf 规则管理
+- `/usr/sbin/service` — `service pf start`（启用 PF，含 kldload）和 `service pf reload`（应用规则）
 - `/sbin/kldload` — 加载内核模块
 - `/sbin/kldstat` — 检查模块是否已加载
 - `/sbin/sysctl` — 运行时参数设置
 - `/usr/sbin/sysrc` — rc.conf 读写（复用 `sysrc.rs` 模块）
 - `/bin/sh` — 执行 ipfw 规则脚本
+
+## 持久化文件
+
+| 文件 | 用途 |
+|---|---|
+| `/etc/pf.conf` | PF 配置文件（由 fwp 生成，`service pf reload` 加载） |
+| `/etc/ipfw.rules` | ipfw 规则脚本（由 fwp 生成，`sh /etc/ipfw.rules` 执行） |
+| `/var/db/fwp/firewall_staging.json` | 暂存文件——防火墙已启用时，规则修改的快照（全量规则+表）。confirm 时提交到 DB，rollback 时删除 |
+| `/var/db/fwp/firewall_pending.json` | 防锁死 pending 记录——apply/enable 时的备份配置+超时信息 |
 
 ## 配置项
 

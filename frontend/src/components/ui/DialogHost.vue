@@ -10,36 +10,7 @@ const submitting = ref(false);
 const radioState = reactive({});
 const formValues = reactive({});
 
-// Countdown dialog state
-const countdownSecs = ref(0);
-const countdownPct = ref(100);
-let countdownTimer = null;
-
-watch(() => ui.dialog, (d) => {
-  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-  if (!d) return;
-  if (d.type === 'countdown') {
-    const total = d.timeoutSeconds || 60;
-    const endTime = d.expiresAt * 1000;
-    countdownSecs.value = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
-    countdownPct.value = (countdownSecs.value / total) * 100;
-    countdownTimer = setInterval(() => {
-      const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
-      countdownSecs.value = remaining;
-      countdownPct.value = (remaining / total) * 100;
-      if (remaining <= 0) {
-        clearInterval(countdownTimer);
-        countdownTimer = null;
-        ui.resolveDialog('rollback');
-      }
-    }, 500);
-  }
-}, { immediate: true });
-
-onUnmounted(() => {
-  if (countdownTimer) clearInterval(countdownTimer);
-});
-
+// Generic form-state reset when a form dialog opens.
 watch(() => ui.dialog, (d) => {
   if (!d || d.type !== 'form') return;
   Object.keys(radioState).forEach(k => delete radioState[k]);
@@ -170,128 +141,82 @@ function groupedFields(d) {
       </div>
     </div>
 
-    <!-- Countdown confirm dialog -->
+    <!-- Countdown confirm dialog (pure render — state comes from dialog config) -->
     <div v-else-if="ui.dialog.type === 'countdown'" class="modal">
       <h3>{{ ui.dialog.title }}</h3>
       <p class="text-dim">{{ ui.dialog.message }}</p>
       <div class="countdown-bar-container">
-        <div class="countdown-bar" :style="{ width: countdownPct + '%' }"></div>
+        <div class="countdown-bar" :style="{ width: ui.dialog.pct + '%' }"></div>
       </div>
       <p style="text-align:center;font-size:28px;font-weight:bold;margin:12px 0;">
-        {{ countdownSecs }}s
+        {{ ui.dialog.secs }}s
       </p>
+      <div v-if="ui.dialog.warning" class="countdown-warning">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        {{ ui.dialog.warning }}
+      </div>
       <div class="modal-actions">
         <button class="btn-danger" @click="ui.resolveDialog('rollback')">
-          <i class="fa-solid fa-rotate-left"></i> {{ t('firewall.rollbackNow') }}
+          <i class="fa-solid fa-rotate-left"></i>
+          {{ ui.dialog.rollbackLabel || t('common.cancel') }}
         </button>
         <button @click="ui.resolveDialog('confirm')">
-          <i class="fa-solid fa-check"></i> {{ t('firewall.keepChanges') }}
+          <i class="fa-solid fa-check"></i>
+          {{ ui.dialog.confirmLabel || t('common.confirm') }}
         </button>
       </div>
     </div>
 
     <!-- Form modal -->
-    <div v-else-if="ui.dialog.type === 'form'" class="modal">
+    <div v-else-if="ui.dialog.type === 'form'" class="modal modal-wide">
       <h3>{{ ui.dialog.title }}</h3>
       <form @submit.prevent="handleFormSubmit($event, ui.dialog)">
         <!-- Group consecutive half-width fields into rows -->
         <template v-for="(group, gi) in groupedFields(ui.dialog)" :key="gi">
-          <div v-if="group.length > 1" class="form-row-half">
+          <div :class="group.length > 1 ? 'form-row-half' : ''">
             <div v-for="f in group" :key="f.key" class="field" v-show="isFieldVisible(f)">
-              <label>{{ f.label }}<span v-if="isFieldRequired(f)" style="color:var(--danger)"> *</span>
-                <FieldHelp v-if="f.tooltip" :text="f.tooltip" />
+              <label :for="'field-' + f.key">
+                {{ f.label }}
+                <span v-if="f.help" class="field-help-inline">
+                  <FieldHelp :text="f.help" />
+                </span>
+                <span v-if="isFieldRequired(f)" class="required-mark">*</span>
               </label>
-              <select v-if="f.type === 'select' && f.options" v-model="formValues[f.key]" :name="f.key" :required="isFieldRequired(f)" :disabled="!isFieldVisible(f)">
-                <option v-if="!f.options.some(o => (o.value ?? o) === '')" value="">{{ t('common.pleaseSelect') }}</option>
-                <option
-                  v-for="o in f.options"
-                  :key="o.value ?? o"
-                  :value="o.value ?? o"
-                >{{ o.label || o }}</option>
-              </select>
-              <div v-else-if="f.type === 'radio' && f.options" class="radio-group">
-                <label
-                  v-for="o in f.options"
-                  :key="o.value ?? o"
-                  class="radio-item"
-                  :class="{ active: radioState[f.key] === (o.value ?? o) }"
-                >
-                  <input type="radio" :name="f.key" :value="o.value ?? o" :checked="radioState[f.key] === (o.value ?? o)" @change="radioState[f.key] = o.value ?? o" />
-                  <span>{{ o.label || o }}</span>
+              <!-- radio -->
+              <div v-if="f.type === 'radio'" class="radio-group">
+                <label v-for="opt in f.options" :key="opt.value" class="radio-label">
+                  <input type="radio" :name="f.key" :value="opt.value" v-model="radioState[f.key]" />
+                  <span>{{ opt.label }}</span>
                 </label>
               </div>
-              <textarea
-                v-else-if="f.type === 'textarea'"
-                v-model="formValues[f.key]"
-                :name="f.key"
-                :rows="f.rows || 3"
+              <!-- select -->
+              <select v-else-if="f.type === 'select'" :id="'field-' + f.key" v-model="formValues[f.key]" :required="isFieldRequired(f)">
+                <option value="" v-if="!f.required">{{ t('common.pleaseSelect') }}</option>
+                <option v-for="opt in f.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              </select>
+              <!-- checkbox -->
+              <div v-else-if="f.type === 'checkbox'" class="checkbox-field">
+                <label>
+                  <input type="checkbox" v-model="formValues[f.key]" />
+                  <span>{{ f.checkboxLabel || '' }}</span>
+                </label>
+              </div>
+              <!-- textarea -->
+              <textarea v-else-if="f.type === 'textarea'" :id="'field-' + f.key" v-model="formValues[f.key]"
+                :placeholder="f.placeholder || ''" :required="isFieldRequired(f)" rows="3"></textarea>
+              <!-- text input -->
+              <input v-else :id="'field-' + f.key" v-model.trim="formValues[f.key]"
+                :type="f.inputType || 'text'"
                 :placeholder="f.placeholder || ''"
-                :required="isFieldRequired(f)"
-                :disabled="!isFieldVisible(f)"
-              />
-              <input
-                v-else
-                v-model="formValues[f.key]"
-                :type="f.type === 'password' ? 'password' : 'text'"
-                :name="f.key"
-                :placeholder="f.placeholder || ''"
-                :required="isFieldRequired(f)"
-                :disabled="!isFieldVisible(f)"
-                ref="firstInput"
-              />
+                :required="isFieldRequired(f)" />
+              <small v-if="f.hint" class="field-hint">{{ f.hint }}</small>
             </div>
-          </div>
-          <div v-else class="field" v-show="isFieldVisible(group[0])">
-            <label>{{ group[0].label }}<span v-if="isFieldRequired(group[0])" style="color:var(--danger)"> *</span>
-              <FieldHelp v-if="group[0].tooltip" :text="group[0].tooltip" />
-            </label>
-            <select v-if="group[0].type === 'select' && group[0].options" v-model="formValues[group[0].key]" :name="group[0].key" :required="isFieldRequired(group[0])" :disabled="!isFieldVisible(group[0])">
-              <option v-if="!group[0].options.some(o => (o.value ?? o) === '')" value="">{{ t('common.pleaseSelect') }}</option>
-              <option
-                v-for="o in group[0].options"
-                :key="o.value ?? o"
-                :value="o.value ?? o"
-              >{{ o.label || o }}</option>
-            </select>
-            <div v-else-if="group[0].type === 'radio' && group[0].options" class="radio-group">
-              <label
-                v-for="o in group[0].options"
-                :key="o.value ?? o"
-                class="radio-item"
-                :class="{ active: radioState[group[0].key] === (o.value ?? o) }"
-              >
-                <input type="radio" :name="group[0].key" :value="o.value ?? o" :checked="radioState[group[0].key] === (o.value ?? o)" @change="radioState[group[0].key] = o.value ?? o" />
-                <span>{{ o.label || o }}</span>
-              </label>
-            </div>
-            <textarea
-              v-else-if="group[0].type === 'textarea'"
-              v-model="formValues[group[0].key]"
-              :name="group[0].key"
-              :rows="group[0].rows || 3"
-              :placeholder="group[0].placeholder || ''"
-              :required="isFieldRequired(group[0])"
-              :disabled="!isFieldVisible(group[0])"
-            />
-            <input
-              v-else
-              v-model="formValues[group[0].key]"
-              :type="group[0].type === 'password' ? 'password' : 'text'"
-              :name="group[0].key"
-              :placeholder="group[0].placeholder || ''"
-              :required="isFieldRequired(group[0])"
-              :disabled="!isFieldVisible(group[0])"
-              ref="firstInput"
-            />
           </div>
         </template>
         <div v-if="ui.dialog.errorMessage" class="form-error">{{ ui.dialog.errorMessage }}</div>
         <div class="modal-actions">
           <button type="button" class="btn-secondary" @click="ui.resolveDialog(null)">{{ t('common.cancel') }}</button>
-          <button type="submit" :disabled="submitting">
-            <span v-if="submitting" class="spinner" style="width:14px;height:14px;"></span>
-            {{ submitting ? '' : (ui.dialog.submitLabel || t('common.ok')) }}
-          </button>
+          <button type="submit" class="btn-primary" :disabled="submitting">{{ ui.dialog.submitLabel || t('common.confirm') }}</button>
         </div>
       </form>
     </div>
@@ -299,44 +224,6 @@ function groupedFields(d) {
 </template>
 
 <style scoped>
-.confirm-opt {
-  display: flex !important; align-items: center; gap: 8px;
-  margin-top: 0; margin-bottom: 0; font-size: 13px; cursor: pointer;
-  padding: 6px 12px; border-radius: var(--radius);
-  transition: background 0.15s;
-}
-.confirm-opt:first-of-type { margin-top: 12px; }
-.confirm-opt:hover { background: var(--bg-elev2); }
-.confirm-opt input { width: auto; margin: 0; }
-.radio-group { display: flex; flex-direction: row; gap: 8px; }
-.radio-item {
-  display: inline-flex !important; align-items: center; gap: 6px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
-  border-radius: var(--radius);
-  margin-bottom: 0 !important;
-  transition: background 0.15s, color 0.15s;
-}
-.radio-item:hover { background: var(--bg-elev2); }
-.radio-item input { width: auto; margin: 0; }
-.radio-item.active {
-  color: var(--accent); background: rgba(59,130,246,0.08);
-}
-.form-error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--danger);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--danger);
-}
-.form-row-half {
-  display: flex;
-  gap: 12px;
-}
-.form-row-half .field {
-  flex: 1;
-}
 .countdown-bar-container {
   width: 100%;
   height: 8px;
@@ -350,5 +237,17 @@ function groupedFields(d) {
   background: var(--accent);
   transition: width 0.5s linear;
   border-radius: 4px;
+}
+.countdown-warning {
+  background: rgba(255, 180, 0, 0.12);
+  border: 1px solid rgba(255, 180, 0, 0.4);
+  color: #ffb400;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

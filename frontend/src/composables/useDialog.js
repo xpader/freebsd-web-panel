@@ -24,9 +24,69 @@ export function useCodePreview() {
     ui.showDialog({ type: 'code', title, content });
 }
 
+/**
+ * Show a countdown dialog with auto-resolve and optional reachability probe.
+ *
+ * @param {string} title
+ * @param {string} message
+ * @param {number} expiresAt - Unix timestamp (seconds)
+ * @param {number} timeoutSeconds - total countdown duration
+ * @param {object} opts
+ * @param {string} [opts.rollbackLabel]
+ * @param {string} [opts.confirmLabel]
+ * @param {string} [opts.warningMessage] - shown in orange bar if the
+ *   reachability probe fails
+ * @param {string} [opts.probeUrl] - URL to fetch after 1s; omit to skip probe
+ */
 export function useCountdown() {
-  return (title, message, expiresAt, timeoutSeconds) =>
-    ui.showDialog({ type: 'countdown', title, message, expiresAt, timeoutSeconds });
+  return (title, message, expiresAt, timeoutSeconds, opts = {}) => {
+    const total = timeoutSeconds || 60;
+    const endTime = expiresAt * 1000;
+
+    const secs = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+    const config = {
+      type: 'countdown',
+      title,
+      message,
+      rollbackLabel: opts.rollbackLabel,
+      confirmLabel: opts.confirmLabel,
+      secs,
+      pct: (secs / total) * 100,
+      warning: null,
+    };
+
+    const promise = ui.showDialog(config);
+
+    const dialogObj = ui.dialog;
+
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+      dialogObj.secs = remaining;
+      dialogObj.pct = (remaining / total) * 100;
+      if (remaining <= 0) {
+        clearInterval(timer);
+        ui.resolveDialog('rollback');
+      }
+    }, 500);
+
+    if (opts.probeUrl) {
+      setTimeout(async () => {
+        try {
+          const controller = new AbortController();
+          const to = setTimeout(() => controller.abort(), 5000);
+          await fetch(opts.probeUrl, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('fwp_token')}` },
+            signal: controller.signal,
+          });
+          clearTimeout(to);
+        } catch (_) {
+          dialogObj.warning = opts.warningMessage || null;
+        }
+      }, 1000);
+    }
+
+    return promise;
+  };
 }
 
 export function useFormModal() {

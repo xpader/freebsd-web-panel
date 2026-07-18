@@ -2,7 +2,8 @@
 //! structured rule CRUD, whitelist/blacklist mode, and rc.conf initialization.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
@@ -74,12 +75,39 @@ async fn active_mode(state: &AppState) -> Option<FirewallMode> {
         .and_then(FirewallMode::from_str)
 }
 
-/// Check if there are unapplied rule changes.
-async fn is_dirty(state: &AppState) -> bool {
+/// Check if there are unapplied rule changes (staging file exists).
+async fn is_dirty(_state: &AppState) -> bool {
+    fw::has_staging()
+}
+
+/// Get effective rules + tables: from staging if exists, else from DB.
+async fn effective_state(state: &AppState) -> ApiResult<(Vec<fw::FirewallRule>, Vec<fw::IpTable>)> {
+    if let Some((rules, tables)) = fw::read_staging() {
+        return Ok((rules, tables));
+    }
     let conn = state.db.lock().await;
-    fw::get_state(&conn, "rules_dirty")
-        .map(|v| v == "1")
+    Ok((fw::list_rules(&conn)?, fw::list_tables(&conn)?))
+}
+
+/// Check if firewall is currently enabled.
+async fn is_fw_enabled(driver: FirewallDriver) -> bool {
+    tokio::task::spawn_blocking(move || fw::is_firewall_enabled(driver))
+        .await
         .unwrap_or(false)
+}
+
+/// Regenerate config file from DB (no kernel reload). Used when FW disabled.
+async fn regen_config(state: &AppState, driver: FirewallDriver) -> ApiResult<()> {
+    let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
+    let (rules, tables) = {
+        let conn = state.db.lock().await;
+        (fw::list_rules(&conn)?, fw::list_tables(&conn)?)
+    };
+    let d = driver;
+    tokio::task::spawn_blocking(move || fw::write_config_only(d, &rules, mode, &tables))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    Ok(())
 }
 
 /// Check for a pending apply confirmation.
@@ -125,6 +153,7 @@ fn spawn_rollback_timer() {
                 .await;
 
                 fw::clear_pending_apply();
+                fw::clear_staging();
 
                 if let Err(e) = result {
                     tracing::error!(error = ?e, "rollback task panicked");
@@ -321,12 +350,16 @@ pub async fn switch(
 pub async fn enable(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> ApiResult<Json<FirewallStatus>> {
+) -> ApiResult<axum::response::Response> {
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
 
     check_no_pending().await?;
+
+    // Clear any leftover staging and regenerate config from DB before enabling.
+    fw::clear_staging();
+    regen_config(&state, driver).await?;
 
     // Backup current config file before enabling.
     let backup_config = {
@@ -367,7 +400,7 @@ pub async fn enable(
     let count = fw::count_enabled_rules(&conn)?;
     drop(conn);
 
-    Ok(Json(FirewallStatus {
+    Ok(([(header::CONNECTION, "close")], Json(FirewallStatus {
         driver: Some(driver),
         initialized: true,
         enabled: true,
@@ -376,7 +409,7 @@ pub async fn enable(
         rules_count: count,
         pending_apply: is_dirty(&state).await,
         pending_confirm: get_pending_confirm().await,
-    }))
+    })).into_response())
 }
 
 /// POST /api/firewall/disable
@@ -404,6 +437,9 @@ pub async fn disable(
     })
         .await
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    // Clear any pending staging when firewall is disabled.
+    fw::clear_staging();
 
     audit::record(
         &state,
@@ -502,8 +538,7 @@ pub async fn set_mode(
 pub async fn list_rules(State(state): State<AppState>) -> ApiResult<Json<Vec<fw::FirewallRule>>> {
     let _driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
-    let conn = state.db.lock().await;
-    let rules = fw::list_rules(&conn)?;
+    let (rules, _) = effective_state(&state).await?;
     Ok(Json(rules))
 }
 
@@ -515,38 +550,42 @@ pub async fn create_rule(
 ) -> ApiResult<(StatusCode, Json<fw::FirewallRule>)> {
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
-
     fw::validate_rule_body(&body)?;
-
     let now = state.now_ts();
-    let id = {
-        let conn = state.db.lock().await;
-        fw::create_rule(&conn, &body, now)?
-    };
 
-    // Mark dirty
-    {
+    if is_fw_enabled(driver).await {
+        // FW enabled: modify staging
+        let (mut rules, tables) = effective_state(&state).await?;
+        let pos = rules.iter().map(|r| r.position).max().unwrap_or(0) + 1;
+        let id = rules.iter().map(|r| r.id).max().unwrap_or(0) + 1;
+        let rule = fw::FirewallRule {
+            id, position: pos, enabled: true,
+            action: body.action, direction: body.direction, protocol: body.protocol,
+            source: body.source.clone(), source_port: body.source_port.clone(),
+            destination: body.destination.clone(), destination_port: body.destination_port.clone(),
+            interface: body.interface.clone(), log: body.log,
+            icmp_type: body.icmp_type.clone(), description: body.description.clone(),
+            created_at: now, updated_at: now,
+        };
+        rules.push(rule.clone());
+        fw::write_staging(&rules, &tables)?;
+        audit::record(&state, Some(&auth.username), "POST", "/api/firewall/rules", 201,
+            Some(format!("added firewall rule ({driver:?}) [staging]")));
+        Ok((StatusCode::CREATED, Json(rule)))
+    } else {
+        // FW disabled: write DB + regen config
+        let id = {
+            let conn = state.db.lock().await;
+            fw::create_rule(&conn, &body, now)?
+        };
+        regen_config(&state, driver).await?;
+        audit::record(&state, Some(&auth.username), "POST", "/api/firewall/rules", 201,
+            Some(format!("added firewall rule ({driver:?})")));
         let conn = state.db.lock().await;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        let rule = fw::list_rules(&conn)?.into_iter().find(|r| r.id == id)
+            .ok_or_else(|| ApiError::Internal("created rule not found".into()))?;
+        Ok((StatusCode::CREATED, Json(rule)))
     }
-
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "POST",
-        "/api/firewall/rules",
-        201,
-        Some(format!("added firewall rule ({driver:?})")),
-    );
-
-    let conn = state.db.lock().await;
-    let rule = fw::list_rules(&conn)?
-        .into_iter()
-        .find(|r| r.id == id)
-        .ok_or_else(|| ApiError::Internal("created rule not found".into()))?;
-    drop(conn);
-
-    Ok((StatusCode::CREATED, Json(rule)))
 }
 
 /// PUT /api/firewall/rules/{id}
@@ -558,33 +597,43 @@ pub async fn update_rule(
 ) -> ApiResult<Json<fw::FirewallRule>> {
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
-
     fw::validate_rule_body(&body)?;
-
     let now = state.now_ts();
-    {
+
+    if is_fw_enabled(driver).await {
+        let (mut rules, tables) = effective_state(&state).await?;
+        let rule = rules.iter_mut().find(|r| r.id == id)
+            .ok_or_else(|| ApiError::NotFound("firewall rule not found".into()))?;
+        rule.action = body.action;
+        rule.direction = body.direction;
+        rule.protocol = body.protocol;
+        rule.source = body.source.clone();
+        rule.source_port = body.source_port.clone();
+        rule.destination = body.destination.clone();
+        rule.destination_port = body.destination_port.clone();
+        rule.interface = body.interface.clone();
+        rule.log = body.log;
+        rule.icmp_type = body.icmp_type.clone();
+        rule.description = body.description.clone();
+        rule.updated_at = now;
+        let updated = rule.clone();
+        fw::write_staging(&rules, &tables)?;
+        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
+            Some(format!("updated firewall rule {id} ({driver:?}) [staging]")));
+        Ok(Json(updated))
+    } else {
+        {
+            let conn = state.db.lock().await;
+            fw::update_rule(&conn, id, &body, now)?;
+        }
+        regen_config(&state, driver).await?;
+        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
+            Some(format!("updated firewall rule {id} ({driver:?})")));
         let conn = state.db.lock().await;
-        fw::update_rule(&conn, id, &body, now)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        let rule = fw::list_rules(&conn)?.into_iter().find(|r| r.id == id)
+            .ok_or_else(|| ApiError::Internal("updated rule not found".into()))?;
+        Ok(Json(rule))
     }
-
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "PUT",
-        &format!("/api/firewall/rules/{id}"),
-        200,
-        Some(format!("updated firewall rule {id} ({driver:?})")),
-    );
-
-    let conn = state.db.lock().await;
-    let rule = fw::list_rules(&conn)?
-        .into_iter()
-        .find(|r| r.id == id)
-        .ok_or_else(|| ApiError::Internal("updated rule not found".into()))?;
-    drop(conn);
-
-    Ok(Json(rule))
 }
 
 /// DELETE /api/firewall/rules/{id}
@@ -596,21 +645,18 @@ pub async fn delete_rule(
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
 
-    {
+    if is_fw_enabled(driver).await {
+        let (mut rules, tables) = effective_state(&state).await?;
+        rules.retain(|r| r.id != id);
+        fw::write_staging(&rules, &tables)?;
+    } else {
         let conn = state.db.lock().await;
         fw::delete_rule(&conn, id)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        regen_config(&state, driver).await?;
     }
 
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "DELETE",
-        &format!("/api/firewall/rules/{id}"),
-        200,
-        Some(format!("deleted firewall rule {id} ({driver:?})")),
-    );
-
+    audit::record(&state, Some(&auth.username), "DELETE", &format!("/api/firewall/rules/{id}"), 200,
+        Some(format!("deleted firewall rule {id} ({driver:?})")));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -623,21 +669,20 @@ pub async fn toggle_rule(
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
 
-    {
+    if is_fw_enabled(driver).await {
+        let (mut rules, tables) = effective_state(&state).await?;
+        let rule = rules.iter_mut().find(|r| r.id == id)
+            .ok_or_else(|| ApiError::NotFound("firewall rule not found".into()))?;
+        rule.enabled = !rule.enabled;
+        fw::write_staging(&rules, &tables)?;
+    } else {
         let conn = state.db.lock().await;
         fw::toggle_rule(&conn, id)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        regen_config(&state, driver).await?;
     }
 
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "PUT",
-        &format!("/api/firewall/rules/{id}/toggle"),
-        200,
-        Some(format!("toggled firewall rule {id} ({driver:?})")),
-    );
-
+    audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}/toggle"), 200,
+        Some(format!("toggled firewall rule {id} ({driver:?})")));
     Ok(StatusCode::OK)
 }
 
@@ -650,21 +695,26 @@ pub async fn reorder_rules(
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
 
-    {
+    if is_fw_enabled(driver).await {
+        let (mut rules, tables) = effective_state(&state).await?;
+        let mut reordered = Vec::with_capacity(body.ordered_ids.len());
+        for id in &body.ordered_ids {
+            if let Some(pos) = rules.iter().position(|r| &r.id == id) {
+                reordered.push(rules.remove(pos));
+            }
+        }
+        for (i, rule) in reordered.iter_mut().enumerate() {
+            rule.position = i as u32;
+        }
+        fw::write_staging(&reordered, &tables)?;
+    } else {
         let conn = state.db.lock().await;
         fw::reorder_rules(&conn, &body.ordered_ids)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        regen_config(&state, driver).await?;
     }
 
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "PUT",
-        "/api/firewall/rules/reorder",
-        200,
-        Some(format!("reordered firewall rules ({driver:?})")),
-    );
-
+    audit::record(&state, Some(&auth.username), "PUT", "/api/firewall/rules/reorder", 200,
+        Some(format!("reordered firewall rules ({driver:?})")));
     Ok(StatusCode::OK)
 }
 
@@ -672,17 +722,15 @@ pub async fn reorder_rules(
 pub async fn apply(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<axum::response::Response> {
     let driver = active_driver(&state).await
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
 
     check_no_pending().await?;
 
-    let (rules, tables): (Vec<fw::FirewallRule>, Vec<fw::IpTable>) = {
-        let conn = state.db.lock().await;
-        (fw::list_rules(&conn)?, fw::list_tables(&conn)?)
-    };
+    // Read effective rules (staging if exists, else DB)
+    let (rules, tables) = effective_state(&state).await?;
 
     // Check if firewall is currently enabled — if so, we need anti-lockout.
     let d0 = driver;
@@ -740,12 +788,12 @@ pub async fn apply(
         Some(format!("applied firewall rules ({driver:?})")),
     );
 
-    Ok(Json(serde_json::json!({
+    Ok(([(header::CONNECTION, "close")], Json(serde_json::json!({
         "applied": true,
         "driver": driver,
         "rules_count": rules.iter().filter(|r| r.enabled).count(),
         "pending_confirm": pending_confirm,
-    })))
+    }))).into_response())
 }
 
 /// GET /api/firewall/config
@@ -754,12 +802,9 @@ pub async fn config(State(state): State<AppState>) -> ApiResult<Json<serde_json:
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     let mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
 
-    let (rules, tables): (Vec<fw::FirewallRule>, Vec<fw::IpTable>) = {
-        let conn = state.db.lock().await;
-        (fw::list_rules(&conn)?, fw::list_tables(&conn)?)
-    };
+    let (rules, tables) = effective_state(&state).await?;
 
-    // Generate preview from DB (not from file, so it reflects pending changes)
+    // Generate preview from effective state (staging or DB)
     let content = fw::preview_config(driver, &rules, mode, &tables);
 
     Ok(Json(serde_json::json!({
@@ -773,8 +818,7 @@ pub async fn config(State(state): State<AppState>) -> ApiResult<Json<serde_json:
 
 /// GET /api/firewall/tables
 pub async fn list_tables(State(state): State<AppState>) -> ApiResult<Json<Vec<fw::IpTable>>> {
-    let conn = state.db.lock().await;
-    let tables = fw::list_tables(&conn)?;
+    let (_, tables) = effective_state(&state).await?;
     Ok(Json(tables))
 }
 
@@ -784,37 +828,36 @@ pub async fn create_table(
     auth: AuthUser,
     Json(body): Json<fw::TableBody>,
 ) -> ApiResult<(StatusCode, Json<fw::IpTable>)> {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     fw::validate_table_name(&body.name)?;
-
     let now = state.now_ts();
-    let id = {
-        let conn = state.db.lock().await;
-        fw::create_table(&conn, &body, now)?
-    };
 
-    // Mark dirty so config preview includes the new table
-    {
+    if is_fw_enabled(driver).await {
+        let (rules, mut tables) = effective_state(&state).await?;
+        let id = tables.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let table = fw::IpTable {
+            id, name: body.name.clone(), description: body.description.clone(),
+            entries: Vec::new(), created_at: now, updated_at: now,
+        };
+        tables.push(table.clone());
+        fw::write_staging(&rules, &tables)?;
+        audit::record(&state, Some(&auth.username), "POST", "/api/firewall/tables", 201,
+            Some(format!("created firewall table '{}' [staging]", body.name)));
+        Ok((StatusCode::CREATED, Json(table)))
+    } else {
+        let id = {
+            let conn = state.db.lock().await;
+            fw::create_table(&conn, &body, now)?
+        };
+        regen_config(&state, driver).await?;
+        audit::record(&state, Some(&auth.username), "POST", "/api/firewall/tables", 201,
+            Some(format!("created firewall table '{}'", body.name)));
         let conn = state.db.lock().await;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        let table = fw::list_tables(&conn)?.into_iter().find(|t| t.id == id)
+            .ok_or_else(|| ApiError::Internal("created table not found".into()))?;
+        Ok((StatusCode::CREATED, Json(table)))
     }
-
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "POST",
-        "/api/firewall/tables",
-        201,
-        Some(format!("created firewall table '{}'", body.name)),
-    );
-
-    let conn = state.db.lock().await;
-    let table = fw::list_tables(&conn)?
-        .into_iter()
-        .find(|t| t.id == id)
-        .ok_or_else(|| ApiError::Internal("created table not found".into()))?;
-    drop(conn);
-
-    Ok((StatusCode::CREATED, Json(table)))
 }
 
 /// PUT /api/firewall/tables/{id}
@@ -824,32 +867,36 @@ pub async fn update_table(
     Path(id): Path<i64>,
     Json(body): Json<fw::TableBody>,
 ) -> ApiResult<Json<fw::IpTable>> {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     fw::validate_table_name(&body.name)?;
-
     let now = state.now_ts();
-    {
+
+    if is_fw_enabled(driver).await {
+        let (rules, mut tables) = effective_state(&state).await?;
+        let table = tables.iter_mut().find(|t| t.id == id)
+            .ok_or_else(|| ApiError::NotFound("firewall table not found".into()))?;
+        table.name = body.name.clone();
+        table.description = body.description.clone();
+        table.updated_at = now;
+        let updated = table.clone();
+        fw::write_staging(&rules, &tables)?;
+        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/tables/{id}"), 200,
+            Some(format!("updated firewall table {id} [staging]")));
+        Ok(Json(updated))
+    } else {
+        {
+            let conn = state.db.lock().await;
+            fw::update_table(&conn, id, &body, now)?;
+        }
+        regen_config(&state, driver).await?;
+        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/tables/{id}"), 200,
+            Some(format!("updated firewall table {id}")));
         let conn = state.db.lock().await;
-        fw::update_table(&conn, id, &body, now)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        let table = fw::list_tables(&conn)?.into_iter().find(|t| t.id == id)
+            .ok_or_else(|| ApiError::Internal("updated table not found".into()))?;
+        Ok(Json(table))
     }
-
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "PUT",
-        &format!("/api/firewall/tables/{id}"),
-        200,
-        Some(format!("updated firewall table {id}")),
-    );
-
-    let conn = state.db.lock().await;
-    let table = fw::list_tables(&conn)?
-        .into_iter()
-        .find(|t| t.id == id)
-        .ok_or_else(|| ApiError::Internal("updated table not found".into()))?;
-    drop(conn);
-
-    Ok(Json(table))
 }
 
 /// DELETE /api/firewall/tables/{id}
@@ -858,21 +905,21 @@ pub async fn delete_table(
     auth: AuthUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-    {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
+
+    if is_fw_enabled(driver).await {
+        let (rules, mut tables) = effective_state(&state).await?;
+        tables.retain(|t| t.id != id);
+        fw::write_staging(&rules, &tables)?;
+    } else {
         let conn = state.db.lock().await;
         fw::delete_table(&conn, id)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        regen_config(&state, driver).await?;
     }
 
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "DELETE",
-        &format!("/api/firewall/tables/{id}"),
-        200,
-        Some(format!("deleted firewall table {id}")),
-    );
-
+    audit::record(&state, Some(&auth.username), "DELETE", &format!("/api/firewall/tables/{id}"), 200,
+        Some(format!("deleted firewall table {id}")));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -883,34 +930,37 @@ pub async fn add_entry(
     Path(id): Path<i64>,
     Json(body): Json<fw::EntryBody>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     fw::validate_address(&body.address)?;
-
     let now = state.now_ts();
-    let entry_id = {
-        let conn = state.db.lock().await;
-        // Verify table exists
-        let tables = fw::list_tables(&conn)?;
-        if !tables.iter().any(|t| t.id == id) {
-            return Err(ApiError::NotFound("firewall table not found".into()));
-        }
-        let eid = fw::add_entry(&conn, id, &body.address, now)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
-        eid
-    };
 
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "POST",
-        &format!("/api/firewall/tables/{id}/entries"),
-        201,
-        Some(format!("added entry '{}' to table {id}", body.address)),
-    );
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": entry_id, "address": body.address })),
-    ))
+    if is_fw_enabled(driver).await {
+        let (rules, mut tables) = effective_state(&state).await?;
+        let table = tables.iter_mut().find(|t| t.id == id)
+            .ok_or_else(|| ApiError::NotFound("firewall table not found".into()))?;
+        let entry_id = table.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+        table.entries.push(fw::IpTableEntry {
+            id: entry_id, table_id: id, address: body.address.clone(), created_at: now,
+        });
+        fw::write_staging(&rules, &tables)?;
+        audit::record(&state, Some(&auth.username), "POST", &format!("/api/firewall/tables/{id}/entries"), 201,
+            Some(format!("added entry '{}' to table {id} [staging]", body.address)));
+        Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": entry_id, "address": body.address }))))
+    } else {
+        let entry_id = {
+            let conn = state.db.lock().await;
+            let tables = fw::list_tables(&conn)?;
+            if !tables.iter().any(|t| t.id == id) {
+                return Err(ApiError::NotFound("firewall table not found".into()));
+            }
+            fw::add_entry(&conn, id, &body.address, now)?
+        };
+        regen_config(&state, driver).await?;
+        audit::record(&state, Some(&auth.username), "POST", &format!("/api/firewall/tables/{id}/entries"), 201,
+            Some(format!("added entry '{}' to table {id}", body.address)));
+        Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": entry_id, "address": body.address }))))
+    }
 }
 
 /// DELETE /api/firewall/tables/{id}/entries/{eid}
@@ -919,21 +969,23 @@ pub async fn delete_entry(
     auth: AuthUser,
     Path((id, eid)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
-    {
+    let driver = active_driver(&state).await
+        .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
+
+    if is_fw_enabled(driver).await {
+        let (rules, mut tables) = effective_state(&state).await?;
+        let table = tables.iter_mut().find(|t| t.id == id)
+            .ok_or_else(|| ApiError::NotFound("firewall table not found".into()))?;
+        table.entries.retain(|e| e.id != eid);
+        fw::write_staging(&rules, &tables)?;
+    } else {
         let conn = state.db.lock().await;
         fw::delete_entry(&conn, id, eid)?;
-        fw::set_state(&conn, "rules_dirty", "1")?;
+        regen_config(&state, driver).await?;
     }
 
-    audit::record(
-        &state,
-        Some(&auth.username),
-        "DELETE",
-        &format!("/api/firewall/tables/{id}/entries/{eid}"),
-        200,
-        Some(format!("deleted entry {eid} from table {id}")),
-    );
-
+    audit::record(&state, Some(&auth.username), "DELETE", &format!("/api/firewall/tables/{id}/entries/{eid}"), 200,
+        Some(format!("deleted entry {eid} from table {id}")));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -951,6 +1003,15 @@ pub async fn confirm(
         return Err(ApiError::BadRequest("no pending firewall change".into()));
     }
     fw::clear_pending_apply();
+
+    // Commit staging to DB if staging exists.
+    if let Some((rules, tables)) = fw::read_staging() {
+        let conn = state.db.lock().await;
+        fw::replace_all_rules(&conn, &rules)?;
+        fw::replace_all_tables(&conn, &tables)?;
+        drop(conn);
+        fw::clear_staging();
+    }
 
     audit::record(
         &state,
@@ -1028,6 +1089,7 @@ pub async fn rollback(
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     fw::clear_pending_apply();
+    fw::clear_staging();
 
     audit::record(
         &state,
@@ -1059,4 +1121,21 @@ pub async fn rollback(
         pending_apply: is_dirty(&state).await,
         pending_confirm: None,
     }))
+}
+
+/// POST /api/firewall/discard — discard uncommitted staging changes.
+pub async fn discard(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<StatusCode> {
+    fw::clear_staging();
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        "/api/firewall/discard",
+        200,
+        Some("discarded uncommitted firewall changes".into()),
+    );
+    Ok(StatusCode::OK)
 }

@@ -248,6 +248,9 @@ a:hover { color: var(--accent-hover); }
 .login-card h1 { font-size: 20px; margin-bottom: 4px; }
 .login-card .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
 .login-card .field { margin-bottom: 16px; }
+.login-card label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-dim); }
+.form-row-half { display: flex; gap: 12px; }
+.form-row-half .field { flex: 1; }
 
 /* ---- Forms ---- */
 .field { margin-bottom: 16px; }

@@ -78,6 +78,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/firewall/apply", post(handlers::firewall::apply))
         .route("/api/firewall/confirm", post(handlers::firewall::confirm))
         .route("/api/firewall/rollback", post(handlers::firewall::rollback))
+        .route("/api/firewall/discard", post(handlers::firewall::discard))
         .route("/api/firewall/config", get(handlers::firewall::config))
         .route("/api/firewall/tables", get(handlers::firewall::list_tables).post(handlers::firewall::create_table))
         .route("/api/firewall/tables/{id}", put(handlers::firewall::update_table).delete(handlers::firewall::delete_table))
