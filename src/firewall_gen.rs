@@ -310,7 +310,7 @@ pub fn next_position(conn: &Connection) -> ApiResult<u32> {
             |r| r.get(0),
         )
         .optional()?;
-    Ok(max.map(|v| v as u32 + 1).unwrap_or(0))
+    Ok(max.map(|v| (v + 1) as u32).unwrap_or(0))
 }
 
 pub fn create_rule(

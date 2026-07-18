@@ -81,10 +81,23 @@ function isFieldRequired(f) {
 
 function groupedFields(d) {
   const groups = [];
+  const rowMap = new Map();
   let pending = null;
   for (const f of (d.fields || [])) {
     if (f.half) {
-      if (pending) {
+      if (f.row != null) {
+        if (pending) {
+          groups.push([pending]);
+          pending = null;
+        }
+        if (rowMap.has(f.row)) {
+          rowMap.get(f.row).push(f);
+        } else {
+          const g = [f];
+          groups.push(g);
+          rowMap.set(f.row, g);
+        }
+      } else if (pending) {
         groups.push([pending, f]);
         pending = null;
       } else {
@@ -175,16 +188,21 @@ function groupedFields(d) {
         <template v-for="(group, gi) in groupedFields(ui.dialog)" :key="gi">
           <div :class="group.length > 1 ? 'form-row-half' : ''">
             <div v-for="f in group" :key="f.key" class="field" v-show="isFieldVisible(f)">
-              <label :for="'field-' + f.key">
+              <label :for="f.type === 'checkbox' ? null : ('field-' + f.key)">
                 {{ f.label }}
                 <span v-if="f.help" class="field-help-inline">
                   <FieldHelp :text="f.help" />
                 </span>
                 <span v-if="isFieldRequired(f)" class="required-mark">*</span>
               </label>
-              <!-- radio -->
-              <div v-if="f.type === 'radio'" class="radio-group">
-                <label v-for="opt in f.options" :key="opt.value" class="radio-label">
+              <!-- radio (pill style) -->
+              <div v-if="f.type === 'radio'" class="radio-pill-group">
+                <label
+                  v-for="opt in f.options"
+                  :key="opt.value"
+                  class="radio-pill"
+                  :class="{ active: radioState[f.key] === opt.value }"
+                >
                   <input type="radio" :name="f.key" :value="opt.value" v-model="radioState[f.key]" />
                   <span>{{ opt.label }}</span>
                 </label>
@@ -195,12 +213,10 @@ function groupedFields(d) {
                 <option v-for="opt in f.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
               <!-- checkbox -->
-              <div v-else-if="f.type === 'checkbox'" class="checkbox-field">
-                <label>
-                  <input type="checkbox" v-model="formValues[f.key]" />
-                  <span>{{ f.checkboxLabel || '' }}</span>
-                </label>
-              </div>
+              <label v-else-if="f.type === 'checkbox'" class="confirm-opt">
+                <input type="checkbox" v-model="formValues[f.key]" />
+                <span>{{ f.desc || f.label }}</span>
+              </label>
               <!-- textarea -->
               <textarea v-else-if="f.type === 'textarea'" :id="'field-' + f.key" v-model="formValues[f.key]"
                 :placeholder="f.placeholder || ''" :required="isFieldRequired(f)" rows="3"></textarea>

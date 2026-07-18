@@ -650,8 +650,10 @@ pub async fn delete_rule(
         rules.retain(|r| r.id != id);
         fw::write_staging(&rules, &tables)?;
     } else {
-        let conn = state.db.lock().await;
-        fw::delete_rule(&conn, id)?;
+        {
+            let conn = state.db.lock().await;
+            fw::delete_rule(&conn, id)?;
+        }
         regen_config(&state, driver).await?;
     }
 
@@ -708,8 +710,10 @@ pub async fn reorder_rules(
         }
         fw::write_staging(&reordered, &tables)?;
     } else {
-        let conn = state.db.lock().await;
-        fw::reorder_rules(&conn, &body.ordered_ids)?;
+        {
+            let conn = state.db.lock().await;
+            fw::reorder_rules(&conn, &body.ordered_ids)?;
+        }
         regen_config(&state, driver).await?;
     }
 
@@ -913,8 +917,10 @@ pub async fn delete_table(
         tables.retain(|t| t.id != id);
         fw::write_staging(&rules, &tables)?;
     } else {
-        let conn = state.db.lock().await;
-        fw::delete_table(&conn, id)?;
+        {
+            let conn = state.db.lock().await;
+            fw::delete_table(&conn, id)?;
+        }
         regen_config(&state, driver).await?;
     }
 
@@ -979,8 +985,10 @@ pub async fn delete_entry(
         table.entries.retain(|e| e.id != eid);
         fw::write_staging(&rules, &tables)?;
     } else {
-        let conn = state.db.lock().await;
-        fw::delete_entry(&conn, id, eid)?;
+        {
+            let conn = state.db.lock().await;
+            fw::delete_entry(&conn, id, eid)?;
+        }
         regen_config(&state, driver).await?;
     }
 

@@ -200,6 +200,8 @@ CREATE TABLE firewall_table_entries (
 
 **`regen_config()`**：从 DB 读取规则 + 表，调用 `write_config_only()` 生成配置文件但不加载到内核。防火墙未启用时使用，确保配置文件始终与 DB 一致。PF 路径仅 `atomic_write` 不做 `pfctl -n` 校验（PF 模块可能未加载，`/dev/pf` 不存在时校验会卡住）；ipfw 路径同理只写文件。校验延迟到 apply/enable 时执行。
 
+> **DB 锁注意事项**：`regen_config()` 内部会 `state.db.lock().await`，因此调用方**必须先释放自己持有的 DB 锁**后再调用。由于 `tokio::sync::Mutex` 不可重入，如果调用方在持有锁时直接调用 `regen_config()`，会导致死锁。正确模式：`{ let conn = state.db.lock().await; /* DB ops */ }` 块作用域释放锁后再 `regen_config().await`。
+
 ### Apply 流程
 
 1. 检查是否有 pending confirm（如有则拒绝——`409 Conflict`）
@@ -286,9 +288,19 @@ frontend/src/
 │   ├── FirewallTablesPage.vue   # IP 名单管理（可折叠列表 + 条目增删）
 │   └── FirewallSettingsPage.vue # 设置（引擎切换 + 模式切换 + 启动/停止按钮）
 ├── lib/menu.js                  # 两级菜单：/firewall → rules/tables/settings
-├── composables/useDialog.js     # useCodePreview() + useCountdown() 倒计时弹窗
-└── components/ui/DialogHost.vue # code 弹窗 + countdown 倒计时确认弹窗
+├── composables/useDialog.js     # useCodePreview() + useCountdown() + useFormModal()（含 submitHandler 错误内联展示）
+└── components/ui/DialogHost.vue # 通用弹窗（confirm/alert/code/countdown/form）
 ```
+
+### 前端表单弹窗模式
+
+防火墙规则编辑表单（`FirewallRulesPage.vue` → `makeFields()` → `DialogHost.vue` form 类型）的控件类型与布局约定：
+
+- **Radio（pill 样式）**：动作（allow/deny/reject）、方向（in/out）、源地址类型、目的地址类型 — 使用 `type: 'radio'`，渲染为 `radio-pill-group`（横排胶囊按钮，hover 底色，选中高亮）
+- **Select**：协议、ICMP 类型、IP 名单选择 — 使用 `type: 'select'`
+- **Checkbox**：记录日志 — 使用 `type: 'checkbox'` + `desc` 属性提供描述文字，渲染为 `confirm-opt` 样式（与确认弹窗选项一致，hover 底色）
+- **行布局**：通过 `half: true` + `row: '同值'` 将两个字段放在同一行（`form-row-half` flex 容器）。协议与记录日志共用 `row: 'proto-log'`
+- **提交错误处理**：`submitHandler` 模式 — 传入异步函数，API 报错时错误显示在表单弹窗内（`errorMessage` 区域），弹窗保持打开，用户可修正后重试。不会丢失输入内容
 
 ## API
 
@@ -353,3 +365,4 @@ frontend/src/
 7. **ipfw table 持久化** — 依赖规则脚本重建，不使用 `ipfw table ... add` 的持久化机制
 8. **无配置备份/版本历史** — 当前防锁死机制仅保留最近一次备份，不支持历史版本浏览（P2-D 计划）
 9. **模式切换不触发倒计时** — `set_mode` 直接重新加载规则（pf）或切换默认策略（ipfw），不走防锁死流程
+10. **`position` 字段类型** — `next_position()` 使用 `COALESCE(MAX(position), -1) + 1` 在 `i64` 中计算后转 `u32`，避免空表时 `-1 as u32` 溢出

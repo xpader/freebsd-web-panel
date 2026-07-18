@@ -169,7 +169,7 @@ function makeFields(rule = null) {
   return [
     { key: 'description', label: t('common.description'), value: rule?.description || '', placeholder: 'Allow HTTP' },
     {
-      key: 'action', label: t('firewall.action'), type: 'select', value: rule?.action || 'allow', half: true,
+      key: 'action', label: t('firewall.action'), type: 'radio', value: rule?.action || 'allow', half: true,
       options: [
         { value: 'allow', label: t('firewall.allow') },
         { value: 'deny', label: t('firewall.deny') },
@@ -177,14 +177,14 @@ function makeFields(rule = null) {
       ],
     },
     {
-      key: 'direction', label: t('firewall.direction'), type: 'select', value: rule?.direction || 'in', half: true,
+      key: 'direction', label: t('firewall.direction'), type: 'radio', value: rule?.direction || 'in', half: true,
       options: [
         { value: 'in', label: t('firewall.inbound') },
         { value: 'out', label: t('firewall.outbound') },
       ],
     },
     {
-      key: 'protocol', label: t('firewall.protocol'), type: 'select', value: rule?.protocol || 'tcp', half: true,
+      key: 'protocol', label: t('firewall.protocol'), type: 'select', value: rule?.protocol || 'tcp', half: true, row: 'proto-log',
       options: [
         { value: 'tcp', label: 'TCP' },
         { value: 'udp', label: 'UDP' },
@@ -194,11 +194,8 @@ function makeFields(rule = null) {
       ],
     },
     {
-      key: 'log', label: t('firewall.logging'), type: 'select', value: rule ? (rule.log ? '1' : '0') : '0', half: true,
-      options: [
-        { value: '0', label: t('common.no') },
-        { value: '1', label: t('common.yes') },
-      ],
+      key: 'log', label: t('firewall.logging'), type: 'checkbox', value: rule ? rule.log : false, half: true, row: 'proto-log',
+      desc: t('firewall.loggingDesc'),
     },
     {
       key: 'icmpType', label: 'ICMP Type', type: 'select', value: rule?.icmp_type || '',
@@ -235,7 +232,7 @@ function makeFields(rule = null) {
       showIf: { protocol: ['icmpv6'] },
     },
     {
-      key: 'srcKind', label: t('firewall.source'), type: 'select', value: rule?.source?.kind || 'any', half: true,
+      key: 'srcKind', label: t('firewall.source'), type: 'radio', value: rule?.source?.kind || 'any',
       options: [
         { value: 'any', label: t('firewall.addrAny') },
         { value: 'me', label: t('firewall.addrMe') },
@@ -245,30 +242,30 @@ function makeFields(rule = null) {
       ],
     },
     {
-      key: 'srcValue', label: t('firewall.addrValue'), value: rule?.source?.value || '', half: true,
+      key: 'srcValue', label: t('firewall.addrValue'), value: rule?.source?.value || '', half: true, row: 'src-detail',
       placeholder: '192.168.1.1',
       showIf: { srcKind: ['single'] },
       requiredIf: { srcKind: ['single'] },
     },
     {
-      key: 'srcValueCidr', label: t('firewall.addrValue'), value: rule?.source?.value || '', half: true,
+      key: 'srcValueCidr', label: t('firewall.addrValue'), value: rule?.source?.value || '', half: true, row: 'src-detail',
       placeholder: '10.0.0.0/24',
       showIf: { srcKind: ['cidr'] },
       requiredIf: { srcKind: ['cidr'] },
     },
     {
-      key: 'srcTable', label: t('firewall.addrTable'), type: 'select', value: rule?.source?.kind === 'table' ? rule.source.value : '', half: true,
+      key: 'srcTable', label: t('firewall.addrTable'), type: 'select', value: rule?.source?.kind === 'table' ? rule.source.value : '', half: true, row: 'src-detail',
       options: tableOptions,
       showIf: { srcKind: ['table'] },
       requiredIf: { srcKind: ['table'] },
     },
     {
-      key: 'srcPort', label: t('firewall.srcPort'), value: rule?.source_port || '', half: true,
+      key: 'srcPort', label: t('firewall.srcPort'), value: rule?.source_port || '', half: true, row: 'src-detail',
       placeholder: '80 or 1024-65535 or 53,80,443-450',
       showIf: { protocol: ['tcp', 'udp'] },
     },
     {
-      key: 'dstKind', label: t('firewall.destination'), type: 'select', value: rule?.destination?.kind || 'me', half: true,
+      key: 'dstKind', label: t('firewall.destination'), type: 'radio', value: rule?.destination?.kind || 'me',
       options: [
         { value: 'any', label: t('firewall.addrAny') },
         { value: 'me', label: t('firewall.addrMe') },
@@ -278,25 +275,25 @@ function makeFields(rule = null) {
       ],
     },
     {
-      key: 'dstValue', label: t('firewall.addrValue'), value: rule?.destination?.value || '', half: true,
+      key: 'dstValue', label: t('firewall.addrValue'), value: rule?.destination?.value || '', half: true, row: 'dst-detail',
       placeholder: '192.168.1.1',
       showIf: { dstKind: ['single'] },
       requiredIf: { dstKind: ['single'] },
     },
     {
-      key: 'dstValueCidr', label: t('firewall.addrValue'), value: rule?.destination?.value || '', half: true,
+      key: 'dstValueCidr', label: t('firewall.addrValue'), value: rule?.destination?.value || '', half: true, row: 'dst-detail',
       placeholder: '10.0.0.0/24',
       showIf: { dstKind: ['cidr'] },
       requiredIf: { dstKind: ['cidr'] },
     },
     {
-      key: 'dstTable', label: t('firewall.addrTable'), type: 'select', value: rule?.destination?.kind === 'table' ? rule.destination.value : '', half: true,
+      key: 'dstTable', label: t('firewall.addrTable'), type: 'select', value: rule?.destination?.kind === 'table' ? rule.destination.value : '', half: true, row: 'dst-detail',
       options: tableOptions,
       showIf: { dstKind: ['table'] },
       requiredIf: { dstKind: ['table'] },
     },
     {
-      key: 'dstPort', label: t('firewall.dstPort'), value: rule?.destination_port || '', half: true,
+      key: 'dstPort', label: t('firewall.dstPort'), value: rule?.destination_port || '', half: true, row: 'dst-detail',
       placeholder: '80 or 443,8080 or 80,443,8080-8090',
       showIf: { protocol: ['tcp', 'udp'] },
     },
@@ -334,7 +331,7 @@ function extractBody(result) {
     destination: { kind: dstKind, value: dstValue },
     destination_port: dstPort,
     interface: result.interface || null,
-    log: result.log === '1',
+    log: !!result.log,
     icmp_type: icmpType,
     description: result.description || null,
   };
@@ -342,30 +339,28 @@ function extractBody(result) {
 
 async function doAddRule() {
   if (tables.value.length === 0) await loadTables();
-  const result = await formModal(t('firewall.addRuleTitle'), makeFields(), { submitLabel: t('common.create') });
-  if (!result) return;
-  try {
-    await api.post('/api/firewall/rules', extractBody(result));
-    toast.toast(t('firewall.ruleAdded'));
-    await loadStatus();
-    await loadRules();
-  } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  }
+  const result = await formModal(t('firewall.addRuleTitle'), makeFields(), {
+    submitLabel: t('common.create'),
+    submitHandler: async (r) => {
+      await api.post('/api/firewall/rules', extractBody(r));
+      toast.toast(t('firewall.ruleAdded'));
+      await loadStatus();
+      await loadRules();
+    },
+  });
 }
 
 async function doEditRule(rule) {
   if (tables.value.length === 0) await loadTables();
-  const result = await formModal(t('firewall.editRuleTitle'), makeFields(rule), { submitLabel: t('common.save') });
-  if (!result) return;
-  try {
-    await api.put(`/api/firewall/rules/${rule.id}`, extractBody(result));
-    toast.toast(t('firewall.ruleUpdated'));
-    await loadStatus();
-    await loadRules();
-  } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  }
+  const result = await formModal(t('firewall.editRuleTitle'), makeFields(rule), {
+    submitLabel: t('common.save'),
+    submitHandler: async (r) => {
+      await api.put(`/api/firewall/rules/${rule.id}`, extractBody(r));
+      toast.toast(t('firewall.ruleUpdated'));
+      await loadStatus();
+      await loadRules();
+    },
+  });
 }
 
 async function doDeleteRule(rule) {
