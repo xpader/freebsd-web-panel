@@ -14,7 +14,7 @@ Jail 模块提供完整的 jail 生命周期管理：容器列表（运行中/�
 - jail.conf 解析器（变量替换、注释处理、全局参数继承）
 - jail.conf 块写入（备份 + 原子替换，智能省略与全局默认相同的参数）
 - 基础系统管理（三种创建方式/编辑/镜像创建）
-- VNET 自动配置（epair/bridge 生命周期、DHCP/静态 IP）
+- VNET 自动配置（epair/bridge 生命周期、DHCP/静态 IP、可定制网关、支持空接口跳过 bridge）
 - Jail 终端（WebSocket + PTY + xterm.js）
 - Jail 初始化（检测 /etc/jail.conf 不存在 → 428 状态码 → 初始化按钮 → 创建默认配置文件）
 - 默认配置管理（jail.conf 全局参数 / devfs.rules / 默认 resolv.conf 的查看与编辑）
@@ -97,7 +97,7 @@ fn main() {
 
 - `backup_jail_conf(state)` — 备份到 `/var/db/fwp/backup/jail.conf.<timestamp>`
 - `write_jail_conf_atomic(content)` — 写入临时文件 + rename（原子操作）
-- `generate_jail_block(...)` — 生成 jail 块，**智能省略与全局默认相同的参数**（如 `path="/jails/${name}"` 匹配默认值时不写入）
+- `generate_jail_block_from_params(name, params, globals)` — 从参数 map 生成 jail 块，**智能省略与全局默认相同的参数**（如 `path="/jails/${name}"` 匹配默认值时不写入）
 - `remove_jail_block(conf, name)` — 从内容中移除指定 jail 块
 
 ### Handler 模块 `src/handlers/jails.rs`
@@ -342,14 +342,15 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 
 分区标签页编辑，与详情页结构对应：
 - **基本信息**：path、hostname、meta.description、自动启动等
-- **网络**：meta.interface（接口）、meta.ip4（统一 IP 字段 = 下拉选模式 + 条件地址输入框）、meta.ip6、vnet、vnet.interface（只读 auto）
+- **网络**：meta.interface（接口，可空）、meta.ip4（统一 IP 字段 = 下拉选模式 + 条件地址输入框）、meta.ip6、meta.gateway（VNET 静态 IP 网关，可空=自动）、vnet、vnet.interface（只读 auto）
 - **执行**：exec.start/stop/prestart/poststop 为多行文本框（每行一条命令，保存为 `+=`）、exec.clean 等
 - **挂载**：mount.fstab（含 fstab 管理弹窗）、devfs 等
 - **安全**、**其它**
 
 IP 字段交互（`type: 'ip'`）：
 - 模式选择和地址文本独立存储（`ipModeOverrides` / `ipAddrs`），切换模式不丢失地址
-- VNET 模式选项：静态/DHCP/禁用；普通模式：—/静态/inherit/禁用
+- 模式选项统一为 5 种：`—` / 静态 / DHCP / inherit / 禁用（不论 VNET 开关）
+- 切换到 DHCP 自动开 VNET，切换到 inherit 自动关 VNET（语义约束）
 - 仅提交时合并写入 `form.value`
 
 ### 网络配置与 VNET 自动配置
@@ -361,9 +362,10 @@ IP 字段交互（`type: 'ip'`）：
 | meta 键 | 含义 | 示例值 |
 |---|---|---|
 | `meta.description` | 人类可读描述 | `"Web server"` |
-| `meta.interface` | 出口网络接口 | `"bge1"` |
+| `meta.interface` | 出口网络接口 | `"bge1"` / 空 |
 | `meta.ip4` | IPv4 配置（单值） | `"dhcp"` / `"192.168.1.10"` / `"inherit"` / `"disable"` / 空 |
 | `meta.ip6` | IPv6 配置（同上） | 同上 |
+| `meta.gateway` | VNET 静态 IP 默认网关 | `"192.168.1.1"` / 空（=自动用主机默认网关） |
 
 `meta.ip4` 的值决定 IP 模式：
 - **空/不存在** = None（无 IP 配置）
@@ -389,35 +391,52 @@ myjail {
 #### VNET 自动模式
 
 勾选 `vnet` 后，`vnet.interface` 设为 `auto`。保存时：
-1. `meta.interface` 用于查找或创建网桥（`ensure_bridge_for_interface`）
-2. 自动生成 epair 生命周期命令（`fwp-vnet` 脚本）
-3. 根据 `meta.ip4` 值生成 IP 配置命令
+1. 分配 epair_id（`ensure_epair_id`，≥100，扫描 jail.conf 已用 id + 系统 epair 接口，避免冲突）
+2. 若 `meta.interface` 非空：用于查找或创建网桥（`ensure_bridge_for_interface`）；若为空：跳过网桥，epair host 端不接入任何网桥（适用于 NAT 或外部管理的网络）
+3. 自动生成 epair 生命周期命令（`fwp-vnet` 脚本，host/jail 端均以 `epair<id>a`/`epair<id>b` 命名，**不做重命名**）
+4. 根据 `meta.ip4` 值生成 IP 配置命令
 
 ```
 myjail {
     meta.description = "DHCP jail";
     meta.interface = "bge1";
     meta.ip4 = "dhcp";
+    meta.epair_id = "100";
     vnet;
-    vnet.interface = "vnet0";
+    vnet.interface = "epair100b";
     devfs_ruleset = "11";
-    exec.prestart += "/usr/local/libexec/fwp-vnet up ${name} bridge0";
-    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} dhcp";
-    exec.poststop += "/usr/local/libexec/fwp-vnet down ${name}";
+    exec.prestart += "/usr/local/libexec/fwp-vnet up ${name} 100 bridge0";
+    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} 100 dhcp";
+    exec.poststop += "/usr/local/libexec/fwp-vnet down ${name} 100";
 }
 ```
 
-静态 IP 的 VNET jail：
+`meta.interface` 为空时（不接入网桥，省略 bridge 参数）：
 ```
-    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} static 192.168.1.10/24 192.168.1.1";
+    exec.prestart += "/usr/local/libexec/fwp-vnet up ${name} 100";
 ```
+
+静态 IP 的 VNET jail，`meta.gateway` 非空时使用用户指定的网关：
+```
+    meta.ip4 = "192.168.1.10";
+    meta.gateway = "192.168.1.1";
+    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} 100 static 192.168.1.10 192.168.1.1";
+```
+
+`meta.gateway` 为空时自动使用主机默认网关（`route -n get default`）。
+
+`meta.epair_id` 在详情 API 响应中被剥离（内部字段，不暴露给前端）。
 
 #### 网桥自动管理
 
 `ensure_bridge_for_interface(iface)`:
-1. 如果接口已是某网桥成员 → 返回该网桥
+1. 如果接口已是某网桥成员 → 返回该网桥（`find_bridge_for_interface`）
 2. 如果接口本身是网桥 → 返回它
-3. 否则 → 创建新网桥，加入接口，全部 up
+3. 否则 → 验证接口存在 → 创建新网桥，加入接口，全部 up
+
+**网桥判定**用 `crate::ifutil::is_bridge(iface)`，通过 sysctl `IFDATA_DRIVERNAME`（`net.link.generic.ifdata.<idx>.3`）读内核 `if_dname`+`if_dunit` 拼接得到驱动名（如 `"bridge0"`、`"bridge1"`）。**不依赖接口名字符串匹配**，因此对 `vm-public` 这类改名网桥（drivername 仍为 `"bridge0"`）也能正确识别。
+
+枚举所有网桥成员用 `crate::ifutil::list_group_members("bridge")`（SIOCGIFGMEMB ioctl），同样不依赖名字。
 
 #### fwp-vnet 辅助脚本
 
@@ -425,10 +444,13 @@ myjail {
 
 | 子命令 | 执行位置 | 作用 |
 |---|---|---|
-| `up <name> <bridge>` | 主机（exec.prestart） | 创建 epair，host 端加入网桥，jail 端重命名 vnet0 |
-| `down <name>` | 主机（exec.poststop） | 销毁 vnet0（epair 对自动销毁） |
-| `init <name> dhcp` | 主机（exec.poststart） | jexec 进 jail 启动 dhclient |
-| `init <name> static <ip> <gw>` | 主机（exec.poststart） | jexec 进 jail 配置 ifconfig + route |
+| `up <name> <id> <bridge>` | 主机（exec.prestart） | 创建 `epair<id>`，host 端 `epair<id>a` 加入指定 bridge（bridge 省略则跳过 addm） |
+| `up <name> <id>` | 主机（exec.prestart） | 同上但无 bridge（`meta.interface` 为空的 NAT/外部管理场景） |
+| `down <name> <id>` | 主机（exec.poststop） | 销毁 `epair<id>a`（对端 b 自动销毁） |
+| `init <name> <id> dhcp` | 主机（exec.poststart） | jexec 进 jail 对 `epair<id>b` 启动 dhclient |
+| `init <name> <id> static <ip> <gw>` | 主机（exec.poststart） | jexec 进 jail 对 `epair<id>b` 配置 ifconfig + 默认路由 |
+
+接口命名约定：`epair<id>a`（host 端）、`epair<id>b`（jail 端）。**不做重命名**——避免并行启动时的命名竞争、tmux 残留接口等问题。`<id>` 来自 `meta.epair_id`（≥100，持久化在 jail.conf）。
 
 #### 编辑时的 exec 行管理
 
@@ -520,8 +542,9 @@ POST `/api/jails/bases` 请求体根据 `method` 不同：
 - **`/etc/devfs.rules`** — Devfs 规则文件（初始化 + 读写）
 - **`/var/db/fwp/jail-resolv.conf`** — 默认 jail DNS 配置（读写）
 - **`/usr/local/libexec/fwp-vnet`** — VNET epair 生命周期管理脚本（首次启用 VNET 时自动创建）
-- **`/sbin/ifconfig`** — 网桥检测、epair 创建/销毁（VNET 自动配置）
-- **`/sbin/route`** — 默认网关检测（VNET 自动配置）
+- **`/sbin/ifconfig`** — epair 创建/销毁、bridge create/addm/up、成员查询回退（VNET 自动配置）
+- **`/sbin/route`** — 默认网关检测（VNET 自动配置，`meta.gateway` 为空时使用）
+- **`crate::ifutil`** — 网桥身份判定（`is_bridge()` via sysctl IFDATA_DRIVERNAME）、bridge 组成员枚举（`list_group_members` via SIOCGIFGMEMB ioctl）、epair 组成员枚举（epair_id 分配冲突检测）
 - **crate: libc** — FFI 类型（`c_char`, `c_int`, `c_void`, `size_t`）
 - **crate: serde_json** — 基础系统注册表 JSON 读写
 

@@ -142,6 +142,11 @@ mod migrations {
             desc: "firewall: create firewall tables in current form",
             func: m1,
         },
+        Migration {
+            version: 2,
+            desc: "firewall: create firewall_nat_rules table",
+            func: m2,
+        },
     ];
 
     /// v1: Create firewall tables (rules, state, tables, table entries).
@@ -214,6 +219,35 @@ mod migrations {
             [],
         )?;
 
+        Ok(())
+    }
+
+    /// v2: Create firewall_nat_rules table (NAT / port-forward rules).
+    fn m2(conn: &Connection) -> ApiResult<()> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS firewall_nat_rules (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                position    INTEGER NOT NULL DEFAULT 0,
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                kind        TEXT    NOT NULL,
+                family      TEXT    NOT NULL,
+                interface   TEXT    NOT NULL,
+                src_addr    TEXT    NOT NULL,
+                dst_addr    TEXT,
+                src_port    TEXT,
+                dst_port    TEXT,
+                protocol    TEXT    NOT NULL,
+                description TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_firewall_nat_position
+                ON firewall_nat_rules(position)",
+            [],
+        )?;
         Ok(())
     }
 }

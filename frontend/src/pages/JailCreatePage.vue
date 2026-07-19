@@ -30,6 +30,7 @@ const ip4Mode = ref('');
 const ip4Addr = ref('');
 const ip6Mode = ref('');
 const ip6Addr = ref('');
+const gateway = ref('');
 
 function onIpModeChange(key, mode) {
   if (key === 'ip4') ip4Mode.value = mode;
@@ -98,6 +99,9 @@ async function onSubmit() {
     result.ip6 = ip6Addr.value.trim() || null;
   } else if (ip6Mode.value && ip6Mode.value !== 'disable') {
     result.ip6 = ip6Mode.value;
+  }
+  if (gateway.value.trim()) {
+    result.gateway = gateway.value.trim();
   }
 
   if (form.value.location_type === 'directory') {
@@ -279,6 +283,13 @@ onMounted(async () => {
               </select>
               <input v-if="ip6Mode === 'static'" type="text" v-model="ip6Addr" :placeholder="ipPlaceholder('ip6')" />
             </div>
+          </div>
+        </div>
+        <div v-if="vnet && ip4Mode === 'static'" class="form-row">
+          <label class="form-row-label">{{ t('jails.labelMetaGateway') }}</label>
+          <div>
+            <input type="text" v-model="gateway" placeholder="192.168.1.1" />
+            <p class="param-desc">{{ t('jails.descMetaGateway') }}</p>
           </div>
         </div>
         <div class="form-row">

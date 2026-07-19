@@ -115,6 +115,7 @@ const PARAM_GROUPS = {
     { key: 'meta.interface', type: 'text', labelKey: 'jails.labelMetaInterface', descKey: 'jails.descMetaInterface', lockWhenRunning: true },
     { key: 'meta.ip4', type: 'ip', labelKey: 'jails.labelMetaIp4', lockWhenRunning: true },
     { key: 'meta.ip6', type: 'ip', labelKey: 'jails.labelMetaIp6', lockWhenRunning: true },
+    { key: 'meta.gateway', type: 'text', labelKey: 'jails.labelMetaGateway', descKey: 'jails.descMetaGateway', lockWhenRunning: true },
     { key: 'vnet', type: 'bool', descKey: 'jails.descVnet', lockWhenRunning: true },
     { key: 'vnet.interface', type: 'text', vnetDependent: true, readOnly: true, descKey: 'jails.descVnetInterface' },
     { key: 'allow.raw_sockets', type: 'bool', descKey: 'jails.descAllowRawSockets' },

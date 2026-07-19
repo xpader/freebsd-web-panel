@@ -104,6 +104,7 @@ CREATE TABLE firewall_table_entries (
 - 白名单模式：`set skip on lo0` + `block all` + `pass out quick all flags any keep state (sloppy)`
 - 黑名单模式：`set skip on lo0`（pf 默认放行）
 - 用户规则使用 `quick`（首个匹配生效，与 ipfw 语义一致）
+- **PF 规则关键字顺序**（`pf.conf(5)` 强制）：`action [direction] [log] [quick] [on interface] [af] [proto] from ... to ...`。`on interface` 必须在 `inet`/`inet6` 之前，否则 `pfctl -n -f` 报语法错误。生成器通过 `parts: Vec<String>` 按此顺序构建，不单独拼接 log/interface
 - `set skip on lo0` 必须在 `block all` 前面
 - **状态保持（keep state）自动判断**：allow + TCP → `flags any keep state (sloppy)`；allow + UDP/ICMP → 裸 `keep state`；allow + `any` 协议 → 裸 `keep state`（对无连接协议无实际效果，但不影响正确性）；deny/reject → 不加。
   - **`flags any`**：让 PF 匹配任意 TCP 标志位的包（包括已有连接的 ACK/PSH），确保 PF 在连接中途启用时非 SYN 包也能匹配规则、创建状态，不被 `block all` 丢弃。
@@ -269,8 +270,11 @@ CREATE TABLE firewall_table_entries (
   - **apply**（改规则）：标题"确认防火墙变更"，描述"新规则已生效…否则恢复之前的规则"，按钮「恢复规则」/「保持变更」
   - **enable**（启动）：标题"确认防火墙启动"，描述"防火墙已启动…否则停止防火墙"，按钮「停止」/「保持启动」
 - 倒计时归零自动触发 rollback
+- **定时器清理**（`useCountdown` in `composables/useDialog.js`）：倒计时通过 `setInterval`（500ms）更新对话框的 `secs`/`pct`。必须在对话框关闭时清理定时器，否则幽灵定时器会在归零时调用 `resolveDialog('rollback')` 关闭用户后续打开的任何对话框（`ui.resolveDialog` 操作全局唯一的 `dialog.value`）。双重防护：
+  1. `setInterval` 回调开头检查 `ui.dialog !== dialogObj`（对话框已被替换或清空时立即 `clearInterval`）
+  2. `promise.then(() => clearInterval(timer))`（promise resolve 时主动清理）
 - 确认/恢复后重新加载规则列表（`loadRules()`），显示 DB 真实状态
-- 倒计时弹出 1 秒后探测 `/api/firewall/status`，如果不可达则显示"FWP 服务不可达"警告
+- 倒计时弹出 1 秒后探测 `/api/firewall/status`，如果不可达则显示"FWP 服务不可达"警告（探测回调同样检查 `ui.dialog !== dialogObj`，避免更新已关闭的对话框）
 - 如果 apply 请求因连接中断而失败，前端通过 status 轮询检测 `pending_confirm` 并弹出对话框
 
 ### 文件结构
@@ -356,7 +360,7 @@ frontend/src/
 
 ## 已知限制 / TODO
 
-1. **不支持 NAT/转发规则** — 仅过滤规则（P2-E 计划）
+1. **NAT/转发规则已实现** — 详见 [28-nat.md](28-nat.md)，支持 SNAT/DNAT 独立模型、嵌入式生成、复用 staging/apply/防锁死链路。BINAT 完整支持为 P2
 2. **不导入已有配置** — 初始化时生成空白规则集（P2-F 计划）
 3. **pf 的 `(self)` 地址** — 表示本机所有 IP，不支持指定接口地址
 4. **无规则可达性分析** — 不检测规则冲突或冗余（P2-B 计划）

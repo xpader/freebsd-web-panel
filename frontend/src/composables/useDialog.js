@@ -59,7 +59,14 @@ export function useCountdown() {
 
     const dialogObj = ui.dialog;
 
-    const timer = setInterval(() => {
+    let timer = null;
+    timer = setInterval(() => {
+      // If the dialog was closed by other means (user clicked a button),
+      // dialog.value is now a different dialog or null — stop the timer.
+      if (ui.dialog !== dialogObj) {
+        clearInterval(timer);
+        return;
+      }
       const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
       dialogObj.secs = remaining;
       dialogObj.pct = (remaining / total) * 100;
@@ -69,8 +76,14 @@ export function useCountdown() {
       }
     }, 500);
 
+    // Clean up the timer when the promise resolves (user clicked a button
+    // or countdown expired). Without this, the interval keeps running and
+    // may close subsequently opened dialogs.
+    promise.then(() => clearInterval(timer));
+
     if (opts.probeUrl) {
       setTimeout(async () => {
+        if (ui.dialog !== dialogObj) return;
         try {
           const controller = new AbortController();
           const to = setTimeout(() => controller.abort(), 5000);
@@ -80,7 +93,9 @@ export function useCountdown() {
           });
           clearTimeout(to);
         } catch (_) {
-          dialogObj.warning = opts.warningMessage || null;
+          if (ui.dialog === dialogObj) {
+            dialogObj.warning = opts.warningMessage || null;
+          }
         }
       }, 1000);
     }

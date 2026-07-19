@@ -188,3 +188,27 @@ pub fn get_drivername(ifname: &str) -> Option<String> {
     let cstr = unsafe { CStr::from_ptr(buf.as_ptr() as *const libc::c_char) };
     cstr.to_str().ok().map(|s| s.to_string())
 }
+
+/// Whether `ifname` is a bridge interface.
+///
+/// Uses the kernel-reported driver name via `get_drivername`:
+/// - Default-named bridges return `"bridge0"`, `"bridge1"`, etc.
+/// - Renamed bridges (e.g. `ifconfig bridge create name mybr0`) return
+///   `"bridge"` (kernel marks dunit=IF_DUNIT_NONE).
+/// - Renamed physical NICs (e.g. `ifconfig em0 name wan0`) return their
+///   original driver+unit (e.g. `"em0"`), NOT a bridge.
+///
+/// This correctly distinguishes bridges by driver identity rather than
+/// naming convention.
+pub fn is_bridge(ifname: &str) -> bool {
+    match get_drivername(ifname) {
+        Some(name) => {
+            // Exactly "bridge" (renamed) or "bridge" + digits (default-named).
+            // Guards against hypothetical drivers like "bridgelan".
+            name == "bridge"
+                || (name.starts_with("bridge")
+                    && name["bridge".len()..].chars().all(|c| c.is_ascii_digit()))
+        }
+        None => false,
+    }
+}

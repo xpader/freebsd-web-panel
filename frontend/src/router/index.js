@@ -26,6 +26,7 @@ import ServicesPage from '../pages/ServicesPage.vue';
 import AccountsUsersPage from '../pages/AccountsUsersPage.vue';
 import AccountsGroupsPage from '../pages/AccountsGroupsPage.vue';
 import FirewallRulesPage from '../pages/FirewallRulesPage.vue';
+import FirewallNatPage from '../pages/FirewallNatPage.vue';
 import FirewallTablesPage from '../pages/FirewallTablesPage.vue';
 import FirewallSettingsPage from '../pages/FirewallSettingsPage.vue';
 import BhyveVmsPage from '../pages/BhyveVmsPage.vue';
@@ -87,6 +88,7 @@ const routes = [
       { path: 'pf', redirect: '/firewall/rules' },
       { path: 'firewall', redirect: '/firewall/rules' },
       { path: 'firewall/rules', name: 'firewall-rules', component: FirewallRulesPage },
+      { path: 'firewall/nat', name: 'firewall-nat', component: FirewallNatPage },
       { path: 'firewall/tables', name: 'firewall-tables', component: FirewallTablesPage },
       { path: 'firewall/settings', name: 'firewall-settings', component: FirewallSettingsPage },
       { path: 'bhyve', redirect: '/bhyve/vms' },

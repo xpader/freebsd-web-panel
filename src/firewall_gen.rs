@@ -146,6 +146,139 @@ pub struct EntryBody {
     pub address: String,
 }
 
+// ── NAT rule types ─────────────────────────────────────────────────
+
+/// NAT rule kind: source NAT, destination NAT (port forward), or 1:1 bidir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NatKind {
+    Snat,
+    Dnat,
+    Binat,
+}
+
+impl NatKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Snat => "snat",
+            Self::Dnat => "dnat",
+            Self::Binat => "binat",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "snat" => Some(Self::Snat),
+            "dnat" => Some(Self::Dnat),
+            "binat" => Some(Self::Binat),
+            _ => None,
+        }
+    }
+}
+
+/// Address family for a NAT rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NatFamily {
+    Ip,
+    Ip6,
+}
+
+impl NatFamily {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ip => "ip",
+            Self::Ip6 => "ip6",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "ip" => Some(Self::Ip),
+            "ip6" => Some(Self::Ip6),
+            _ => None,
+        }
+    }
+
+    pub fn pf_kw(&self) -> &'static str {
+        match self {
+            Self::Ip => "inet",
+            Self::Ip6 => "inet6",
+        }
+    }
+}
+
+/// NAT protocol selector. `Both` means TCP + UDP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NatProto {
+    Tcp,
+    Udp,
+    Both,
+}
+
+impl NatProto {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+            Self::Both => "both",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "tcp" => Some(Self::Tcp),
+            "udp" => Some(Self::Udp),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+}
+
+/// Structured NAT rule — driver-agnostic abstraction.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NatRule {
+    pub id: i64,
+    pub position: u32,
+    pub enabled: bool,
+    pub kind: NatKind,
+    pub family: NatFamily,
+    pub interface: String,
+    pub src_addr: String,
+    #[serde(default)]
+    pub dst_addr: Option<String>,
+    #[serde(default)]
+    pub src_port: Option<String>,
+    #[serde(default)]
+    pub dst_port: Option<String>,
+    pub protocol: NatProto,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Fields accepted when creating or updating a NAT rule.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct NatBody {
+    pub kind: NatKind,
+    pub family: NatFamily,
+    pub interface: String,
+    pub src_addr: String,
+    #[serde(default)]
+    pub dst_addr: Option<String>,
+    #[serde(default)]
+    pub src_port: Option<String>,
+    #[serde(default)]
+    pub dst_port: Option<String>,
+    pub protocol: NatProto,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 // ── core structs ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -557,6 +690,179 @@ pub fn delete_entry(conn: &Connection, table_id: i64, entry_id: i64) -> ApiResul
     Ok(())
 }
 
+// ── NAT rule CRUD ──────────────────────────────────────────────────
+
+pub fn list_nat_rules(conn: &Connection) -> ApiResult<Vec<NatRule>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, position, enabled, kind, family, interface, \
+         src_addr, dst_addr, src_port, dst_port, protocol, description, \
+         created_at, updated_at \
+         FROM firewall_nat_rules ORDER BY position ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(NatRule {
+                id: r.get(0)?,
+                position: r.get::<_, i64>(1)? as u32,
+                enabled: r.get::<_, i64>(2)? != 0,
+                kind: NatKind::from_str(&r.get::<_, String>(3)?).unwrap_or(NatKind::Snat),
+                family: NatFamily::from_str(&r.get::<_, String>(4)?).unwrap_or(NatFamily::Ip),
+                interface: r.get(5)?,
+                src_addr: r.get(6)?,
+                dst_addr: r.get(7)?,
+                src_port: r.get(8)?,
+                dst_port: r.get(9)?,
+                protocol: NatProto::from_str(&r.get::<_, String>(10)?).unwrap_or(NatProto::Both),
+                description: r.get(11)?,
+                created_at: r.get(12)?,
+                updated_at: r.get(13)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn next_nat_position(conn: &Connection) -> ApiResult<u32> {
+    let max: Option<i64> = conn
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) FROM firewall_nat_rules",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(max.map(|v| (v + 1) as u32).unwrap_or(0))
+}
+
+pub fn create_nat_rule(
+    conn: &Connection,
+    body: &NatBody,
+    now: i64,
+) -> ApiResult<i64> {
+    let pos = next_nat_position(conn)?;
+    conn.execute(
+        "INSERT INTO firewall_nat_rules \
+         (position, enabled, kind, family, interface, src_addr, dst_addr, \
+          src_port, dst_port, protocol, description, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+        params![
+            pos,
+            body.enabled as i64,
+            body.kind.as_str(),
+            body.family.as_str(),
+            body.interface,
+            body.src_addr,
+            body.dst_addr,
+            body.src_port,
+            body.dst_port,
+            body.protocol.as_str(),
+            body.description,
+            now,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_nat_rule(
+    conn: &Connection,
+    id: i64,
+    body: &NatBody,
+    now: i64,
+) -> ApiResult<()> {
+    let n = conn.execute(
+        "UPDATE firewall_nat_rules SET \
+         kind = ?1, family = ?2, interface = ?3, src_addr = ?4, dst_addr = ?5, \
+         src_port = ?6, dst_port = ?7, protocol = ?8, enabled = ?9, \
+         description = ?10, updated_at = ?11 \
+         WHERE id = ?12",
+        params![
+            body.kind.as_str(),
+            body.family.as_str(),
+            body.interface,
+            body.src_addr,
+            body.dst_addr,
+            body.src_port,
+            body.dst_port,
+            body.protocol.as_str(),
+            body.enabled as i64,
+            body.description,
+            now,
+            id,
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("NAT rule not found".into()));
+    }
+    Ok(())
+}
+
+pub fn delete_nat_rule(conn: &Connection, id: i64) -> ApiResult<()> {
+    let n = conn.execute(
+        "DELETE FROM firewall_nat_rules WHERE id = ?1",
+        params![id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("NAT rule not found".into()));
+    }
+    Ok(())
+}
+
+pub fn toggle_nat_rule(conn: &Connection, id: i64) -> ApiResult<()> {
+    let n = conn.execute(
+        "UPDATE firewall_nat_rules SET enabled = 1 - enabled WHERE id = ?1",
+        params![id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("NAT rule not found".into()));
+    }
+    Ok(())
+}
+
+pub fn reorder_nat_rules(
+    conn: &Connection,
+    ordered_ids: &[i64],
+) -> ApiResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt =
+            tx.prepare("UPDATE firewall_nat_rules SET position = ?1 WHERE id = ?2")?;
+        for (pos, id) in ordered_ids.iter().enumerate() {
+            stmt.execute(params![pos as i64, id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Replace all NAT rules in DB with the given list (for staging confirm).
+pub fn replace_all_nat_rules(conn: &Connection, rules: &[NatRule]) -> ApiResult<()> {
+    conn.execute("DELETE FROM firewall_nat_rules", [])?;
+    for (i, rule) in rules.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO firewall_nat_rules \
+             (id, position, enabled, kind, family, interface, src_addr, dst_addr, \
+              src_port, dst_port, protocol, description, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                rule.id,
+                i as i64,
+                rule.enabled as i64,
+                rule.kind.as_str(),
+                rule.family.as_str(),
+                rule.interface,
+                rule.src_addr,
+                rule.dst_addr,
+                rule.src_port,
+                rule.dst_port,
+                rule.protocol.as_str(),
+                rule.description,
+                rule.created_at,
+                rule.updated_at,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 /// Validate a table name: alphanumeric + underscore/hyphen, 1-32 chars, start with letter.
 pub fn validate_table_name(name: &str) -> ApiResult<()> {
     let re = regex::Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]{0,31}$").unwrap();
@@ -649,7 +955,7 @@ fn is_ipv6(addr: &str) -> bool {
 }
 
 /// Generate the full ipfw shell script from enabled rules.
-pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> String {
+pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
     let mut buf = header(FirewallDriver::Ipfw, mode);
     buf.push_str("ipfw -q flush\n\n");
 
@@ -663,6 +969,12 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
             }
             buf.push('\n');
         }
+    }
+
+    // NAT instance configuration (must appear before rules that use `nat N`).
+    let nat_config = generate_ipfw_nat_config(nat_rules);
+    if !nat_config.is_empty() {
+        buf.push_str(&nat_config);
     }
 
     for (i, rule) in rules.iter().filter(|r| r.enabled).enumerate() {
@@ -741,6 +1053,14 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
         ));
     }
 
+    // NAT rules (must come after filter rules, before default policy).
+    // Rule numbers start at 50000 with step 100 to stay clear of managed
+    // filter rules (00100-49900) and default policy (65000/65534).
+    let nat_rules_str = generate_ipfw_nat_rules(nat_rules);
+    if !nat_rules_str.is_empty() {
+        buf.push_str(&nat_rules_str);
+    }
+
     // Default policy rule at 65534 (before kernel default 65535).
     // Whitelist: allow outbound + deny all inbound; Blacklist: allow all.
     if mode == FirewallMode::Whitelist {
@@ -759,7 +1079,7 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
 }
 
 /// Generate the full pf.conf from enabled rules.
-pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> String {
+pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
     let mut buf = header(FirewallDriver::Pf, mode);
 
     // IP tables (must be declared before rules that reference them)
@@ -774,6 +1094,14 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
             }
         }
         buf.push('\n');
+    }
+
+    // NAT / rdr rules must appear before the default `block all` so the NAT
+    // translation happens before filtering. PF evaluates NAT and filter rules
+    // in separate passes, but keeping NAT at the top is conventional.
+    let nat_str = generate_pf_nat(nat_rules);
+    if !nat_str.is_empty() {
+        buf.push_str(&nat_str);
     }
 
     if mode == FirewallMode::Whitelist {
@@ -829,7 +1157,17 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
             }
         };
 
-        let mut parts: Vec<String> = vec![action.into(), dir.into(), "quick".into()];
+        // PF rule syntax order (pf.conf(5)):
+        //   action [direction] [log] [quick] [on interface] [af] [proto] from ... to ...
+        // log, interface, af, proto must appear in this exact order.
+        let mut parts: Vec<String> = vec![action.into(), dir.into()];
+        if rule.log {
+            parts.push("log".into());
+        }
+        parts.push("quick".into());
+        if let Some(ifn) = rule.interface.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(format!("on {ifn}"));
+        }
         if let Some(af) = af {
             parts.push(af.into());
         }
@@ -853,15 +1191,6 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
             .filter(|s| !s.is_empty())
             .map(|p| format!(" port {}", port_to_pf(p)))
             .unwrap_or_default();
-
-        let iface = rule
-            .interface
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|ifn| format!(" on {ifn}"))
-            .unwrap_or_default();
-
-        let log = if rule.log { " log" } else { "" };
 
         // ICMP type (only for ICMP protocols)
         let icmp_type_str = rule
@@ -895,7 +1224,7 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
 
         let parts_str = parts.join(" ");
         buf.push_str(&format!(
-            "# {desc}\n{parts_str}{log}{iface} from {src}{src_port} to {dst}{dst_port}{icmp_type_str}{state}\n\n",
+            "# {desc}\n{parts_str} from {src}{src_port} to {dst}{dst_port}{icmp_type_str}{state}\n\n",
         ));
     }
 
@@ -946,6 +1275,219 @@ fn icmp_name_to_number(name: &str) -> &str {
         // ICMPv6 (pf handles these with names, ipfw for ipv6-icmp uses same numbers)
         "packet-too-big" => "2",
         other => other,
+    }
+}
+
+// ── NAT config generation ─────────────────────────────────────────
+
+/// Generate the PF NAT/rdr rules block. Empty string if no enabled NAT rules.
+pub fn generate_pf_nat(rules: &[NatRule]) -> String {
+    let active: Vec<&NatRule> = rules.iter().filter(|r| r.enabled).collect();
+    if active.is_empty() {
+        return String::new();
+    }
+    let mut buf = String::from("# --- NAT / RDR ---\n");
+    for rule in &active {
+        let af = rule.family.pf_kw();
+        let desc = rule.description.as_deref().unwrap_or("");
+        match rule.kind {
+            NatKind::Snat => {
+                let target = rule
+                    .dst_addr
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("({})", rule.interface));
+                buf.push_str(&format!(
+                    "# [SNAT] {desc}\nnat on {iface} {af} from {src} to any -> {target}\n",
+                    iface = rule.interface,
+                    af = af,
+                    src = rule.src_addr,
+                    target = target,
+                ));
+            }
+            NatKind::Dnat => {
+                let proto = pf_nat_proto(&rule.protocol);
+                let dport = rule
+                    .src_port
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|p| format!(" port {}", port_to_pf(p)))
+                    .unwrap_or_default();
+                let target = rule
+                    .dst_addr
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("127.0.0.1");
+                let tport = rule
+                    .dst_port
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|p| format!(" port {}", p))
+                    .unwrap_or_default();
+                buf.push_str(&format!(
+                    "# [DNAT] {desc}\nrdr on {iface} {af}{proto} from any to any{dport} -> {target}{tport}\n",
+                    iface = rule.interface,
+                    af = af,
+                    proto = proto,
+                    dport = dport,
+                    target = target,
+                    tport = tport,
+                ));
+            }
+            NatKind::Binat => {
+                let ext = rule
+                    .dst_addr
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("255.255.255.255");
+                buf.push_str(&format!(
+                    "# [BINAT] {desc}\nbinat on {iface} {af} from {src} to any -> {ext}\n",
+                    iface = rule.interface,
+                    af = af,
+                    src = rule.src_addr,
+                    ext = ext,
+                ));
+            }
+        }
+    }
+    buf.push('\n');
+    buf
+}
+
+/// Generate the ipfw `nat N config` declarations. Empty string if no NAT rules.
+/// One NAT instance per rule (instance number = rule index + 1).
+pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
+    let active: Vec<&NatRule> = rules.iter().filter(|r| r.enabled).collect();
+    if active.is_empty() {
+        return String::new();
+    }
+    let mut buf = String::from("# --- NAT configuration ---\n");
+    for (i, rule) in active.iter().enumerate() {
+        let inst = (i + 1) as u32;
+        let desc = rule.description.as_deref().unwrap_or("");
+        match rule.kind {
+            NatKind::Snat => {
+                // SNAT: translate source for outbound traffic on the interface.
+                // same_ports keeps the source port where possible (avoids collisions).
+                // reset clears existing NAT state on config reload.
+                buf.push_str(&format!(
+                    "# [SNAT] {desc}\nipfw -q nat {inst} config if {iface} same_ports reset\n",
+                    inst = inst,
+                    iface = rule.interface,
+                ));
+            }
+            NatKind::Dnat => {
+                // DNAT: redirect inbound traffic to an internal host:port.
+                let target = rule
+                    .dst_addr
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("127.0.0.1");
+                let tport = rule
+                    .dst_port
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|p| format!(":{p}"))
+                    .unwrap_or_default();
+                let proto_label = match rule.protocol {
+                    NatProto::Tcp => " tcp",
+                    NatProto::Udp => " udp",
+                    NatProto::Both => " tcp udp",
+                };
+                buf.push_str(&format!(
+                    "# [DNAT] {desc}\nipfw -q nat {inst} config if {iface} redirect {target}{tport}{proto_label}\n",
+                    inst = inst,
+                    iface = rule.interface,
+                    target = target,
+                    tport = tport,
+                    proto_label = proto_label,
+                ));
+            }
+            NatKind::Binat => {
+                // ipfw has no native BINAT; emulate via SNAT config + 1:1 redirect.
+                let ext = rule
+                    .dst_addr
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("255.255.255.255");
+                buf.push_str(&format!(
+                    "# [BINAT-emulated] {desc}\nipfw -q nat {inst} config if {iface} same_ports reset\n",
+                    inst = inst,
+                    iface = rule.interface,
+                ));
+                let _ = ext; // BINAT full emulation is P2; SNAT-side handled here.
+            }
+        }
+    }
+    buf.push('\n');
+    buf
+}
+
+/// Generate the ipfw `nat N` rules (apply NAT instances to matching traffic).
+/// Empty string if no NAT rules. Rule numbers start at 50000 with step 100.
+pub fn generate_ipfw_nat_rules(rules: &[NatRule]) -> String {
+    let active: Vec<&NatRule> = rules.iter().filter(|r| r.enabled).collect();
+    if active.is_empty() {
+        return String::new();
+    }
+    let mut buf = String::from("# --- NAT rules ---\n");
+    for (i, rule) in active.iter().enumerate() {
+        let inst = (i + 1) as u32;
+        let number = (50000 + (i as u32) * 100) as u32;
+        let desc = rule.description.as_deref().unwrap_or("");
+        match rule.kind {
+            NatKind::Snat => {
+                buf.push_str(&format!(
+                    "# [SNAT {inst}] {desc}\nipfw -q add {number:05} nat {inst} ip from {src} to any out xmit {iface}\n",
+                    inst = inst,
+                    number = number,
+                    src = rule.src_addr,
+                    iface = rule.interface,
+                ));
+            }
+            NatKind::Dnat => {
+                let proto = match rule.protocol {
+                    NatProto::Tcp => "tcp",
+                    NatProto::Udp => "udp",
+                    NatProto::Both => "ip",
+                };
+                let dport = rule
+                    .src_port
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|p| format!(" {}", port_to_ipfw(p)))
+                    .unwrap_or_default();
+                buf.push_str(&format!(
+                    "# [DNAT {inst}] {desc}\nipfw -q add {number:05} nat {inst} {proto} from any to me{dport} in recv {iface}\n",
+                    inst = inst,
+                    number = number,
+                    proto = proto,
+                    dport = dport,
+                    iface = rule.interface,
+                ));
+            }
+            NatKind::Binat => {
+                buf.push_str(&format!(
+                    "# [BINAT-emulated {inst}] {desc}\nipfw -q add {number:05} nat {inst} ip from {src} to any out xmit {iface}\n",
+                    inst = inst,
+                    number = number,
+                    src = rule.src_addr,
+                    iface = rule.interface,
+                ));
+            }
+        }
+        buf.push('\n');
+    }
+    buf
+}
+
+/// PF protocol selector for NAT rules.
+fn pf_nat_proto(p: &NatProto) -> String {
+    match p {
+        NatProto::Tcp => " proto tcp".to_string(),
+        NatProto::Udp => " proto udp".to_string(),
+        NatProto::Both => " proto { tcp udp }".to_string(),
     }
 }
 
@@ -1022,6 +1564,85 @@ pub fn validate_rule_body(body: &RuleBody) -> ApiResult<()> {
     Ok(())
 }
 
+/// Validate a NAT rule body. Returns Ok(()) or BadRequest/NotFound.
+pub fn validate_nat_body(body: &NatBody) -> ApiResult<()> {
+    // Interface (required for NAT)
+    if body.interface.is_empty() {
+        return Err(ApiError::BadRequest("interface is required for NAT rules".into()));
+    }
+    let iface_re = regex::Regex::new(IFACE_RE).unwrap();
+    if !iface_re.is_match(&body.interface) {
+        return Err(ApiError::BadRequest("invalid interface name".into()));
+    }
+
+    // Source address (required)
+    if body.src_addr.is_empty() || body.src_addr.len() > 50 {
+        return Err(ApiError::BadRequest("invalid source address".into()));
+    }
+    // "any" is allowed as a wildcard for DNAT src; otherwise validate IP/CIDR.
+    if body.src_addr != "any" {
+        validate_address(&body.src_addr)?;
+    }
+
+    // Destination address (optional for SNAT, required for DNAT/BINAT)
+    if let Some(ref dst) = body.dst_addr {
+        if !dst.is_empty() {
+            validate_address(dst)?;
+        }
+    }
+
+    // Ports
+    let port_re = regex::Regex::new(PORT_RE).unwrap();
+    if let Some(ref p) = body.src_port {
+        if !p.is_empty() && !port_re.is_match(p) {
+            return Err(ApiError::BadRequest("invalid source port".into()));
+        }
+    }
+    if let Some(ref p) = body.dst_port {
+        if !p.is_empty() && !port_re.is_match(p) {
+            return Err(ApiError::BadRequest("invalid destination port".into()));
+        }
+    }
+
+    // kind-specific constraints
+    match body.kind {
+        NatKind::Dnat => {
+            if body.src_port.as_deref().map_or(true, |s| s.is_empty()) {
+                return Err(ApiError::BadRequest(
+                    "DNAT requires a source port (the original port to forward)".into(),
+                ));
+            }
+            if body.dst_addr.as_deref().map_or(true, |s| s.is_empty()) {
+                return Err(ApiError::BadRequest(
+                    "DNAT requires a destination address (the internal target)".into(),
+                ));
+            }
+        }
+        NatKind::Snat => {
+            // dst_addr optional (defaults to interface address); src_addr required.
+        }
+        NatKind::Binat => {
+            if body.dst_addr.as_deref().map_or(true, |s| s.is_empty()) {
+                return Err(ApiError::BadRequest(
+                    "BINAT requires an external address (dst_addr)".into(),
+                ));
+            }
+        }
+    }
+
+    // Description
+    if let Some(ref d) = body.description {
+        if d.len() > 200 {
+            return Err(ApiError::BadRequest("description too long (max 200)".into()));
+        }
+        if d.contains('\n') {
+            return Err(ApiError::BadRequest("description must not contain newlines".into()));
+        }
+    }
+
+    Ok(())
+}
+
 // ── atomic file write ──────────────────────────────────────────────
 
 fn atomic_write(path: &str, content: &str) -> ApiResult<()> {
@@ -1042,16 +1663,33 @@ pub fn ensure_module(driver: FirewallDriver) -> ApiResult<()> {
     Ok(())
 }
 
+/// Check if the ipfw_nat kernel module is loaded.
+pub fn ipfw_nat_loaded() -> bool {
+    cmd::status_sync(KLDSTAT, &["-q", "-n", "ipfw_nat"])
+}
+
+/// Load the ipfw_nat kernel module if not already loaded.
+/// Required for ipfw NAT rules (snat/dnat). Called by apply_ipfw when NAT
+/// rules exist. If the module cannot be loaded, apply fails with a clear
+/// error — we do not silently apply filter rules without NAT.
+pub fn ensure_ipfw_nat() -> ApiResult<()> {
+    if ipfw_nat_loaded() {
+        return Ok(());
+    }
+    cmd::run_sync(KLDLOAD, &["ipfw_nat"])?;
+    Ok(())
+}
+
 /// Generate and write config file WITHOUT loading into kernel.
 /// Used when the firewall is disabled — keeps the file ready for next enable.
-pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
+pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     match driver {
         FirewallDriver::Ipfw => {
-            let content = generate_ipfw(rules, mode, tables);
+            let content = generate_ipfw(rules, mode, tables, nat_rules);
             atomic_write(IPFW_RULES_PATH, &content)?;
         }
         FirewallDriver::Pf => {
-            let content = generate_pf(rules, mode, tables);
+            let content = generate_pf(rules, mode, tables, nat_rules);
             // Just write the file — validation happens at apply/enable time
             // when the PF module is loaded and /dev/pf exists.
             atomic_write(PF_CONF_PATH, &content)?;
@@ -1061,8 +1699,13 @@ pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: F
 }
 
 /// Apply ipfw rules: generate file, then load.
-pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
-    let content = generate_ipfw(rules, mode, tables);
+pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+    // NAT requires the ipfw_nat kernel module. Load it if NAT rules exist.
+    if nat_rules.iter().any(|r| r.enabled) {
+        ensure_ipfw_nat()?;
+    }
+
+    let content = generate_ipfw(rules, mode, tables, nat_rules);
 
     // Write to real path (atomic via temp + rename)
     let tmp = format!("{IPFW_RULES_PATH}.tmp");
@@ -1076,8 +1719,8 @@ pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]
 }
 
 /// Apply pf rules: generate file, validate, write, then reload via rc.d.
-pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]) -> ApiResult<()> {
-    let content = generate_pf(rules, mode, tables);
+pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+    let content = generate_pf(rules, mode, tables, nat_rules);
 
     // Write to temp file and validate
     let tmp = format!("{PF_CONF_PATH}.tmp");
@@ -1162,7 +1805,7 @@ pub fn set_ipfw_mode(_mode: FirewallMode) -> ApiResult<()> {
 
 /// Initialize ipfw: write rc.conf entries, load module, generate config file.
 /// Does NOT load rules or enable the firewall — both happen via Apply/Enable.
-pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()> {
+pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     use crate::sysrc;
 
     sysrc::set("firewall_enable", "YES").map_err(|e| ApiError::Command(e))?;
@@ -1177,13 +1820,13 @@ pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable])
     disable_firewall(FirewallDriver::Ipfw)?;
 
     // Only generate the file — do NOT load it into the kernel yet.
-    let content = generate_ipfw(rules, mode, tables);
+    let content = generate_ipfw(rules, mode, tables, nat_rules);
     atomic_write(IPFW_RULES_PATH, &content)?;
     Ok(())
 }
 
 /// Initialize pf: write rc.conf entries, load module, load rules.
-pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()> {
+pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     use crate::sysrc;
 
     sysrc::set("pf_enable", "YES").map_err(|e| ApiError::Command(e))?;
@@ -1192,7 +1835,7 @@ pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable]) -
     ensure_module(FirewallDriver::Pf)?;
 
     // Only generate the file — do NOT load it into the kernel yet.
-    let content = generate_pf(rules, mode, tables);
+    let content = generate_pf(rules, mode, tables, nat_rules);
     atomic_write(PF_CONF_PATH, &content)?;
     Ok(())
 }
@@ -1219,10 +1862,11 @@ pub fn preview_config(
     rules: &[FirewallRule],
     mode: FirewallMode,
     tables: &[IpTable],
+    nat_rules: &[NatRule],
 ) -> String {
     match driver {
-        FirewallDriver::Ipfw => generate_ipfw(rules, mode, tables),
-        FirewallDriver::Pf => generate_pf(rules, mode, tables),
+        FirewallDriver::Ipfw => generate_ipfw(rules, mode, tables, nat_rules),
+        FirewallDriver::Pf => generate_pf(rules, mode, tables, nat_rules),
     }
 }
 
@@ -1331,11 +1975,19 @@ const STAGING_PATH: &str = "/var/db/fwp/firewall_staging.json";
 struct StagingData {
     rules: Vec<FirewallRule>,
     tables: Vec<IpTable>,
+    // Added when NAT support was introduced. Old staging files (pre-NAT)
+    // deserialize to an empty Vec — safe default.
+    #[serde(default)]
+    nat_rules: Vec<NatRule>,
 }
 
-/// Write staging file with proposed rules + tables.
-pub fn write_staging(rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()> {
-    let data = StagingData { rules: rules.to_vec(), tables: tables.to_vec() };
+/// Write staging file with proposed rules + tables + NAT rules.
+pub fn write_staging(rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+    let data = StagingData {
+        rules: rules.to_vec(),
+        tables: tables.to_vec(),
+        nat_rules: nat_rules.to_vec(),
+    };
     let json = serde_json::to_string_pretty(&data)
         .map_err(|e| ApiError::Internal(format!("serialize staging: {e}")))?;
     atomic_write(STAGING_PATH, &json)?;
@@ -1343,10 +1995,11 @@ pub fn write_staging(rules: &[FirewallRule], tables: &[IpTable]) -> ApiResult<()
 }
 
 /// Read staging if it exists.
-pub fn read_staging() -> Option<(Vec<FirewallRule>, Vec<IpTable>)> {
+/// Returns (rules, tables, nat_rules).
+pub fn read_staging() -> Option<(Vec<FirewallRule>, Vec<IpTable>, Vec<NatRule>)> {
     let data = fs::read_to_string(STAGING_PATH).ok()?;
     let staging: StagingData = serde_json::from_str(&data).ok()?;
-    Some((staging.rules, staging.tables))
+    Some((staging.rules, staging.tables, staging.nat_rules))
 }
 
 /// Check if staging file exists.

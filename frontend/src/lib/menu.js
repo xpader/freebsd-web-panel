@@ -55,6 +55,7 @@ export const MENU = [
         icon: 'fa-solid fa-shield-halved',
         children: [
           { path: '/firewall/rules', labelKey: 'nav.firewallRules', icon: 'fa-solid fa-list' },
+          { path: '/firewall/nat', labelKey: 'nav.firewallNat', icon: 'fa-solid fa-arrow-right-arrow-left' },
           { path: '/firewall/tables', labelKey: 'nav.firewallTables', icon: 'fa-solid fa-table-list' },
           { path: '/firewall/settings', labelKey: 'nav.firewallSettings', icon: 'fa-solid fa-gear' },
         ],

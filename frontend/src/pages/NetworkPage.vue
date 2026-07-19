@@ -543,7 +543,7 @@ onMounted(load);
   </div>
 
   <!-- rc.conf config modal -->
-  <div v-if="configIfaceName" class="modal-overlay" @click.self="configIfaceName = null">
+  <div v-if="configIfaceName" class="modal-overlay">
     <div class="modal" style="max-width:680px;">
       <h3>{{ configIfaceName }} — {{ t('net.ifaceConfig') }}</h3>
       <div v-if="configLoading" class="text-dim" style="padding:1rem 0;"><span class="spinner"></span> {{ t('common.loading') }}</div>
@@ -702,7 +702,7 @@ onMounted(load);
   </div>
 
   <!-- Create interface dialog -->
-  <div v-if="createDialog" class="modal-overlay" @click.self="createDialog = false">
+  <div v-if="createDialog" class="modal-overlay">
     <div class="modal" style="max-width:480px;">
       <h3>{{ t('net.createInterface') }}</h3>
       <p class="text-dim" style="margin-bottom:1rem;">{{ t('net.createInterfaceDesc') }}</p>

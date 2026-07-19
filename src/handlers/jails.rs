@@ -1514,6 +1514,9 @@ pub struct JailCreateBody {
     pub ip4: Option<String>,
     /// Network: meta.ip6 value — "", "inherit", "disable", or static IP.
     pub ip6: Option<String>,
+    /// Network: meta.gateway value — default gateway for VNET static IP.
+    /// Empty/None = auto (use host's default gateway).
+    pub gateway: Option<String>,
     /// Enable VNET.
     #[serde(default)]
     pub vnet: Option<bool>,
@@ -1729,6 +1732,11 @@ pub async fn jail_create(
             params.insert("meta.ip6".to_string(), ip6.clone());
         }
     }
+    if let Some(gw) = &body.gateway {
+        if !gw.is_empty() {
+            params.insert("meta.gateway".to_string(), gw.clone());
+        }
+    }
     if body.vnet.unwrap_or(false) {
         params.insert("vnet".to_string(), "true".to_string());
         params.insert("vnet.interface".to_string(), "auto".to_string());
@@ -1874,37 +1882,39 @@ fn parse_fstab(content: &str) -> Vec<FstabEntry> {
 
 // ── VNET auto-configuration ───────────────────────────────────────
 
+/// Whether `iface` is a bridge interface. Delegates to the kernel-reported
+/// driver name so renamed bridges (e.g. created with
+/// `ifconfig bridge create name mybr0`) are detected correctly — unlike a
+/// `starts_with("bridge")` string check on the interface name.
+fn is_bridge_interface(iface: &str) -> bool {
+    crate::ifutil::is_bridge(iface)
+}
+
 /// Search for a bridge that has `iface` as a member.
-/// If `iface` is itself a bridge name (starts with "bridge"), return it if it exists.
+/// If `iface` is itself a bridge (by driver name), return it.
 /// Returns None if not found (does NOT error).
 fn find_bridge_for_interface(iface: &str) -> Option<String> {
     if iface.is_empty() {
         return None;
     }
 
-    // If it's already a bridge name, verify it exists.
-    if iface.starts_with("bridge") {
-        if cmd::status_sync(IFCONFIG, &[iface]) {
-            return Some(iface.to_string());
-        }
-        return None;
+    // If iface is itself a bridge, return it — the caller will addm its epair.
+    // Works for both default ("bridge0") and renamed ("mybr0") bridges.
+    if is_bridge_interface(iface) {
+        return Some(iface.to_string());
     }
 
-    // List all bridges.
-    let bridges = cmd::run_sync(IFCONFIG, &["-g", "bridge"]).ok()?;
-
-    for bridge in bridges.lines() {
-        let bridge = bridge.trim();
-        if bridge.is_empty() {
-            continue;
-        }
-        if let Ok(info) = cmd::run_sync(IFCONFIG, &[bridge]) {
+    // iface is not a bridge — look for a bridge that has it as a member.
+    // list_group_members("bridge") enumerates all bridge interfaces
+    // (including renamed ones) via the SIOCGIFGMEMB ioctl.
+    for bridge in crate::ifutil::list_group_members("bridge") {
+        if let Ok(info) = cmd::run_sync(IFCONFIG, &[&bridge]) {
             for line in info.lines() {
                 let line = line.trim();
                 if let Some(rest) = line.strip_prefix("member:") {
                     let member = rest.trim().split_whitespace().next();
                     if member == Some(iface) {
-                        return Some(bridge.to_string());
+                        return Some(bridge);
                     }
                 }
             }
@@ -1917,7 +1927,8 @@ fn find_bridge_for_interface(iface: &str) -> Option<String> {
 /// Ensure a bridge exists for the given interface.
 /// 1. If the interface is already a bridge member, return that bridge.
 /// 2. If the interface IS a bridge, return it.
-/// 3. Otherwise, create a new bridge, add the interface, and bring both up.
+/// 3. Otherwise, verify the interface exists, then create a new bridge,
+///    add the interface, and bring both up.
 fn ensure_bridge_for_interface(iface: &str) -> ApiResult<String> {
     if iface.is_empty() {
         return Err(ApiError::BadRequest(
@@ -1925,15 +1936,16 @@ fn ensure_bridge_for_interface(iface: &str) -> ApiResult<String> {
         ));
     }
 
-    // Check if already bridged.
+    // Check if already bridged (also handles "iface is itself a bridge").
     if let Some(bridge) = find_bridge_for_interface(iface) {
         return Ok(bridge);
     }
 
-    // If iface is itself a bridge, just verify and return.
-    if iface.starts_with("bridge") {
+    // Verify the interface exists before creating a new bridge for it.
+    // Catches typos and non-existent interface names early.
+    if !cmd::status_sync(IFCONFIG, &[iface]) {
         return Err(ApiError::BadRequest(format!(
-            "bridge \"{iface}\" does not exist"
+            "interface \"{iface}\" does not exist"
         )));
     }
 
@@ -2088,8 +2100,9 @@ fn scan_vnet_auto(name: &str, conf_content: &str) -> Option<String> {
 
         if in_jail && line.contains("fwp-vnet") && line.contains(" up ") {
             // Parse the exec.prestart line to extract the bridge name.
-            // Expected format after var substitution:
-            //   exec.prestart += "/usr/local/libexec/fwp-vnet up <name> <bridge>";
+            // Expected formats after var substitution:
+            //   fwp-vnet up <name> <bridge>      (bridge attached)
+            //   fwp-vnet up <name>               (no bridge — empty meta.interface)
             let val = if let Some(eq) = line.find('=') {
                 let v = line[eq + 1..]
                     .trim()
@@ -2101,9 +2114,10 @@ fn scan_vnet_auto(name: &str, conf_content: &str) -> Option<String> {
                 line
             };
             let parts: Vec<&str> = val.split_whitespace().collect();
-            // Expected: fwp-vnet up <name> <bridge>
-            if parts.len() >= 4 && parts[0].ends_with("fwp-vnet") {
-                return Some(parts[3].to_string());
+            // parts[0] = "fwp-vnet", parts[1] = "up", parts[2] = name, parts[3] = bridge (optional)
+            if parts.len() >= 3 && parts[0].ends_with("fwp-vnet") && parts[1] == "up" {
+                let bridge = parts.get(3).map(|s| s.to_string()).unwrap_or_default();
+                return Some(bridge);
             }
         }
     }
@@ -2485,6 +2499,10 @@ fn generate_jail_block_from_params(
     if vnet_auto {
         // ── VNET mode ──
         ensure_vnet_helper();
+        // When meta.interface is empty, do not attach the epair to any bridge.
+        // The host side of the epair floats without L2 connectivity to other
+        // interfaces — useful when NAT, custom routing, or an external bridge
+        // is managed outside of fwp.
         let bridge = if !meta_iface.is_empty() {
             match ensure_bridge_for_interface(meta_iface) {
                 Ok(b) => b,
@@ -2494,7 +2512,7 @@ fn generate_jail_block_from_params(
                 }
             }
         } else {
-            "bridge0".to_string()
+            String::new()
         };
 
         lines.push("    vnet;".into());
@@ -2505,7 +2523,13 @@ fn generate_jail_block_from_params(
         skip_keys.insert("vnet");
         skip_keys.insert("vnet.interface");
 
-        lines.push(format!("    exec.prestart += \"{VNET_HELPER} up ${{name}} {epair_id} {bridge}\";"));
+        // Omit the bridge argument when empty so the helper skips addm.
+        let prestart_args = if bridge.is_empty() {
+            format!("up ${{name}} {epair_id}")
+        } else {
+            format!("up ${{name}} {epair_id} {bridge}")
+        };
+        lines.push(format!("    exec.prestart += \"{VNET_HELPER} {prestart_args}\";"));
         lines.push(format!("    exec.poststop += \"{VNET_HELPER} down ${{name}} {epair_id}\";"));
 
         // IP configuration — jail-side, via exec.poststart.
@@ -2518,7 +2542,12 @@ fn generate_jail_block_from_params(
             }
             _ => {
                 // Static IP — value is the address.
-                let gw = get_default_gateway().unwrap_or_default();
+                // Gateway: explicit meta.gateway wins; empty = auto (host's
+                // default gateway from the routing table).
+                let gw = match params.get("meta.gateway").map(|v| v.trim()) {
+                    Some(v) if !v.is_empty() => v.to_string(),
+                    _ => get_default_gateway().unwrap_or_default(),
+                };
                 lines.push(format!(
                     "    exec.poststart += \"{VNET_HELPER} init ${{name}} {epair_id} static {ip4} {gw}\";"
                 ));
