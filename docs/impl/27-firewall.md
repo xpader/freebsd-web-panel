@@ -87,13 +87,15 @@ CREATE TABLE firewall_table_entries (
 
 ### 规则生成
 
-**ipfw**（`generate_ipfw`）— 生成 shell 脚本 `/etc/ipfw.rules`：
-- 先生成 IP 名单定义：`ipfw -q table NAME flush` + `ipfw -q table NAME add ADDR`
-- 名单引用语法：`table\(NAME\)`（括号在 shell 中需转义）
+**ipfw**（`generate_ipfw`）— 生成原生规则文件 `/etc/ipfw.rules`（pathname 模式）：
+- 文件格式为 ipfw 原生语法，通过 `ipfw -q /etc/ipfw.rules` 加载（每行内容作为 ipfw 参数，`#` 为注释标记）
+- 首行为 `-f flush`（清除所有现有规则）
+- IP 名单定义：`table NAME flush` + `table NAME add ADDR`
+- 名单引用语法：`table(NAME)`（括号无需转义，非 shell 语法）
 - 规则编号从 00100 开始，步进 100
-- 白名单模式在规则 65534 前加 `ipfw -q add 65000 allow ip from any to any out keep-state`（放行出站，否则启用后 HTTP 响应出站包被 deny，导致连接挂起）
-- 白名单模式末尾加 `ipfw -q add 65534 deny ip from any to any`
-- 黑名单模式末尾加 `ipfw -q add 65534 allow ip from any to any`
+- 白名单模式在规则 65534 前加 `add 65000 allow ip from any to any out keep-state`（放行出站，否则启用后 HTTP 响应出站包被 deny，导致连接挂起）
+- 白名单模式末尾加 `add 65534 deny ip from any to any`
+- 黑名单模式末尾加 `add 65534 allow ip from any to any`
 - allow 规则自动加 `keep-state`（deny/reject 规则不加）
 - ICMP 类型用数字（ipfw 不接受名字）
 - 多端口用逗号分隔：`80,443,8080-8090` 直接传递（ipfw 的花括号 `{ }` 是规则级 OR-list，不是端口列表）
@@ -125,9 +127,9 @@ CREATE TABLE firewall_table_entries (
 
 ### 初始化流程
 
-`init_ipfw(mode, rules, tables)`：
-1. sysrc 设置 `firewall_enable=YES`、`firewall_script=/etc/ipfw.rules`、`firewall_logging=YES`
-2. sysrc 删除 `firewall_type`（避免与 script 冲突）
+`init_ipfw(mode, rules, tables, nat_rules)`：
+1. sysrc 设置 `firewall_enable=YES`、`firewall_type=/etc/ipfw.rules`、`firewall_quiet=YES`、`firewall_logging=YES`
+2. sysrc 删除 `firewall_script`（回退到 `/etc/rc.firewall`，由其 `*)` 分支执行 `ipfw -q ${firewall_type}` 加载规则）
 3. `kldload ipfw`（如未加载）
 4. **立即 `sysctl net.inet.ip.fw.enable=0`**——kldload 默认启用 ipfw 且默认规则为 deny，不显式禁用会断网
 5. 生成配置文件（`atomic_write` 到 `/etc/ipfw.rules`）
@@ -142,7 +144,7 @@ CREATE TABLE firewall_table_entries (
 ### 启用/禁用
 
 **enable**：确保当前驱动 `*_enable=YES`，对方 `*_enable=NO`，清除 staging，重生成配置文件，备份配置文件，创建 pending 记录，然后启用防火墙，最后 spawn 倒计时定时器。
-- ipfw: `service ipfw start`（rc.d 脚本自动 `kldload ipfw` + 执行 `/etc/ipfw.rules` + `sysctl net.inet.ip.fw.enable=1`）
+- ipfw: `service ipfw start`（rc.d 脚本自动 `kldload ipfw` + rc.firewall 执行 `ipfw -q /etc/ipfw.rules` + `sysctl net.inet.ip.fw.enable=1`）
 - pf: `service pf start`（rc.d 脚本自动 `kldload pf` + `pfctl -F all` + `pfctl -f /etc/pf.conf` + `pfctl -eq`）
 - **两个引擎都通过 `service start`**：rc.subr 的 `required_modules` 自动加载内核模块，解决重启后模块未加载的问题
 - **防锁死**：enable 必定触发倒计时（`was_enabled=false`，回滚时禁用防火墙）
@@ -211,7 +213,7 @@ CREATE TABLE firewall_table_entries (
 4. **备份当前配置文件内容**（读 `/etc/pf.conf` 或 `/etc/ipfw.rules` 全文）
 5. 调用生成器生成配置文件内容
 6. 原子写入配置文件（临时文件 → rename）
-7. 加载规则（ipfw: `sh /etc/ipfw.rules`；pf: `service pf reload` = `pfctl -n -f` 验证 + `pfctl -f` 加载，然后 `pfctl -F states` 刷新状态表——强制断开旧连接，使新规则立即对所有连接生效）
+7. 加载规则（ipfw: 先 `ipfw -n -q` 语法验证，再 `ipfw -q /etc/ipfw.rules` 加载；pf: `service pf reload` = `pfctl -n -f` 验证 + `pfctl -f` 加载，然后 `pfctl -F states` 刷新状态表——强制断开旧连接，使新规则立即对所有连接生效）
 8. 清除 `rules_dirty` 标记（历史遗留，暂存机制已接管 pending_apply 语义）
 9. **如果防火墙已启用**：
    - 写入 `/var/db/fwp/firewall_pending.json`（备份配置 + `was_enabled=true` + `expires_at=now+60s`）
@@ -251,7 +253,7 @@ CREATE TABLE firewall_table_entries (
 
 **回滚流程**（`rollback()` in `firewall_gen.rs`）：
 1. 将 `backup_config` 写回配置文件（原子写入）
-2. 重新加载配置（ipfw: `sh /etc/ipfw.rules`；pf: `pfctl -f`）
+2. 重新加载配置（ipfw: `ipfw -q /etc/ipfw.rules`；pf: `pfctl -f`）
 3. 如果 `was_enabled=false`：禁用防火墙（`disable_firewall`）
 4. 删除 `/var/db/fwp/firewall_pending.json`
 
@@ -343,14 +345,14 @@ frontend/src/
 - `/sbin/kldstat` — 检查模块是否已加载
 - `/sbin/sysctl` — 运行时参数设置
 - `/usr/sbin/sysrc` — rc.conf 读写（复用 `sysrc.rs` 模块）
-- `/bin/sh` — 执行 ipfw 规则脚本
+- `/sbin/ipfw` — 加载 ipfw 规则文件（`ipfw -q /etc/ipfw.rules`，pathname 模式）+ 语法验证（`ipfw -n -q`）
 
 ## 持久化文件
 
 | 文件 | 用途 |
 |---|---|
 | `/etc/pf.conf` | PF 配置文件（由 fwp 生成，`service pf reload` 加载） |
-| `/etc/ipfw.rules` | ipfw 规则脚本（由 fwp 生成，`sh /etc/ipfw.rules` 执行） |
+| `/etc/ipfw.rules` | ipfw 规则文件（由 fwp 生成，`ipfw -q /etc/ipfw.rules` 加载） |
 | `/var/db/fwp/firewall_staging.json` | 暂存文件——防火墙已启用时，规则修改的快照（全量规则+表）。confirm 时提交到 DB，rollback 时删除 |
 | `/var/db/fwp/firewall_pending.json` | 防锁死 pending 记录——apply/enable 时的备份配置+超时信息 |
 

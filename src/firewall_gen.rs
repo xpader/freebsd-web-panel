@@ -20,7 +20,6 @@ const KLDLOAD: &str = "/sbin/kldload";
 const KLDSTAT: &str = "/sbin/kldstat";
 const SYSCTL: &str = "/sbin/sysctl";
 const SERVICE: &str = "/usr/sbin/service";
-const SH: &str = "/bin/sh";
 
 const IPFW_RULES_PATH: &str = "/etc/ipfw.rules";
 const PF_CONF_PATH: &str = "/etc/pf.conf";
@@ -954,18 +953,22 @@ fn is_ipv6(addr: &str) -> bool {
     addr.contains(':')
 }
 
-/// Generate the full ipfw shell script from enabled rules.
+/// Generate the full ipfw rules file from enabled rules.
+///
+/// Output is in ipfw "pathname" format (native rules, no `ipfw` command prefix).
+/// Loaded via `ipfw -q /etc/ipfw.rules`. Each line's content becomes arguments
+/// to the ipfw utility. Lines starting with `#` are comments (including inline).
 pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
     let mut buf = header(FirewallDriver::Ipfw, mode);
-    buf.push_str("ipfw -q flush\n\n");
+    buf.push_str("-f flush\n\n");
 
     // IP tables
     if !tables.is_empty() {
         buf.push_str("# --- IP Tables ---\n");
         for table in tables {
-            buf.push_str(&format!("ipfw -q table {} flush\n", table.name));
+            buf.push_str(&format!("table {} flush\n", table.name));
             for entry in &table.entries {
-                buf.push_str(&format!("ipfw -q table {} add {}\n", table.name, entry.address));
+                buf.push_str(&format!("table {} add {}\n", table.name, entry.address));
             }
             buf.push('\n');
         }
@@ -1048,7 +1051,7 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
             .unwrap_or("");
 
         buf.push_str(&format!(
-            "# [{number:05}] {desc}\nipfw -q add {number:05}{log} {action} {proto} \
+            "# [{number:05}] {desc}\nadd {number:05}{log} {action} {proto} \
              from {src}{src_port} to {dst}{dst_port}{icmp_type_str} {dir}{iface}{state}\n\n",
         ));
     }
@@ -1074,12 +1077,12 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
         // Allow all outbound traffic (mirrors pf's "pass out quick all keep state").
         // Without this, HTTP responses to in-flight connections are dropped.
         buf.push_str("# [65000] Allow all outbound (whitelist mode)\n");
-        buf.push_str("ipfw -q add 65000 allow ip from any to any out keep-state\n\n");
+        buf.push_str("add 65000 allow ip from any to any out keep-state\n\n");
         buf.push_str("# [65534] Default deny (whitelist mode)\n");
-        buf.push_str("ipfw -q add 65534 deny ip from any to any\n\n");
+        buf.push_str("add 65534 deny ip from any to any\n\n");
     } else {
         buf.push_str("# [65534] Default allow (blacklist mode)\n");
-        buf.push_str("ipfw -q add 65534 allow ip from any to any\n\n");
+        buf.push_str("add 65534 allow ip from any to any\n\n");
     }
 
     buf
@@ -1523,7 +1526,7 @@ pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
             .collect();
         let desc = descs.join(", ");
         buf.push_str(&format!(
-            "# [NAT {inst}] {desc}\nipfw -q nat {inst} config {config}\n",
+            "# [NAT {inst}] {desc}\nnat {inst} config {config}\n",
         ));
     }
     buf.push('\n');
@@ -1560,7 +1563,7 @@ pub fn generate_ipfw_nat_rules(rules: &[NatRule]) -> String {
             let label = if rule.kind == NatKind::Binat { "BINAT" } else { "SNAT" };
             let desc = rule.description.as_deref().unwrap_or("");
             buf.push_str(&format!(
-                "# [{n:05}] [NAT {inst}] {label} outbound: {desc}\nipfw -q add {n:05} nat {inst} ip from {src} to any out xmit {iface}\n",
+                "# [{n:05}] [NAT {inst}] {label} outbound: {desc}\nadd {n:05} nat {inst} ip from {src} to any out xmit {iface}\n",
                 n = n, inst = inst, src = rule.src_addr, iface = iface,
             ));
             n += 1;
@@ -1568,7 +1571,7 @@ pub fn generate_ipfw_nat_rules(rules: &[NatRule]) -> String {
 
         // Inbound: one broad rule per interface for de-NAT (return traffic)
         buf.push_str(&format!(
-            "# [{n:05}] [NAT {inst}] inbound de-NAT via {iface}\nipfw -q add {n:05} nat {inst} ip from any to any in recv {iface}\n",
+            "# [{n:05}] [NAT {inst}] inbound de-NAT via {iface}\nadd {n:05} nat {inst} ip from any to any in recv {iface}\n",
             n = n, inst = inst, iface = iface,
         ));
 
@@ -1625,12 +1628,12 @@ fn generate_ipfw_nat_pass(rules: &[NatRule], mode: FirewallMode) -> String {
                 let src = &rule.src_addr;
                 // Inbound: jail subnet → host (plain allow, NO keep-state).
                 buf.push_str(&format!(
-                    "# [{n:05}] [auto] {label} pass-in: {desc}\nipfw -q add {n:05} allow ip from {src} to any in\n",
+                    "# [{n:05}] [auto] {label} pass-in: {desc}\nadd {n:05} allow ip from {src} to any in\n",
                     n = base,
                 ));
                 // Outbound: return traffic → jail (preempt 65000's shadowing keep-state).
                 buf.push_str(&format!(
-                    "# [{n:05}] [auto] {label} pass-out: {desc}\nipfw -q add {n:05} allow ip from any to {src} out\n",
+                    "# [{n:05}] [auto] {label} pass-out: {desc}\nadd {n:05} allow ip from any to {src} out\n",
                     n = base + 1,
                 ));
             }
@@ -1653,12 +1656,12 @@ fn generate_ipfw_nat_pass(rules: &[NatRule], mode: FirewallMode) -> String {
                     .unwrap_or_default();
                 // Inbound: external → internal target after rdr (plain allow).
                 buf.push_str(&format!(
-                    "# [{n:05}] [auto] DNAT pass-in: {desc}\nipfw -q add {n:05} allow {proto} from any to {target}{port_clause} in\n",
+                    "# [{n:05}] [auto] DNAT pass-in: {desc}\nadd {n:05} allow {proto} from any to {target}{port_clause} in\n",
                     n = base,
                 ));
                 // Outbound: internal target → external (preempt 65000).
                 buf.push_str(&format!(
-                    "# [{n:05}] [auto] DNAT pass-out: {desc}\nipfw -q add {n:05} allow {proto} from {target}{port_clause} to any out\n",
+                    "# [{n:05}] [auto] DNAT pass-out: {desc}\nadd {n:05} allow {proto} from {target}{port_clause} to any out\n",
                     n = base + 1,
                 ));
             }
@@ -1884,7 +1887,7 @@ pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: F
     Ok(())
 }
 
-/// Apply ipfw rules: generate file, then load.
+/// Apply ipfw rules: generate file, validate, then load.
 pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     // NAT requires the ipfw_nat kernel module. Load it if NAT rules exist.
     if nat_rules.iter().any(|r| r.enabled) {
@@ -1893,14 +1896,23 @@ pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable]
 
     let content = generate_ipfw(rules, mode, tables, nat_rules);
 
-    // Write to real path (atomic via temp + rename)
+    // Write to temp file and validate syntax before applying.
     let tmp = format!("{IPFW_RULES_PATH}.tmp");
     fs::write(&tmp, &content).map_err(|e| ApiError::Internal(format!("write tmp: {e}")))?;
+
+    // Validate syntax (-n = test only, does not modify kernel state).
+    if let Err(e) = cmd::run_sync(IPFW, &["-n", "-q", &tmp]) {
+        let _ = fs::remove_file(&tmp);
+        return Err(ApiError::Command(format!("ipfw.rules validation failed: {e}")));
+    }
+
+    // All good — move to real path and load.
     fs::rename(&tmp, IPFW_RULES_PATH)?;
 
-    // Load the script — this runs `ipfw -q flush` then re-adds all rules.
-    // If a rule has invalid syntax, ipfw returns non-zero and we propagate the error.
-    cmd::run_sync(SH, &[IPFW_RULES_PATH])?;
+    // Load via pathname mode: `ipfw -q /etc/ipfw.rules`
+    // The file's first line is `-f flush` which clears all rules,
+    // then re-adds everything from scratch.
+    cmd::run_sync(IPFW, &["-q", IPFW_RULES_PATH])?;
     Ok(())
 }
 
@@ -1935,9 +1947,9 @@ pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], 
 pub fn enable_firewall(driver: FirewallDriver) -> ApiResult<()> {
     match driver {
         FirewallDriver::Ipfw => {
-            // `service ipfw start` does (via rc.d/ipfw):
+            // `service ipfw start` does (via rc.d/ipfw → rc.firewall):
             //   1. kldload ipfw (required_modules — auto-loaded by rc.subr)
-            //   2. sh /etc/ipfw.rules (load rules from firewall_script)
+            //   2. ipfw -q /etc/ipfw.rules (pathname mode, loads our rules)
             //   3. sysctl net.inet.ip.fw.enable=1 (enable)
             cmd::run_sync(SERVICE, &["ipfw", "start"])?;
         }
@@ -1995,9 +2007,12 @@ pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable],
     use crate::sysrc;
 
     sysrc::set("firewall_enable", "YES").map_err(|e| ApiError::Command(e))?;
-    sysrc::set("firewall_script", IPFW_RULES_PATH).map_err(|e| ApiError::Command(e))?;
+    sysrc::set("firewall_type", IPFW_RULES_PATH).map_err(|e| ApiError::Command(e))?;
+    sysrc::set("firewall_quiet", "YES").map_err(|e| ApiError::Command(e))?;
     sysrc::set("firewall_logging", "YES").map_err(|e| ApiError::Command(e))?;
-    sysrc::delete("firewall_type");
+    // Remove firewall_script so rc.d falls back to /etc/rc.firewall,
+    // which loads our rules via `ipfw -q ${firewall_type}` (pathname mode).
+    sysrc::delete("firewall_script");
 
     ensure_module(FirewallDriver::Ipfw)?;
 
@@ -2137,7 +2152,7 @@ pub fn rollback(driver: FirewallDriver, backup_config: &str, was_enabled: bool) 
     // Reload it into the kernel.
     match driver {
         FirewallDriver::Ipfw => {
-            cmd::run_sync(SH, &[path])?;
+            cmd::run_sync(IPFW, &["-q", path])?;
         }
         FirewallDriver::Pf => {
             cmd::run_sync(PFCTL, &["-f", path])?;
@@ -2257,12 +2272,12 @@ mod tests {
     fn ipfw_snat_whitelist_includes_auto_pass() {
         let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[snat_rule()]);
         // Precise outbound: only jail subnet enters NAT
-        assert!(ipfw.contains("ipfw -q add 50000 nat 1 ip from 192.168.1.0/24 to any out xmit vtnet0"));
+        assert!(ipfw.contains("add 50000 nat 1 ip from 192.168.1.0/24 to any out xmit vtnet0"));
         // Broad inbound: de-NAT return traffic
-        assert!(ipfw.contains("ipfw -q add 50001 nat 1 ip from any to any in recv vtnet0"));
+        assert!(ipfw.contains("add 50001 nat 1 ip from any to any in recv vtnet0"));
         // Auto-pass must NOT use keep-state
-        assert!(ipfw.contains("ipfw -q add 60000 allow ip from 192.168.1.0/24 to any in\n"));
-        assert!(ipfw.contains("ipfw -q add 60001 allow ip from any to 192.168.1.0/24 out\n"));
+        assert!(ipfw.contains("add 60000 allow ip from 192.168.1.0/24 to any in\n"));
+        assert!(ipfw.contains("add 60001 allow ip from any to 192.168.1.0/24 out\n"));
     }
 
     #[test]
@@ -2275,12 +2290,12 @@ mod tests {
     fn ipfw_dnat_whitelist_auto_pass_after_nat() {
         let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[dnat_rule()]);
         // Inbound de-NAT rule
-        assert!(ipfw.contains("ipfw -q add 50000 nat 1 ip from any to any in recv vtnet0"));
+        assert!(ipfw.contains("add 50000 nat 1 ip from any to any in recv vtnet0"));
         // DNAT redirect in config
         assert!(ipfw.contains("redirect 10.0.0.2:8080 tcp"));
         // Auto-pass in + out, no keep-state
-        assert!(ipfw.contains("ipfw -q add 60000 allow tcp from any to 10.0.0.2 8080 in\n"));
-        assert!(ipfw.contains("ipfw -q add 60001 allow tcp from 10.0.0.2 8080 to any out\n"));
+        assert!(ipfw.contains("add 60000 allow tcp from any to 10.0.0.2 8080 in\n"));
+        assert!(ipfw.contains("add 60001 allow tcp from 10.0.0.2 8080 to any out\n"));
     }
 
     #[test]
@@ -2295,7 +2310,7 @@ mod tests {
         r.enabled = false;
         let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[r]);
         assert!(!ipfw.contains("NAT auto-pass"));
-        assert!(!ipfw.contains("ipfw -q add 50000"));
+        assert!(!ipfw.contains("add 50000"));
     }
 
     #[test]

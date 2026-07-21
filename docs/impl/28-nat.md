@@ -91,46 +91,46 @@ pass in quick on em0 inet proto tcp from any to 10.0.0.2 port 8080 flags any kee
 
 **ipfw 自动放行**（`generate_ipfw_nat_pass`）— 规则编号 `60000+`，在 NAT 规则（50000+）之后、默认策略（65000/65534）之前：
 
-```sh
+```
 # --- NAT auto-pass (whitelist mode) ---
 # [60000] [auto] SNAT pass-in: NAT for jail network
-ipfw -q add 60000 allow ip from 10.0.0.0/24 to any in keep-state
+add 60000 allow ip from 10.0.0.0/24 to any in keep-state
 # [60000] [auto] DNAT pass-in: Forward HTTP
-ipfw -q add 60000 allow tcp from any to 10.0.0.2 8080 in recv em0 keep-state
+add 60000 allow tcp from any to 10.0.0.2 8080 in recv em0 keep-state
 ```
 
 **仅在 whitelist 模式生成**——blacklist 模式默认就是 `pass`，无需注入。无启用 NAT 规则时不生成。
 
 **ipfw** — 由两个函数生成：
 - `generate_ipfw_nat_config`：`nat N config` 实例声明（在使用 `nat N` 的规则之前）
-- `generate_ipfw_nat_rules`：`ipfw -q add N nat N ...` 规则（在过滤规则之后、默认策略之前）
+- `generate_ipfw_nat_rules`：`add N nat N ...` 规则（在过滤规则之后、默认策略之前）
 
-```sh
+```
 # --- NAT configuration (one instance per interface, merged) ---
 # [NAT 1] NAT for jail network, Forward HTTP
-ipfw -q nat 1 config if em0 same_ports reset redirect 10.0.0.2:8080 tcp
+nat 1 config if em0 same_ports reset redirect 10.0.0.2:8080 tcp
 
 # --- Managed Filter Rules ---
-ipfw -q add 00100 allow tcp from any to any dst-port 80 in
+add 00100 allow tcp from any to any dst-port 80 in
 
 # --- NAT rules (one via rule per interface) ---
 # [NAT 1] via em0
-ipfw -q add 50000 nat 1 ip from any to any via em0
+add 50000 nat 1 ip from any to any via em0
 
 # --- NAT auto-pass (whitelist mode, no keep-state) ---
 # [60000] [auto] SNAT pass-in: NAT for jail network
-ipfw -q add 60000 allow ip from 10.0.0.0/24 to any in
+add 60000 allow ip from 10.0.0.0/24 to any in
 # [60001] [auto] SNAT pass-out: NAT for jail network
-ipfw -q add 60001 allow ip from any to 10.0.0.0/24 out
+add 60001 allow ip from any to 10.0.0.0/24 out
 # [60100] [auto] DNAT pass-in: Forward HTTP
-ipfw -q add 60100 allow tcp from any to 10.0.0.2 8080 in
+add 60100 allow tcp from any to 10.0.0.2 8080 in
 # [60101] [auto] DNAT pass-out: Forward HTTP
-ipfw -q add 60101 allow tcp from 10.0.0.2 8080 to any out
+add 60101 allow tcp from 10.0.0.2 8080 to any out
 
 # [65000] Allow all outbound (whitelist mode)
-ipfw -q add 65000 allow ip from any to any out keep-state
+add 65000 allow ip from any to any out keep-state
 # [65534] Default deny
-ipfw -q add 65534 deny ip from any to any
+add 65534 deny ip from any to any
 ```
 
 **关键点**：
