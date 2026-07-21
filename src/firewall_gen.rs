@@ -1061,6 +1061,13 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
         buf.push_str(&nat_rules_str);
     }
 
+    // Auto-injected allow rules for NAT'd traffic. Sits after NAT rules
+    // (50000+) and before default policy (65000/65534). Whitlist mode only.
+    let nat_pass_str = generate_ipfw_nat_pass(nat_rules, mode);
+    if !nat_pass_str.is_empty() {
+        buf.push_str(&nat_pass_str);
+    }
+
     // Default policy rule at 65534 (before kernel default 65535).
     // Whitelist: allow outbound + deny all inbound; Blacklist: allow all.
     if mode == FirewallMode::Whitelist {
@@ -1228,6 +1235,16 @@ pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable
         ));
     }
 
+    // Auto-injected filter rules that allow NAT'd traffic to pass the default
+    // `block all`. Placed AFTER user rules so that users can still override
+    // with explicit `block quick` rules of their own (PF is first-match-quick:
+    // a user `block quick` placed ahead of this will terminate first). Only
+    // emitted in whitelist mode. See `generate_pf_nat_pass`.
+    let nat_pass = generate_pf_nat_pass(nat_rules, mode);
+    if !nat_pass.is_empty() {
+        buf.push_str(&nat_pass);
+    }
+
     buf
 }
 
@@ -1355,68 +1372,82 @@ pub fn generate_pf_nat(rules: &[NatRule]) -> String {
     buf
 }
 
-/// Generate the ipfw `nat N config` declarations. Empty string if no NAT rules.
-/// One NAT instance per rule (instance number = rule index + 1).
-pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
+/// Generate auto-injected PF filter rules that allow NAT'd traffic to pass in
+/// whitelist mode. Without these, the default `block all` would drop inbound
+/// packets from NAT'd networks before NAT/state can take effect — forcing users
+/// to manually add a separate filter rule for each NAT rule.
+///
+/// Returns empty string in blacklist mode (the default `pass` already covers it)
+/// or when no NAT rules are enabled.
+///
+/// Generated rules are placed AFTER `block all` and AFTER user filter rules so
+/// that users can override with their own `block quick` rules (PF is
+/// first-match-quick: a user `block quick` placed ahead of this terminates
+/// evaluation first). The default `block all` has no `quick`, so the last
+/// matching rule wins — these auto `pass quick` rules ensure NAT traffic flows
+/// when no user rule has already made a decision.
+fn generate_pf_nat_pass(rules: &[NatRule], mode: FirewallMode) -> String {
+    if mode != FirewallMode::Whitelist {
+        return String::new();
+    }
     let active: Vec<&NatRule> = rules.iter().filter(|r| r.enabled).collect();
     if active.is_empty() {
         return String::new();
     }
-    let mut buf = String::from("# --- NAT configuration ---\n");
-    for (i, rule) in active.iter().enumerate() {
-        let inst = (i + 1) as u32;
+    let mut buf = String::from("# --- NAT auto-pass (whitelist mode) ---\n");
+    for rule in &active {
+        let af = rule.family.pf_kw();
         let desc = rule.description.as_deref().unwrap_or("");
         match rule.kind {
             NatKind::Snat => {
-                // SNAT: translate source for outbound traffic on the interface.
-                // same_ports keeps the source port where possible (avoids collisions).
-                // reset clears existing NAT state on config reload.
+                // Allow NAT'd source network to enter host (inbound direction).
+                // Once state is created, return traffic flows out via the
+                // default `pass out quick all keep state`.
                 buf.push_str(&format!(
-                    "# [SNAT] {desc}\nipfw -q nat {inst} config if {iface} same_ports reset\n",
-                    inst = inst,
-                    iface = rule.interface,
+                    "# [auto] SNAT pass-in: {desc}\npass in quick {af} from {src} to any keep state\n",
+                    af = af,
+                    src = rule.src_addr,
                 ));
             }
             NatKind::Dnat => {
-                // DNAT: redirect inbound traffic to an internal host:port.
+                // Allow external traffic to reach the redirected port. PF's rdr
+                // translates the destination BEFORE filter evaluation, so match
+                // the internal target address:port (post-translation).
+                let proto = pf_nat_proto(&rule.protocol); // " proto tcp" / " proto { tcp udp }"
                 let target = rule
                     .dst_addr
                     .as_deref()
                     .filter(|s| !s.is_empty())
-                    .unwrap_or("127.0.0.1");
-                let tport = rule
+                    .unwrap_or("any");
+                let port_clause = rule
                     .dst_port
                     .as_deref()
                     .filter(|s| !s.is_empty())
-                    .map(|p| format!(":{p}"))
+                    .map(|p| format!(" port {}", port_to_pf(p)))
                     .unwrap_or_default();
-                let proto_label = match rule.protocol {
-                    NatProto::Tcp => " tcp",
-                    NatProto::Udp => " udp",
-                    NatProto::Both => " tcp udp",
+                let state = if rule.protocol == NatProto::Tcp {
+                    " flags any keep state (sloppy)"
+                } else {
+                    " keep state"
                 };
                 buf.push_str(&format!(
-                    "# [DNAT] {desc}\nipfw -q nat {inst} config if {iface} redirect {target}{tport}{proto_label}\n",
-                    inst = inst,
+                    "# [auto] DNAT pass-in: {desc}\npass in quick on {iface} {af}{proto} from any to {target}{port_clause}{state}\n",
                     iface = rule.interface,
+                    af = af,
+                    proto = proto,
                     target = target,
-                    tport = tport,
-                    proto_label = proto_label,
+                    port_clause = port_clause,
+                    state = state,
                 ));
             }
             NatKind::Binat => {
-                // ipfw has no native BINAT; emulate via SNAT config + 1:1 redirect.
-                let ext = rule
-                    .dst_addr
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("255.255.255.255");
+                // 1:1 bidirectional mapping. Allow the source address in both
+                // directions.
                 buf.push_str(&format!(
-                    "# [BINAT-emulated] {desc}\nipfw -q nat {inst} config if {iface} same_ports reset\n",
-                    inst = inst,
-                    iface = rule.interface,
+                    "# [auto] BINAT pass: {desc}\npass quick {af} from {src} to any keep state\n",
+                    af = af,
+                    src = rule.src_addr,
                 ));
-                let _ = ext; // BINAT full emulation is P2; SNAT-side handled here.
             }
         }
     }
@@ -1424,26 +1455,183 @@ pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
     buf
 }
 
-/// Generate the ipfw `nat N` rules (apply NAT instances to matching traffic).
-/// Empty string if no NAT rules. Rule numbers start at 50000 with step 100.
+/// Group enabled NAT rules by external interface.
+/// Returns (interface, rules) pairs in first-seen order.
+fn group_nat_by_interface(rules: &[NatRule]) -> Vec<(String, Vec<&NatRule>)> {
+    let mut groups: Vec<(String, Vec<&NatRule>)> = Vec::new();
+    for rule in rules.iter().filter(|r| r.enabled) {
+        if let Some(g) = groups.iter_mut().find(|(iface, _)| iface == &rule.interface) {
+            g.1.push(rule);
+        } else {
+            groups.push((rule.interface.clone(), vec![rule]));
+        }
+    }
+    groups
+}
+
+/// Generate the ipfw `nat N config` declarations, one per interface.
+///
+/// Rules on the same interface are merged into a single NAT instance because
+/// `one_pass=1` (default) means only the first matching `nat` rule fires —
+/// multiple instances on the same interface would never all be reached.
+///
+/// SNAT/BINAT contribute `same_ports reset`; each DNAT contributes a
+/// `redirect` clause. Result: one config line per interface.
+pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
+    let groups = group_nat_by_interface(rules);
+    if groups.is_empty() {
+        return String::new();
+    }
+    let mut buf = String::from("# --- NAT configuration ---\n");
+    for (i, (iface, group_rules)) in groups.iter().enumerate() {
+        let inst = (i + 1) as u32;
+        let mut config = format!("if {iface}");
+
+        // SNAT / BINAT → same_ports reset
+        let has_snat = group_rules
+            .iter()
+            .any(|r| matches!(r.kind, NatKind::Snat | NatKind::Binat));
+        if has_snat {
+            config.push_str(" same_ports unreg_only reset");
+        }
+
+        // Each DNAT → redirect clause
+        for rule in group_rules.iter().filter(|r| r.kind == NatKind::Dnat) {
+            let target = rule
+                .dst_addr
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("127.0.0.1");
+            let tport = rule
+                .dst_port
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|p| format!(":{p}"))
+                .unwrap_or_default();
+            let proto_label = match rule.protocol {
+                NatProto::Tcp => " tcp",
+                NatProto::Udp => " udp",
+                NatProto::Both => " tcp udp",
+            };
+            config.push_str(&format!(" redirect {target}{tport}{proto_label}"));
+        }
+
+        let descs: Vec<&str> = group_rules
+            .iter()
+            .filter_map(|r| r.description.as_deref())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let desc = descs.join(", ");
+        buf.push_str(&format!(
+            "# [NAT {inst}] {desc}\nipfw -q nat {inst} config {config}\n",
+        ));
+    }
+    buf.push('\n');
+    buf
+}
+
+/// Generate ipfw NAT rules — precise outbound + broad inbound per interface.
+///
+/// **Outbound** (`out xmit`): only matches traffic from the NAT source network,
+/// so the host's own public traffic never enters libalias.
+///
+/// **Inbound** (`in recv`): broad `from any to any` — necessary because return
+/// traffic arrives with a public destination address and libalias must inspect
+/// it to find the matching state entry and reverse-translate. Packets without
+/// matching state pass through libalias unchanged (near-zero cost).
+///
+/// This is more precise than the `via` single-rule approach (`from any to any
+/// via $iface`) which sends ALL traffic through the NAT engine.
+///
+/// Rule numbers start at 50000 with step 100 per interface group.
 pub fn generate_ipfw_nat_rules(rules: &[NatRule]) -> String {
+    let groups = group_nat_by_interface(rules);
+    if groups.is_empty() {
+        return String::new();
+    }
+    let mut buf = String::from("# --- NAT rules ---\n");
+    for (i, (iface, group_rules)) in groups.iter().enumerate() {
+        let inst = (i + 1) as u32;
+        let base = (50000 + (i as u32) * 100) as u32;
+
+        // Outbound: one rule per SNAT/BINAT source network
+        let mut n = base;
+        for rule in group_rules.iter().filter(|r| matches!(r.kind, NatKind::Snat | NatKind::Binat)) {
+            let label = if rule.kind == NatKind::Binat { "BINAT" } else { "SNAT" };
+            let desc = rule.description.as_deref().unwrap_or("");
+            buf.push_str(&format!(
+                "# [{n:05}] [NAT {inst}] {label} outbound: {desc}\nipfw -q add {n:05} nat {inst} ip from {src} to any out xmit {iface}\n",
+                n = n, inst = inst, src = rule.src_addr, iface = iface,
+            ));
+            n += 1;
+        }
+
+        // Inbound: one broad rule per interface for de-NAT (return traffic)
+        buf.push_str(&format!(
+            "# [{n:05}] [NAT {inst}] inbound de-NAT via {iface}\nipfw -q add {n:05} nat {inst} ip from any to any in recv {iface}\n",
+            n = n, inst = inst, iface = iface,
+        ));
+
+        buf.push('\n');
+    }
+    buf
+}
+
+/// Generate auto-injected ipfw allow rules that permit NAT'd traffic to pass
+/// the default `deny ip from any to any` (rule 65534) in whitelist mode.
+///
+/// Without these, the initial inbound packet from a NAT'd source network (e.g.
+/// a jail subnet) hits the default deny before NAT can take effect — forcing
+/// users to manually author a separate filter rule for each NAT rule.
+///
+/// ## CRITICAL: no `keep-state` on NAT auto-pass rules
+///
+/// ipfw evaluates **dynamic (keep-state) rules before ALL static rules**. If an
+/// auto-pass rule used `keep-state`, the bidirectional dynamic state it creates
+/// on the jail's inbound packet (bridge1 input) would also match that SAME
+/// packet when it reaches the external interface for output — and the dynamic
+/// `allow` would fire **before** the static `nat` rule (50000), bypassing NAT
+/// entirely. The packet would egress with its private source address, the
+/// internet could not reply, and NAT would silently fail.
+///
+/// This is exactly why blacklist mode works but whitelist mode did not:
+/// blacklist's default rule (65534) has no `keep-state`, so no shadowing
+/// dynamic state is ever created and packets reach the `nat` rules normally.
+///
+/// ## CRITICAL: outbound auto-pass must preempt rule 65000
+///
+/// Rule 65000 (`allow ... out keep-state`) would otherwise catch the return
+/// traffic destined to the jail on the internal interface (e.g. bridge1
+/// output), creating a shadowing state that breaks the *next* outbound packet.
+/// We therefore emit an explicit outbound allow (no keep-state) for return-to-
+/// NAT-network traffic, placed at 60001 < 65000, so 65000 never sees it.
+///
+/// Returns empty string in blacklist mode or when no NAT rules are enabled.
+fn generate_ipfw_nat_pass(rules: &[NatRule], mode: FirewallMode) -> String {
+    if mode != FirewallMode::Whitelist {
+        return String::new();
+    }
     let active: Vec<&NatRule> = rules.iter().filter(|r| r.enabled).collect();
     if active.is_empty() {
         return String::new();
     }
-    let mut buf = String::from("# --- NAT rules ---\n");
+    let mut buf = String::from("# --- NAT auto-pass (whitelist mode, no keep-state) ---\n");
     for (i, rule) in active.iter().enumerate() {
-        let inst = (i + 1) as u32;
-        let number = (50000 + (i as u32) * 100) as u32;
+        let base = (60000 + (i as u32) * 100) as u32;
         let desc = rule.description.as_deref().unwrap_or("");
         match rule.kind {
-            NatKind::Snat => {
+            NatKind::Snat | NatKind::Binat => {
+                let label = if rule.kind == NatKind::Binat { "BINAT" } else { "SNAT" };
+                let src = &rule.src_addr;
+                // Inbound: jail subnet → host (plain allow, NO keep-state).
                 buf.push_str(&format!(
-                    "# [SNAT {inst}] {desc}\nipfw -q add {number:05} nat {inst} ip from {src} to any out xmit {iface}\n",
-                    inst = inst,
-                    number = number,
-                    src = rule.src_addr,
-                    iface = rule.interface,
+                    "# [{n:05}] [auto] {label} pass-in: {desc}\nipfw -q add {n:05} allow ip from {src} to any in\n",
+                    n = base,
+                ));
+                // Outbound: return traffic → jail (preempt 65000's shadowing keep-state).
+                buf.push_str(&format!(
+                    "# [{n:05}] [auto] {label} pass-out: {desc}\nipfw -q add {n:05} allow ip from any to {src} out\n",
+                    n = base + 1,
                 ));
             }
             NatKind::Dnat => {
@@ -1452,28 +1640,26 @@ pub fn generate_ipfw_nat_rules(rules: &[NatRule]) -> String {
                     NatProto::Udp => "udp",
                     NatProto::Both => "ip",
                 };
-                let dport = rule
-                    .src_port
+                let target = rule
+                    .dst_addr
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("any");
+                let port_clause = rule
+                    .dst_port
                     .as_deref()
                     .filter(|s| !s.is_empty())
                     .map(|p| format!(" {}", port_to_ipfw(p)))
                     .unwrap_or_default();
+                // Inbound: external → internal target after rdr (plain allow).
                 buf.push_str(&format!(
-                    "# [DNAT {inst}] {desc}\nipfw -q add {number:05} nat {inst} {proto} from any to me{dport} in recv {iface}\n",
-                    inst = inst,
-                    number = number,
-                    proto = proto,
-                    dport = dport,
-                    iface = rule.interface,
+                    "# [{n:05}] [auto] DNAT pass-in: {desc}\nipfw -q add {n:05} allow {proto} from any to {target}{port_clause} in\n",
+                    n = base,
                 ));
-            }
-            NatKind::Binat => {
+                // Outbound: internal target → external (preempt 65000).
                 buf.push_str(&format!(
-                    "# [BINAT-emulated {inst}] {desc}\nipfw -q add {number:05} nat {inst} ip from {src} to any out xmit {iface}\n",
-                    inst = inst,
-                    number = number,
-                    src = rule.src_addr,
-                    iface = rule.interface,
+                    "# [{n:05}] [auto] DNAT pass-out: {desc}\nipfw -q add {n:05} allow {proto} from {target}{port_clause} to any out\n",
+                    n = base + 1,
                 ));
             }
         }
@@ -2010,4 +2196,128 @@ pub fn has_staging() -> bool {
 /// Delete staging file.
 pub fn clear_staging() {
     let _ = fs::remove_file(STAGING_PATH);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snat_rule() -> NatRule {
+        NatRule {
+            id: 1, position: 0, enabled: true,
+            kind: NatKind::Snat, family: NatFamily::Ip,
+            interface: "vtnet0".into(),
+            src_addr: "192.168.1.0/24".into(),
+            dst_addr: None, src_port: None, dst_port: None,
+            protocol: NatProto::Both,
+            description: Some("NAT for jail network".into()),
+            created_at: 0, updated_at: 0,
+        }
+    }
+
+    fn dnat_rule() -> NatRule {
+        NatRule {
+            id: 2, position: 0, enabled: true,
+            kind: NatKind::Dnat, family: NatFamily::Ip,
+            interface: "vtnet0".into(),
+            src_addr: "any".into(),
+            dst_addr: Some("10.0.0.2".into()),
+            src_port: Some("80".into()),
+            dst_port: Some("8080".into()),
+            protocol: NatProto::Tcp,
+            description: Some("Forward HTTP".into()),
+            created_at: 0, updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn pf_snat_whitelist_includes_auto_pass() {
+        let pf = generate_pf(&[], FirewallMode::Whitelist, &[], &[snat_rule()]);
+        assert!(pf.contains("nat on vtnet0 inet from 192.168.1.0/24 to any -> (vtnet0)"));
+        assert!(pf.contains("# --- NAT auto-pass (whitelist mode) ---"));
+        assert!(pf.contains("pass in quick inet from 192.168.1.0/24 to any keep state"));
+    }
+
+    #[test]
+    fn pf_snat_blacklist_no_auto_pass() {
+        let pf = generate_pf(&[], FirewallMode::Blacklist, &[], &[snat_rule()]);
+        assert!(pf.contains("nat on vtnet0"));
+        assert!(!pf.contains("NAT auto-pass"));
+    }
+
+    #[test]
+    fn pf_dnat_whitelist_auto_pass_matches_internal_target() {
+        let pf = generate_pf(&[], FirewallMode::Whitelist, &[], &[dnat_rule()]);
+        assert!(pf.contains("rdr on vtnet0 inet proto tcp from any to any port 80 -> 10.0.0.2 port 8080"));
+        // Auto-pass matches the translated destination (internal target)
+        assert!(pf.contains("pass in quick on vtnet0 inet proto tcp from any to 10.0.0.2 port 8080"));
+    }
+
+    #[test]
+    fn ipfw_snat_whitelist_includes_auto_pass() {
+        let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[snat_rule()]);
+        // Precise outbound: only jail subnet enters NAT
+        assert!(ipfw.contains("ipfw -q add 50000 nat 1 ip from 192.168.1.0/24 to any out xmit vtnet0"));
+        // Broad inbound: de-NAT return traffic
+        assert!(ipfw.contains("ipfw -q add 50001 nat 1 ip from any to any in recv vtnet0"));
+        // Auto-pass must NOT use keep-state
+        assert!(ipfw.contains("ipfw -q add 60000 allow ip from 192.168.1.0/24 to any in\n"));
+        assert!(ipfw.contains("ipfw -q add 60001 allow ip from any to 192.168.1.0/24 out\n"));
+    }
+
+    #[test]
+    fn ipfw_snat_blacklist_no_auto_pass() {
+        let ipfw = generate_ipfw(&[], FirewallMode::Blacklist, &[], &[snat_rule()]);
+        assert!(!ipfw.contains("NAT auto-pass"));
+    }
+
+    #[test]
+    fn ipfw_dnat_whitelist_auto_pass_after_nat() {
+        let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[dnat_rule()]);
+        // Inbound de-NAT rule
+        assert!(ipfw.contains("ipfw -q add 50000 nat 1 ip from any to any in recv vtnet0"));
+        // DNAT redirect in config
+        assert!(ipfw.contains("redirect 10.0.0.2:8080 tcp"));
+        // Auto-pass in + out, no keep-state
+        assert!(ipfw.contains("ipfw -q add 60000 allow tcp from any to 10.0.0.2 8080 in\n"));
+        assert!(ipfw.contains("ipfw -q add 60001 allow tcp from 10.0.0.2 8080 to any out\n"));
+    }
+
+    #[test]
+    fn pf_no_nat_no_auto_pass() {
+        let pf = generate_pf(&[], FirewallMode::Whitelist, &[], &[]);
+        assert!(!pf.contains("NAT auto-pass"));
+    }
+
+    #[test]
+    fn ipfw_disabled_nat_no_auto_pass() {
+        let mut r = snat_rule();
+        r.enabled = false;
+        let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[r]);
+        assert!(!ipfw.contains("NAT auto-pass"));
+        assert!(!ipfw.contains("ipfw -q add 50000"));
+    }
+
+    #[test]
+    fn pf_user_block_overrides_snat_auto_pass() {
+        // A user block rule placed ahead of the auto-pass should win
+        // (PF first-match-quick). The auto-pass still allows the rest of
+        // the NAT'd subnet.
+        let user_block = FirewallRule {
+            id: 10, position: 0, enabled: true,
+            action: RuleAction::Deny, direction: RuleDirection::In,
+            protocol: RuleProtocol::Any,
+            source: AddressSpec { kind: AddressKind::Single, value: "192.168.1.66".into() },
+            source_port: None,
+            destination: AddressSpec { kind: AddressKind::Any, value: String::new() },
+            destination_port: None,
+            interface: None, log: false, icmp_type: None,
+            description: Some("Block bad jail".into()),
+            created_at: 0, updated_at: 0,
+        };
+        let pf = generate_pf(&[user_block], FirewallMode::Whitelist, &[], &[snat_rule()]);
+        let user_pos = pf.find("block in quick inet from 192.168.1.66").unwrap();
+        let auto_pos = pf.find("# --- NAT auto-pass").unwrap();
+        assert!(user_pos < auto_pos, "user block rule must come before auto-pass");
+    }
 }
