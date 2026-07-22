@@ -197,6 +197,7 @@ CREATE TABLE firewall_table_entries (
 | delete_rule | DB DELETE + regen config | staging 删除（内存 Vec 操作）|
 | toggle_rule | DB UPDATE + regen config | staging 修改 enabled 字段 |
 | reorder_rules | DB UPDATE position + regen config | staging 修改 position |
+| set_mode | DB UPDATE mode + regen config | apply（含防锁死——备份+倒计时+回滚）|
 | 表 CRUD | 同上 | 同上 |
 
 **`effective_state()`**：读取规则/表时，优先返回 staging（若存在），否则返回 DB。所有 list_rules、list_tables、config 预览、apply 都使用此函数。
@@ -249,6 +250,8 @@ CREATE TABLE firewall_table_entries (
 | apply | 是 | 是 |
 | apply | 否 | 否（规则不强制执行，安全） |
 | enable | — | 是 |
+| set_mode | 是 | 是（切换模式即时生效，需防锁死） |
+| set_mode | 否 | 否（仅写配置文件） |
 | switch | — | 否（结果保持 disabled） |
 
 **回滚流程**（`rollback()` in `firewall_gen.rs`）：

@@ -177,7 +177,7 @@ onMounted(async () => {
               <div class="btn-group" @click.stop>
                 <button v-if="vmState(vm) !== 'running' && vmState(vm) !== 'starting'"
                   class="btn-secondary btn-sm"
-                  :disabled="vmState(vm) === 'stopping' || vm.state === 'locked'"
+                  :disabled="vmState(vm) === 'stopping'"
                   @click="vmAction(vm.name, 'start')">
                   <i class="fa-solid fa-play"></i>
                 </button>

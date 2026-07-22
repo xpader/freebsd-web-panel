@@ -134,7 +134,8 @@ async fn check_no_pending() -> ApiResult<()> {
 }
 
 /// Spawn the auto-rollback timer for a pending apply.
-fn spawn_rollback_timer() {
+/// Spawn the auto-rollback timer for a pending apply.
+fn spawn_rollback_timer(db: crate::db::Db) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(
             fw::APPLY_TIMEOUT_SECS as u64,
@@ -147,10 +148,17 @@ fn spawn_rollback_timer() {
                 let driver = p.driver;
                 let backup = p.backup_config.clone();
                 let was_enabled = p.was_enabled;
+                let old_mode = p.old_mode.clone();
                 let result = tokio::task::spawn_blocking(move || {
                     fw::rollback(driver, &backup, was_enabled)
                 })
                 .await;
+
+                // Restore old mode in DB if this was a mode-change operation.
+                if let Some(om) = old_mode {
+                    let conn = db.lock().await;
+                    let _ = fw::set_state(&conn, "mode", &om);
+                }
 
                 fw::clear_pending_apply();
                 fw::clear_staging();
@@ -385,7 +393,7 @@ pub async fn enable(
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
     // Start auto-rollback timer.
-    spawn_rollback_timer();
+    spawn_rollback_timer(state.db.clone());
 
     audit::record(
         &state,
@@ -476,31 +484,63 @@ pub async fn set_mode(
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
     let new_mode = body.mode;
 
-    // Update DB state first
+    // Don't allow mode change if there's already a pending apply.
+    check_no_pending().await?;
+
+    let is_enabled = is_fw_enabled(driver).await;
+    let old_mode = active_mode(&state).await;
+
+    // Update DB mode.
     {
         let conn = state.db.lock().await;
         fw::set_state(&conn, "mode", new_mode.as_str())?;
     }
 
-    // Load rules and tables
-    let (rules, tables, nat_rules): (Vec<fw::FirewallRule>, Vec<fw::IpTable>, Vec<fw::NatRule>) = {
+    if !is_enabled {
+        // Firewall is disabled — just regenerate the config file, no apply.
+        regen_config(&state, driver).await?;
+        audit::record(
+            &state, Some(&auth.username), "PUT", "/api/firewall/mode", 200,
+            Some(format!("firewall mode -> {new_mode:?} (disabled, config only)")),
+        );
+
         let conn = state.db.lock().await;
-        (fw::list_rules(&conn)?, fw::list_tables(&conn)?, fw::list_nat_rules(&conn)?)
+        let count = fw::count_enabled_rules(&conn)?;
+        drop(conn);
+
+        return Ok(Json(FirewallStatus {
+            driver: Some(driver),
+            initialized: true,
+            enabled: false,
+            mode: Some(new_mode),
+            module_loaded: driver.module_loaded(),
+            rules_count: count,
+            pending_apply: is_dirty(&state).await,
+            pending_confirm: None,
+        }));
+    }
+
+    // Firewall is enabled — apply with anti-lockout.
+    let (rules, tables, nat_rules) = effective_state(&state).await?;
+
+    // Backup current config before applying.
+    let backup_config = {
+        let d = driver;
+        tokio::task::spawn_blocking(move || fw::read_config_file(d))
+            .await
+            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
     };
 
-    let driver_val = driver;
-    let mode_val = new_mode;
     let rules_clone = rules.clone();
+    let mode_val = new_mode;
+    let driver_val = driver;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         match driver_val {
             FirewallDriver::Ipfw => {
-                // Persist boot-time default via loader.conf
                 fw::set_ipfw_mode(mode_val)?;
-                // Reload rules (includes default deny rule 65534 for whitelist)
                 fw::apply_ipfw(&rules_clone, mode_val, &tables, &nat_rules)?;
             }
             FirewallDriver::Pf => {
-                // Regenerate pf.conf with new mode and reload
                 fw::apply_pf(&rules_clone, mode_val, &tables, &nat_rules)?;
             }
         }
@@ -509,13 +549,24 @@ pub async fn set_mode(
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
+    // Set up pending confirmation + auto-rollback.
+    let now = state.now_ts();
+    fw::create_pending_apply("mode", driver, true, &backup_config, now)?;
+    // Store old mode so rollback can restore it in DB.
+    if let Some(ref om) = old_mode {
+        fw::set_pending_old_mode(om.as_str())?;
+    }
+    spawn_rollback_timer(state.db.clone());
+
+    let pending_confirm = Some(PendingConfirmInfo {
+        expires_at: now + fw::APPLY_TIMEOUT_SECS,
+        timeout_seconds: fw::APPLY_TIMEOUT_SECS,
+        operation: "mode".to_string(),
+    });
+
     audit::record(
-        &state,
-        Some(&auth.username),
-        "PUT",
-        "/api/firewall/mode",
-        200,
-        Some(format!("firewall mode -> {new_mode:?}")),
+        &state, Some(&auth.username), "PUT", "/api/firewall/mode", 200,
+        Some(format!("firewall mode -> {new_mode:?} (enabled, anti-lockout active)")),
     );
 
     let conn = state.db.lock().await;
@@ -525,12 +576,12 @@ pub async fn set_mode(
     Ok(Json(FirewallStatus {
         driver: Some(driver),
         initialized: true,
-        enabled: fw::is_firewall_enabled(driver),
+        enabled: true,
         mode: Some(new_mode),
         module_loaded: true,
         rules_count: count,
-        pending_apply: false,
-        pending_confirm: None,
+        pending_apply: is_dirty(&state).await,
+        pending_confirm,
     }))
 }
 
@@ -678,8 +729,10 @@ pub async fn toggle_rule(
         rule.enabled = !rule.enabled;
         fw::write_staging(&rules, &tables, &nat_rules)?;
     } else {
-        let conn = state.db.lock().await;
-        fw::toggle_rule(&conn, id)?;
+        {
+            let conn = state.db.lock().await;
+            fw::toggle_rule(&conn, id)?;
+        }
         regen_config(&state, driver).await?;
     }
 
@@ -772,7 +825,7 @@ pub async fn apply(
     let pending_confirm = if is_enabled {
         let now = state.now_ts();
         fw::create_pending_apply("apply", driver, true, &backup_config, now)?;
-        spawn_rollback_timer();
+        spawn_rollback_timer(state.db.clone());
 
         serde_json::json!({
             "expires_at": now + fw::APPLY_TIMEOUT_SECS,
@@ -1093,9 +1146,16 @@ pub async fn rollback(
     let rollback_driver = p.driver;
     let backup = p.backup_config.clone();
     let was_enabled = p.was_enabled;
+    let old_mode = p.old_mode.clone();
     tokio::task::spawn_blocking(move || fw::rollback(rollback_driver, &backup, was_enabled))
         .await
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    // Restore old mode in DB if this was a mode-change operation.
+    if let Some(om) = old_mode {
+        let conn = state.db.lock().await;
+        fw::set_state(&conn, "mode", &om)?;
+    }
 
     fw::clear_pending_apply();
     fw::clear_staging();
@@ -1108,6 +1168,9 @@ pub async fn rollback(
         200,
         Some(format!("rolled back firewall change ({driver:?})")),
     );
+
+    // Re-read mode from DB — it may have been restored if this was a mode rollback.
+    let restored_mode = active_mode(&state).await.unwrap_or(FirewallMode::Whitelist);
 
     let conn = state.db.lock().await;
     let count = fw::count_enabled_rules(&conn)?;
@@ -1124,7 +1187,7 @@ pub async fn rollback(
         driver: Some(p.driver),
         initialized: true,
         enabled,
-        mode: Some(mode),
+        mode: Some(restored_mode),
         module_loaded,
         rules_count: count,
         pending_apply: is_dirty(&state).await,

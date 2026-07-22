@@ -16,6 +16,7 @@ mod monitor;
 mod state;
 mod sysinfo;
 mod sysrc;
+mod sysctl_conf;
 mod terminal;
 mod web_assets;
 

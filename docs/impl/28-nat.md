@@ -6,7 +6,7 @@
 
 **关键设计决策**：
 - **独立数据模型** — NAT 字段集（外部接口、内部网段、目标地址:端口）与过滤规则差异大，不复用 `FirewallRule`，用独立的 `firewall_nat_rules` 表 + `NatRule` 结构体
-- **嵌入式生成** — NAT 段嵌入现有配置文件，PF 放在 `block all` 之前，ipfw 用 `nat N config` 声明 + `nat N` 规则（编号 50000+），不创建独立文件
+- **嵌入式生成** — NAT 段嵌入现有配置文件，PF 放在 `block all` 之前，ipfw 用 `nat N config` 声明 + `nat N` 规则（在 `check-state` 之前），不创建独立文件
 - **零重复造轮** — 复用 staging（暂存未应用变更）、防锁死（备份+回滚）、apply（生成+加载）、倒计时确认，不新增独立流程
 - **与现有 CRUD 解耦** — NAT 规则独立列表、独立 API、独立前端页面（`/firewall/nat`）
 
@@ -71,7 +71,7 @@ rdr on em0 inet proto tcp from any to any port 80 -> 10.0.0.2 port 8080
 
 ### NAT 自动放行（auto-pass）
 
-**问题**：whitelist 模式下默认 `block all`，jail 子网的入站流量在 NAT 生效前就被拦掉。用户加完 SNAT 规则后还得手动去「规则管理」加 `pass in quick from <jail subnet>`，否则 NAT 不工作——很容易踩坑。
+**问题**：whitelist 模式下默认 `block all` / `deny ip from any to any`，jail 子网的入站流量在 NAT 生效前就被拦掉。用户加完 SNAT 规则后还得手动去「规则管理」加 `pass in quick from <jail subnet>`，否则 NAT 不工作——很容易踩坑。
 
 **方案**：`generate_pf_nat_pass` / `generate_ipfw_nat_pass` 在 whitelist 模式下为每条启用的 NAT 规则**自动注入**配套的过滤放行规则。用户只需添加 NAT 规则即可，无需手动加 pass。
 
@@ -89,69 +89,91 @@ pass in quick on em0 inet proto tcp from any to 10.0.0.2 port 8080 flags any kee
 - DNAT：rdr 已经在过滤前转换了目的地址，所以匹配**内部目标** `dst_addr:dst_port`（而非外部端口）
 - BINAT：`pass quick` 双向放行
 
-**ipfw 自动放行**（`generate_ipfw_nat_pass`）— 规则编号 `60000+`，在 NAT 规则（50000+）之后、默认策略（65000/65534）之前：
+**ipfw 自动放行**（`generate_ipfw_nat_pass`）— 规则编号 `40000+`，在 `check-state` 和用户过滤规则**之后**、默认策略之前：
 
-```
+```sh
 # --- NAT auto-pass (whitelist mode) ---
-# [60000] [auto] SNAT pass-in: NAT for jail network
-add 60000 allow ip from 10.0.0.0/24 to any in keep-state
-# [60000] [auto] DNAT pass-in: Forward HTTP
-add 60000 allow tcp from any to 10.0.0.2 8080 in recv em0 keep-state
+# [40000] [auto] SNAT pass: NAT for jail network
+add 40000 allow ip from 10.0.0.0/24 to any in keep-state
+# [40100] [auto] DNAT pass: Forward HTTP
+add 40100 allow tcp from any to 10.0.0.2 8080 in keep-state
 ```
 
-**仅在 whitelist 模式生成**——blacklist 模式默认就是 `pass`，无需注入。无启用 NAT 规则时不生成。
+**仅在 whitelist 模式生成**——blacklist 模式默认就是 `allow`，无需注入。无启用 NAT 规则时不生成。
 
-**ipfw** — 由两个函数生成：
-- `generate_ipfw_nat_config`：`nat N config` 实例声明（在使用 `nat N` 的规则之前）
-- `generate_ipfw_nat_rules`：`add N nat N ...` 规则（在过滤规则之后、默认策略之前）
+**为什么 ipfw auto-pass 可以用 `keep-state`**：因为 auto-pass 在 `check-state`（rule 50）之后，动态状态在下次包到达时于 check-state 处求值——而 NAT 规则在 check-state 之前（rule 10+），已先行执行。详见下节 ipfw 规则布局。
 
+### ipfw 规则布局与 check-state
+
+ipfw 的 `keep-state` 动态状态默认在**所有静态规则之前**隐式求值。如果不加 `check-state`，auto-pass 的 keep-state 会在 NAT 规则之前生效，jail 出站包被动态状态直接放行（带着私有源地址出去），绕过 NAT。
+
+解决方案是插入 **`check-state`** 规则作为显式状态检查点。ipfw 的完整规则布局：
+
+```sh
+-f flush
+
+add 001 allow ip from any to any via lo0              # loopback
+
+# --- NAT configuration ---
+# [NAT 1] NAT for jail network
+nat 1 config if vtnet0 same_ports reset
+
+# --- NAT rules (BEFORE check-state) ---
+# [00010] [NAT 1] SNAT outbound: NAT for jail network
+add 00010 nat 1 ip from 192.168.1.0/24 to any out via vtnet0
+# [00011] [NAT 1] inbound de-NAT via vtnet0
+add 00011 nat 1 ip from any to any in via vtnet0
+
+# --- State checkpoint ---
+add 050 check-state                                    # ← 关键分隔线
+
+# --- 用户过滤规则 (AFTER check-state, with keep-state) ---
+# [00100] Allow Visit FWP
+add 00100 allow tcp from any to me dst-port 22,23,8080 in keep-state
+
+# --- NAT auto-pass (AFTER check-state, with keep-state) ---
+# [40000] [auto] SNAT pass: NAT for jail network
+add 40000 allow ip from 192.168.1.0/24 to any in keep-state
+
+# [65000] Allow outbound from me (whitelist mode)
+add 65000 allow ip from me to any out keep-state
+# [65534] Default deny (whitelist mode)
+add 65534 deny log ip from any to any
 ```
-# --- NAT configuration (one instance per interface, merged) ---
-# [NAT 1] NAT for jail network, Forward HTTP
-nat 1 config if em0 same_ports reset redirect 10.0.0.2:8080 tcp
 
-# --- Managed Filter Rules ---
-add 00100 allow tcp from any to any dst-port 80 in
+**规则编号分配**：
 
-# --- NAT rules (one via rule per interface) ---
-# [NAT 1] via em0
-add 50000 nat 1 ip from any to any via em0
-
-# --- NAT auto-pass (whitelist mode, no keep-state) ---
-# [60000] [auto] SNAT pass-in: NAT for jail network
-add 60000 allow ip from 10.0.0.0/24 to any in
-# [60001] [auto] SNAT pass-out: NAT for jail network
-add 60001 allow ip from any to 10.0.0.0/24 out
-# [60100] [auto] DNAT pass-in: Forward HTTP
-add 60100 allow tcp from any to 10.0.0.2 8080 in
-# [60101] [auto] DNAT pass-out: Forward HTTP
-add 60101 allow tcp from 10.0.0.2 8080 to any out
-
-# [65000] Allow all outbound (whitelist mode)
-add 65000 allow ip from any to any out keep-state
-# [65534] Default deny
-add 65534 deny ip from any to any
-```
+| 编号范围 | 用途 | 说明 |
+|---|---|---|
+| 1 | loopback 放行 | 永远允许 |
+| 10–19 | NAT 规则 | `check-state` 之前，NAT 无条件执行 |
+| 50 | `check-state` | 动态状态检查点，必须在 NAT 之后 |
+| 100–39900 | 用户过滤规则 | `check-state` 之后，可安全用 `keep-state` |
+| 40000–49900 | NAT auto-pass | whitelist 模式自动注入，`keep-state` 安全 |
+| 65000 | 主机出站放行 | `from me to any out`（非 `from any`，避免 jail 流量绕过 NAT） |
+| 65534 | 默认策略 | whitelist=`deny log`，blacklist=`allow` |
 
 **关键点**：
-- **按接口分组**：同一接口上的所有 NAT 规则（SNAT + DNAT + BINAT）合并为一个 nat 实例。`one_pass=1` 时只有第一条匹配的 nat 规则生效，多实例同接口会有规则不可达
-- **`via` 关键字**：一条 `nat N ip from any to any via $iface` 同时匹配进出两个方向。libalias 内部根据包方向自动调用 LibAliasIn（入站 de-NAT）或 LibAliasOut（出站 SNAT）。这与 `/etc/rc.firewall` 的标准做法一致
-- `net.inet.ip.fw.one_pass=1`（默认）：`nat` 翻译后包退出防火墙，不继续走后续规则
-- 规则编号从 `50000` 开始，步进 `100`（与过滤规则 `00100-49900` 隔离）
-- SNAT 用 `same_ports reset`（避免端口冲突，类似 MASQUERADE）
+- **按接口分组**：同一接口上的所有 NAT 规则（SNAT + DNAT + BINAT）合并为一个 nat 实例
+- **`one_pass=0`（必需）**：`apply_ipfw` 在 NAT 规则存在时设置 `sysctl net.inet.ip.fw.one_pass=0`。`one_pass=1`（默认）下，匹配 nat 规则的包翻译后直接退出防火墙不继续检查——入站 de-NAT 规则匹配所有入站流量会导致白名单的 deny 被完全绕过。`one_pass=0` 让翻译后的包重新走防火墙，经过 check-state 到达 auto-pass / deny
+- **`check-state` 是关键**：没有它，ipfw 隐式在所有规则之前求值动态状态，NAT 规则被 shadow（jail 包带私有地址直接出去，互联网无法回包）
+- **`65000` 用 `from me`**：不是 `from any`——`from any to any out` 会匹配 jail 的出站流量并创建动态状态，导致后续包绕过 NAT
+- SNAT 出站规则精确匹配源网段（`from <src>`），只有 jail 子网进入 libalias
 - DNAT 在 nat config 中用 `redirect` 子句，同一实例可配多个 redirect
-- 自动放行规则编号 `60000+`，**无 `keep-state`**（见下节说明）
 
 ### 生成器签名变更（破坏性）
 
 `generate_pf` / `generate_ipfw` / `preview_config` / `write_config_only` / `apply_pf` / `apply_ipfw` / `init_pf` / `init_ipfw` 均增加 `nat_rules: &[NatRule]` 参数。所有调用方（handlers/firewall.rs）已同步更新。
 
-### ipfw_nat 模块加载
+### ipfw_nat 模块加载与 one_pass 设置
 
-`apply_ipfw` 时若 NAT 规则非空，先调用 `ensure_ipfw_nat()` 加载 `ipfw_nat.ko` 内核模块：
-- `ipfw_nat_loaded()` — `kldstat -q -n ipfw_nat` 检查
-- `ensure_ipfw_nat()` — 若未加载则 `kldload ipfw_nat`
-- 加载失败返回明确错误，不静默应用（避免过滤规则生效但 NAT 缺失）
+`apply_ipfw` 时若 NAT 规则非空：
+1. `ensure_ipfw_nat()` — 加载 `ipfw_nat.ko` 内核模块（`kldstat` 检查 + `kldload`）
+2. `sysctl net.inet.ip.fw.one_pass=0` — 设置运行时值，使 NAT 翻译后的包重新进入防火墙继续走过滤规则
+
+`init_ipfw` 持久化 `net.inet.ip.fw.one_pass=0` 到 `/etc/sysctl.conf`（通过 `upsert_sysctl_conf` 辅助函数）。
+
+> **为什么 one_pass=0**：`one_pass=1`（内核默认）下，包匹配 nat 规则后翻译完就退出防火墙。入站 de-NAT 规则 `add 11 nat 1 ip from any to any in via $iface` 匹配所有入站流量——包括发往主机自身的服务流量——如果翻译后直接退出，白名单模式的 deny（65534）被完全绕过。`one_pass=0` 让翻译后的包重新走防火墙，经过 `check-state` → auto-pass / 用户规则 / deny 正常过滤。
 
 ### Staging 集成
 

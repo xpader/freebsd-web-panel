@@ -1973,9 +1973,11 @@ fn build_primary_value(cfg: &IfaceRcConfConfig) -> String {
         }
     }
 
-    if !cfg.bridge_members.is_empty() {
-        let members: Vec<&str> = cfg.bridge_members.iter().map(|s| s.as_str()).collect();
-        parts.push(format!("addm {}", members.join(" ")));
+    for m in &cfg.bridge_members {
+        let m = m.trim();
+        if !m.is_empty() {
+            parts.push(format!("addm {m}"));
+        }
     }
 
     if let Some(mtu) = cfg.mtu {

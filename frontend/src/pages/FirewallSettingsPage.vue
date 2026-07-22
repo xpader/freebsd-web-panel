@@ -143,7 +143,11 @@ async function doSwitchMode(newMode) {
   if (!await confirm(t('firewall.modeConfirmTitle'), warnMsg)) return;
   try {
     status.value = await api.put('/api/firewall/mode', { mode: newMode });
-    toast.toast(t('firewall.modeSwitched'));
+    if (status.value?.pending_confirm) {
+      showCountdownIfPending(status.value);
+    } else {
+      toast.toast(t('firewall.modeSwitched'));
+    }
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }

@@ -1177,6 +1177,40 @@ fn parse_vm_info(raw: &str, vm_name: &str) -> Result<VmDetail, String> {
         i += 1;
     }
 
+    // vm info only calls running_check() which does NOT check run.lock,
+    // so a locked VM shows as "stopped".  Normalize by checking run.lock,
+    // mirroring vm list's logic (vm-core lines 91-92).
+    let state = {
+        let sl = state.to_ascii_lowercase();
+        if sl == "stopped" || sl == "suspended" {
+            if let Ok(conf) = vm_config_path(vm_name) {
+                if let Some(dir) = conf.parent() {
+                    let run_lock = dir.join("run.lock");
+                    if run_lock.is_file() {
+                        if let Ok(host) = std::fs::read_to_string(&run_lock) {
+                            let host = host.trim();
+                            if !host.is_empty() {
+                                format!("locked ({host})")
+                            } else {
+                                state
+                            }
+                        } else {
+                            state
+                        }
+                    } else {
+                        state
+                    }
+                } else {
+                    state
+                }
+            } else {
+                state
+            }
+        } else {
+            state
+        }
+    };
+
     // Extract uptime from PID if running.
     let uptime = if state.starts_with("running") {
         state

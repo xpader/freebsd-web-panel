@@ -27,7 +27,10 @@ const isRunning = computed(() => {
   return d.value.state === 'running' || d.value.state.startsWith('bootloader') || d.value.state.startsWith('running');
 });
 
-const isLocked = computed(() => d.value?.state === 'locked');
+const isLocked = computed(() => {
+  if (!d.value) return false;
+  return d.value.state.toLowerCase().startsWith('locked');
+});
 
 function stateBadge() {
   if (!d.value) return { cls: '', text: '' };
@@ -35,10 +38,10 @@ function stateBadge() {
     return { cls: 'badge-warn', text: t('bhyve.starting') };
   if (transitioning.value === 'stop')
     return { cls: 'badge-warn', text: t('bhyve.stopping') };
-  const st = d.value.state;
+  const st = d.value.state.toLowerCase();
   if (st === 'running' || st.startsWith('running') || st.startsWith('bootloader'))
     return { cls: 'badge-success', text: t('bhyve.stateRunning') };
-  if (st === 'locked') return { cls: 'badge-warn', text: t('bhyve.stateLocked') };
+  if (st.startsWith('locked')) return { cls: 'badge-warn', text: t('bhyve.stateLocked') };
   if (st === 'suspended') return { cls: 'badge-dim', text: t('bhyve.stateSuspended') };
   return { cls: 'badge-dim', text: t('bhyve.stateStopped') };
 }
@@ -245,7 +248,7 @@ onMounted(reload);
       <h1>{{ name }}</h1>
     </div>
     <div v-if="d" class="flex btn-group" style="margin-left:auto;">
-      <button v-if="!isRunning" class="btn-sm" :disabled="acting || isLocked" @click="vmAction('start')">
+      <button v-if="!isRunning" class="btn-sm" :disabled="acting" @click="vmAction('start')">
         <i class="fa-solid fa-play"></i> {{ t('common.start') }}
       </button>
       <button v-if="isRunning" class="btn-secondary btn-sm" :disabled="acting" @click="vmAction('stop')">
