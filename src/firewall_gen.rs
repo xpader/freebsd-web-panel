@@ -1553,25 +1553,32 @@ pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
             config.push_str(" same_ports reset");
         }
 
-        // Each DNAT → redirect clause
+        // Each DNAT → redirect_port clause(s)
+        // ipfw syntax: redirect_port <proto> <localIP:localPort> <remotePort>
         for rule in group_rules.iter().filter(|r| r.kind == NatKind::Dnat) {
             let target = rule
                 .dst_addr
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or("127.0.0.1");
-            let tport = rule
+            // localPort = dst_port if set, otherwise same as src_port
+            let orig_port = rule.src_port.as_deref().unwrap_or("0");
+            let local_port = rule
                 .dst_port
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .map(|p| format!(":{p}"))
-                .unwrap_or_default();
-            let proto_label = match rule.protocol {
-                NatProto::Tcp => " tcp",
-                NatProto::Udp => " udp",
-                NatProto::Both => " tcp udp",
+                .unwrap_or(orig_port);
+            // ipfw redirect_port takes a single protocol per clause
+            let protos = match rule.protocol {
+                NatProto::Tcp => vec!["tcp"],
+                NatProto::Udp => vec!["udp"],
+                NatProto::Both => vec!["tcp", "udp"],
             };
-            config.push_str(&format!(" redirect {target}{tport}{proto_label}"));
+            for proto in protos {
+                config.push_str(&format!(
+                    " redirect_port {proto} {target}:{local_port} {orig_port}"
+                ));
+            }
         }
 
         let descs: Vec<&str> = group_rules
@@ -2342,8 +2349,8 @@ mod tests {
         let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[dnat_rule()]);
         // Inbound de-NAT rule (before check-state)
         assert!(ipfw.contains("add 00010 nat 1 ip from any to any in via vtnet0"));
-        // DNAT redirect in config
-        assert!(ipfw.contains("redirect 10.0.0.2:8080 tcp"));
+        // DNAT redirect_port in config
+        assert!(ipfw.contains("redirect_port tcp 10.0.0.2:8080 80"));
         // Auto-pass with keep-state
         assert!(ipfw.contains("add 40000 allow tcp from any to 10.0.0.2 8080 in keep-state"));
     }

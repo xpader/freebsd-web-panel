@@ -63,14 +63,13 @@ async function loadAll() {
 }
 
 function makeFields(rule = null) {
-  const kind = rule?.kind || 'snat';
   const ifaceOptions = interfaces.value.map(name => ({ value: name, label: name }));
   const defaultIfaceVal = rule?.interface || defaultIface.value || (interfaces.value[0] || '');
 
-  const fields = [
+  return [
     { key: 'description', label: t('common.description'), value: rule?.description || '', placeholder: 'NAT for jail network' },
     {
-      key: 'kind', label: t('common.type'), type: 'radio', value: kind,
+      key: 'kind', label: t('common.type'), type: 'radio', value: rule?.kind || 'snat',
       options: [
         { value: 'snat', label: t('firewall.natKindSnat') },
         { value: 'dnat', label: t('firewall.natKindDnat') },
@@ -95,36 +94,35 @@ function makeFields(rule = null) {
       key: 'interface', label: t('firewall.interface'), type: 'select', value: defaultIfaceVal, half: true, row: 'proto-iface',
       options: ifaceOptions,
     },
+    // SNAT: internal network to NAT (required)
     {
       key: 'src_addr', label: t('firewall.natSrcAddr'),
       value: rule?.src_addr || '',
-      placeholder: kind === 'snat' ? '10.0.0.0/24' : 'any',
+      placeholder: '10.0.0.0/24',
+      showIf: { kind: 'snat' },
+      requiredIf: { kind: 'snat' },
     },
-  ];
-
-  // Destination address — meaning depends on kind.
-  // SNAT: optional external address (blank = interface address).
-  // DNAT: required internal target IP.
-  fields.push({
-    key: 'dst_addr',
-    label: t('firewall.natDstAddr'),
-    value: rule?.dst_addr || '',
-    placeholder: kind === 'snat' ? t('firewall.natDstAddrSnat') : '10.0.0.2',
-  });
-
-  // DNAT-specific: original port + target port
-  if (kind === 'dnat') {
-    fields.push({
+    // DNAT: internal target IP (required)
+    {
+      key: 'dst_addr', label: t('firewall.natDstAddr'),
+      value: rule?.dst_addr || '',
+      placeholder: '10.0.0.2',
+      showIf: { kind: 'dnat' },
+      requiredIf: { kind: 'dnat' },
+    },
+    // DNAT: original port (required) + target port (optional, defaults to same as original)
+    {
       key: 'src_port', label: t('firewall.natOrigPort'),
       value: rule?.src_port || '', placeholder: '80', half: true, row: 'dnat-ports',
-    });
-    fields.push({
+      showIf: { kind: 'dnat' },
+      requiredIf: { kind: 'dnat' },
+    },
+    {
       key: 'dst_port', label: t('firewall.natTargetPort'),
       value: rule?.dst_port || '', placeholder: '8080', half: true, row: 'dnat-ports',
-    });
-  }
-
-  return fields;
+      showIf: { kind: 'dnat' },
+    },
+  ];
 }
 
 function extractBody(result) {

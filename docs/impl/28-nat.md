@@ -159,7 +159,7 @@ add 65534 deny log ip from any to any
 - **`check-state` 是关键**：没有它，ipfw 隐式在所有规则之前求值动态状态，NAT 规则被 shadow（jail 包带私有地址直接出去，互联网无法回包）
 - **`65000` 用 `from me`**：不是 `from any`——`from any to any out` 会匹配 jail 的出站流量并创建动态状态，导致后续包绕过 NAT
 - SNAT 出站规则精确匹配源网段（`from <src>`），只有 jail 子网进入 libalias
-- DNAT 在 nat config 中用 `redirect` 子句，同一实例可配多个 redirect
+- DNAT 在 nat config 中用 `redirect_port` 子句，语法 `redirect_port <proto> <localIP:localPort> <remotePort>`，`Both` 协议拆成 `redirect_port tcp ... redirect_port udp ...` 两条；同一实例可配多个 redirect
 
 ### 生成器签名变更（破坏性）
 
