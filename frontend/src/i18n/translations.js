@@ -573,6 +573,7 @@ export const en = {
     login: 'Login',
     loggingIn: 'Signing in…',
     loginFailed: 'Login failed',
+    invalidCredentials: 'Invalid username or password',
     welcome: 'Welcome, {{name}}',
     setupTitle: 'Initialize Admin',
     setupSubtitle: 'Create the first admin account to get started',
@@ -584,6 +585,8 @@ export const en = {
     setupDone: 'Admin {{name}} created, please sign in',
     setupFailed: 'Creation failed',
     usernamePlaceholder: '2-32 chars: letters, digits, _ . -',
+    sessionExpiredTitle: 'Session Expired',
+    sessionExpiredMsg: 'Your session has expired. Please log in again.',
   },
   dash: {
     title: 'Dashboard',
@@ -2055,6 +2058,7 @@ export const zh = {
     login: '登录',
     loggingIn: '登录中…',
     loginFailed: '登录失败',
+    invalidCredentials: '用户名或密码错误',
     welcome: '欢迎，{{name}}',
     setupTitle: '初始化管理员',
     setupSubtitle: '创建首个管理员账户以开始使用',
@@ -2066,6 +2070,8 @@ export const zh = {
     setupDone: '管理员 {{name}} 创建成功，请登录',
     setupFailed: '创建失败',
     usernamePlaceholder: '2-32 位字母数字 _ . -',
+    sessionExpiredTitle: '登录已失效',
+    sessionExpiredMsg: '您的登录状态已失效，请重新登录。',
   },
   dash: {
     title: '仪表盘',

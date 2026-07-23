@@ -28,7 +28,8 @@ async function onSubmit() {
     toast.toast(t('auth.welcome', { name: res.user.username }));
     router.push('/dashboard');
   } catch (err) {
-    await alert(t('auth.loginFailed'), err.message || t('auth.loginFailed'));
+    const msg = err.status === 401 ? t('auth.invalidCredentials') : (err.message || t('auth.loginFailed'));
+    await alert(t('auth.loginFailed'), msg);
     loading.value = false;
   }
 }
