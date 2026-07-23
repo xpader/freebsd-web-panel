@@ -1,17 +1,15 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { useToast, useAlert, useConfirm, useFormModal, useCodePreview, useCountdown } from '../composables/useDialog.js';
-import { ui } from '../stores/ui.js';
+import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import FirewallStatusBar from '../components/shared/FirewallStatusBar.vue';
 
 const { t } = useI18n();
 const toast = useToast();
 const alert = useAlert();
 const confirm = useConfirm();
 const formModal = useFormModal();
-const codePreview = useCodePreview();
-const countdown = useCountdown();
 
 const status = ref(null);
 const rules = ref([]);
@@ -56,18 +54,6 @@ async function loadAll() {
   await loadRules();
 }
 
-async function showConfigPreview() {
-  try {
-    const data = await api.get('/api/firewall/config');
-    codePreview(
-      t('firewall.configPreview'),
-      data.content,
-    );
-  } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  }
-}
-
 async function doInitialize() {
   const result = await formModal(t('firewall.initTitle'), [
     {
@@ -100,67 +86,6 @@ async function doInitialize() {
     await loadAll();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  }
-}
-
-async function doToggleEnabled() {
-  if (status.value.enabled) {
-    if (!await confirm(t('firewall.disableTitle'), t('firewall.disableConfirm'))) return;
-    try {
-      status.value = await api.post('/api/firewall/disable');
-      toast.toast(t('firewall.disabled'));
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-    }
-  } else {
-    try {
-      const resp = await api.post('/api/firewall/enable');
-      status.value = resp;
-      if (resp.pending_confirm) {
-        await showCountdownIfPending(resp);
-      } else {
-        toast.toast(t('firewall.enabled'));
-      }
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-    }
-  }
-}
-
-async function showCountdownIfPending(resp) {
-  const pc = resp?.pending_confirm;
-  if (!pc) return;
-  const isEnable = pc.operation === 'enable';
-  const action = await countdown(
-    isEnable ? t('firewall.confirmTitleEnable') : t('firewall.confirmTitle'),
-    isEnable ? t('firewall.confirmMessageEnable') : t('firewall.confirmMessage'),
-    pc.expires_at,
-    pc.timeout_seconds,
-    {
-      rollbackLabel: isEnable ? t('firewall.rollbackNowEnable') : t('firewall.rollbackNowApply'),
-      confirmLabel: isEnable ? t('firewall.keepChangesEnable') : t('firewall.keepChangesApply'),
-      probeUrl: '/api/firewall/status',
-      warningMessage: t('firewall.serverUnreachable'),
-    },
-  );
-  if (action === 'confirm') {
-    try {
-      status.value = await api.post('/api/firewall/confirm');
-      toast.toast(t('firewall.confirmed'));
-      await loadRules();
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-      await loadStatus();
-    }
-  } else {
-    try {
-      status.value = await api.post('/api/firewall/rollback');
-      toast.toast(t('firewall.rolledBack'));
-      await loadRules();
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-      await loadStatus();
-    }
   }
 }
 
@@ -412,39 +337,6 @@ async function doMoveRule(index, direction) {
   }
 }
 
-async function doApply() {
-  try {
-    const resp = await api.post('/api/firewall/apply');
-    status.value.pending_apply = false;
-    if (resp.pending_confirm) {
-      await showCountdownIfPending(resp);
-    } else {
-      toast.toast(t('firewall.applied'));
-    }
-    await loadStatus();
-  } catch (e) {
-    // Connection may have been lost — poll status to check for pending_confirm.
-    await loadStatus();
-    if (status.value?.pending_confirm) {
-      await showCountdownIfPending(status.value);
-    } else {
-      await alert(t('firewall.applyFailed'), e.message || t('firewall.applyFailed'));
-    }
-  }
-}
-
-async function doDiscard() {
-  if (!await confirm(t('firewall.discard'), t('firewall.discardConfirm'))) return;
-  try {
-    await api.post('/api/firewall/discard');
-    toast.toast(t('firewall.discarded'));
-    await loadStatus();
-    await loadRules();
-  } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  }
-}
-
 function actionLabel(action) {
   const map = { allow: t('firewall.allow'), deny: t('firewall.deny'), reject: t('firewall.reject') };
   return map[action] || action;
@@ -463,21 +355,7 @@ function protoLabel(p) {
   return p.toUpperCase();
 }
 
-let pollTimer = null;
-onMounted(() => {
-  loadAll();
-  pollTimer = setInterval(async () => {
-    // Only poll when there's an active pending confirmation (countdown timer running).
-    // Otherwise the page is static — status was already loaded on mount.
-    if (status.value?.pending_confirm && !ui.dialog) {
-      await loadStatus();
-      if (status.value?.pending_confirm) {
-        showCountdownIfPending(status.value);
-      }
-    }
-  }, 5000);
-});
-onUnmounted(() => clearInterval(pollTimer));
+onMounted(loadAll);
 </script>
 
 <template>
@@ -486,23 +364,9 @@ onUnmounted(() => clearInterval(pollTimer));
       <h1>{{ t('firewall.rulesTitle') }}</h1>
       <p class="text-dim" style="margin:0;font-size:13px;">{{ t('firewall.subtitle') }}</p>
     </div>
-    <div v-if="initialized" class="flex btn-group" style="margin-left:auto;">
-      <button @click="doApply" v-if="status.pending_apply">
-        <i class="fa-solid fa-check"></i> {{ t('firewall.applyRules') }}
-      </button>
-      <button class="btn-secondary" @click="doDiscard" v-if="status.pending_apply">
-        <i class="fa-solid fa-rotate-left"></i> {{ t('firewall.discard') }}
-      </button>
-      <button @click="doAddRule">
-        <i class="fa-solid fa-plus"></i> {{ t('firewall.addRule') }}
-      </button>
-      <button class="btn-secondary" @click="showConfigPreview">
-        <i class="fa-solid fa-eye"></i> {{ t('firewall.configPreview') }}
-      </button>
-      <button class="btn-secondary" @click="loadAll">
-        <i class="fa-solid fa-rotate"></i> {{ t('common.refresh') }}
-      </button>
-    </div>
+    <button v-if="initialized" style="margin-left:auto;" @click="doAddRule">
+      <i class="fa-solid fa-plus"></i> {{ t('firewall.addRule') }}
+    </button>
   </div>
 
   <div v-if="loading" class="card">
@@ -538,38 +402,12 @@ onUnmounted(() => clearInterval(pollTimer));
   </template>
 
   <template v-else>
-    <div class="card">
-      <div class="flex" style="flex-wrap:wrap;gap:16px;align-items:center;">
-        <div class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('firewall.driver') }}</span>
-          <strong class="mono">{{ status.driver }}</strong>
-        </div>
-        <div class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('firewall.mode') }}</span>
-          <strong>{{ status.mode === 'whitelist' ? t('firewall.whitelist') : t('firewall.blacklist') }}</strong>
-        </div>
-        <div class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('common.status') }}</span>
-          <span :class="['badge', status.enabled ? 'badge-success' : 'badge-warn']">
-            {{ status.enabled ? t('firewall.running') : t('firewall.stopped') }}
-          </span>
-        </div>
-        <div class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('firewall.ruleCount') }}</span>
-          <strong class="mono">{{ status.rules_count }}</strong>
-        </div>
-        <div v-if="status.pending_apply" class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('firewall.pendingApply') }}</span>
-          <span class="badge badge-warn">{{ t('common.yes') }}</span>
-        </div>
-        <div class="flex btn-group" style="margin-left:auto;">
-          <button :class="['btn-sm', status.enabled ? 'btn-danger' : 'btn-secondary']" @click="doToggleEnabled">
-            <i :class="status.enabled ? 'fa-solid fa-stop' : 'fa-solid fa-play'"></i>
-            {{ status.enabled ? t('common.stop') : t('common.start') }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <FirewallStatusBar
+      :status="status"
+      @status="status = $event"
+      @refresh="loadAll"
+      @discarded="loadRules"
+    />
 
     <div class="card" style="padding:0;">
       <table>

@@ -256,6 +256,8 @@ VNC 端点 `/api/bhyve/vms/{name}/vnc`（`:terminal.rs:554`），位于公开路
 | 串口控制台 | `/bhyve/console/:name` | `BhyveConsolePage.vue` |
 | VNC | `/bhyve/vnc/:name` | `BhyveVncPage.vue` |
 | 镜像管理 | `/bhyve/images` | `BhyveImagesPage.vue` |
+
+VM 详情页复用 `components/shared/StatusBar.vue`，以紧凑布局显示状态、驻留内存、运行时间和控制台信息。
 | 虚拟交换机 | `/bhyve/switches` | `BhyveSwitchesPage.vue` |
 | 交换机详情 | `/bhyve/switches/:name` | `BhyveSwitchDetailPage.vue` |
 | 存储池 | `/bhyve/datastores` | `BhyveDatastoresPage.vue` |

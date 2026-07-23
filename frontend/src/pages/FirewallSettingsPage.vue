@@ -1,9 +1,9 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm, useFormModal, useCountdown } from '../composables/useDialog.js';
-import { ui } from '../stores/ui.js';
+import FirewallStatusBar from '../components/shared/FirewallStatusBar.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -59,30 +59,6 @@ async function doInitialize() {
     await loadStatus();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-  }
-}
-
-async function doToggleEnabled() {
-  if (status.value.enabled) {
-    if (!await confirm(t('firewall.disableTitle'), t('firewall.disableConfirm'))) return;
-    try {
-      status.value = await api.post('/api/firewall/disable');
-      toast.toast(t('firewall.disabled'));
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-    }
-  } else {
-    try {
-      const resp = await api.post('/api/firewall/enable');
-      status.value = resp;
-      if (resp.pending_confirm) {
-        await showCountdownIfPending(resp);
-      } else {
-        toast.toast(t('firewall.enabled'));
-      }
-    } catch (e) {
-      await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
-    }
   }
 }
 
@@ -153,20 +129,7 @@ async function doSwitchMode(newMode) {
   }
 }
 
-let pollTimer = null;
-onMounted(() => {
-  loadStatus();
-  pollTimer = setInterval(async () => {
-    // Only poll when there's an active pending confirmation (countdown timer running).
-    if (status.value?.pending_confirm && !ui.dialog) {
-      await loadStatus();
-      if (status.value?.pending_confirm) {
-        showCountdownIfPending(status.value);
-      }
-    }
-  }, 5000);
-});
-onUnmounted(() => clearInterval(pollTimer));
+onMounted(loadStatus);
 </script>
 
 <template>
@@ -175,12 +138,7 @@ onUnmounted(() => clearInterval(pollTimer));
       <h1>{{ t('nav.firewallSettings') }}</h1>
       <p class="text-dim" style="margin:0;font-size:13px;">{{ t('firewall.subtitle') }}</p>
     </div>
-    <div v-if="initialized" class="flex btn-group" style="margin-left:auto;">
-      <button :class="status.enabled ? 'btn-danger' : ''" @click="doToggleEnabled">
-        <i :class="status.enabled ? 'fa-solid fa-stop' : 'fa-solid fa-play'"></i>
-        {{ status.enabled ? t('common.stop') : t('common.start') }}
-      </button>
-    </div>
+
   </div>
 
   <div v-if="loading" class="card">
@@ -216,6 +174,12 @@ onUnmounted(() => clearInterval(pollTimer));
   </template>
 
   <template v-else>
+    <FirewallStatusBar
+      :status="status"
+      @status="status = $event"
+      @refresh="loadStatus"
+    />
+
     <div class="fw-settings-grid">
       <div class="card">
         <h3 style="margin:0 0 16px 0;">{{ t('firewall.driver') }}</h3>

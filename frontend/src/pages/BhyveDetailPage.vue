@@ -7,6 +7,7 @@ import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
 import { fmtBytesStr, fmtUptime } from '../lib/format.js';
 import { pollUntil } from '../lib/poll.js';
 import BackButton from '../components/ui/BackButton.vue';
+import StatusBar from '../components/shared/StatusBar.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -18,6 +19,17 @@ const name = route.params.name;
 
 const d = ref(null);
 const error = ref('');
+const statusItems = computed(() => {
+  if (!d.value) return [];
+  const state = stateBadge();
+  return [
+    { title: t('common.status'), value: state.text, type: 'badge', status: state.status },
+    ...(d.value.memory_resident ? [{ title: t('bhyve.memoryResident'), value: fmtBytesStr(d.value.memory_resident) }] : []),
+    ...(d.value.uptime ? [{ title: t('dash.uptime'), value: fmtUptime(d.value.uptime) }] : []),
+    ...(d.value.vnc_port ? [{ title: 'VNC', value: `:${d.value.vnc_port}` }] : []),
+    ...(d.value.console_port ? [{ title: t('common.console'), value: d.value.console_port }] : []),
+  ];
+});
 const acting = ref(false);
 const transitioning = ref('');  // '' | 'start' | 'stop'
 const refreshing = ref(false);
@@ -33,17 +45,17 @@ const isLocked = computed(() => {
 });
 
 function stateBadge() {
-  if (!d.value) return { cls: '', text: '' };
+  if (!d.value) return { status: 'inactive', text: '' };
   if (transitioning.value === 'start')
-    return { cls: 'badge-warn', text: t('bhyve.starting') };
+    return { status: 'warning', text: t('bhyve.starting') };
   if (transitioning.value === 'stop')
-    return { cls: 'badge-warn', text: t('bhyve.stopping') };
+    return { status: 'warning', text: t('bhyve.stopping') };
   const st = d.value.state.toLowerCase();
   if (st === 'running' || st.startsWith('running') || st.startsWith('bootloader'))
-    return { cls: 'badge-success', text: t('bhyve.stateRunning') };
-  if (st.startsWith('locked')) return { cls: 'badge-warn', text: t('bhyve.stateLocked') };
-  if (st === 'suspended') return { cls: 'badge-dim', text: t('bhyve.stateSuspended') };
-  return { cls: 'badge-dim', text: t('bhyve.stateStopped') };
+    return { status: 'ok', text: t('bhyve.stateRunning') };
+  if (st.startsWith('locked')) return { status: 'warning', text: t('bhyve.stateLocked') };
+  if (st === 'suspended') return { status: 'inactive', text: t('bhyve.stateSuspended') };
+  return { status: 'inactive', text: t('bhyve.stateStopped') };
 }
 
 /* ── label maps (matching BhyveEditPage) ── */
@@ -273,19 +285,7 @@ onMounted(reload);
   <div v-else-if="!d" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</div>
 
   <template v-else>
-    <!-- Status bar -->
-    <div class="card">
-      <div class="flex" style="flex-wrap:wrap;gap:16px;align-items:center;">
-        <div class="flex" style="gap:6px;align-items:center;">
-          <span class="text-dim" style="font-size:12px;">{{ t('common.status') }}</span>
-          <span :class="['badge', stateBadge().cls]">{{ stateBadge().text }}</span>
-        </div>
-        <div v-if="d.memory_resident" class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">{{ t('bhyve.memoryResident') }}</span><strong class="mono">{{ fmtBytesStr(d.memory_resident) }}</strong></div>
-        <div v-if="d.uptime" class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">{{ t('dash.uptime') }}</span><strong class="mono">{{ fmtUptime(d.uptime) }}</strong></div>
-        <div v-if="d.vnc_port" class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">VNC</span><strong class="mono">:{{ d.vnc_port }}</strong></div>
-        <div v-if="d.console_port" class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">{{ t('common.console') }}</span><strong class="mono">{{ d.console_port }}</strong></div>
-      </div>
-    </div>
+    <StatusBar :items="statusItems" />
 
     <!-- Basic info -->
     <div class="card">

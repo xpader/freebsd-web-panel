@@ -293,13 +293,37 @@ src/
 
 frontend/src/
 ├── pages/
-│   ├── FirewallRulesPage.vue    # 规则管理（状态卡片 + 规则列表 + 配置预览弹窗 + 初始化向导）
+│   ├── FirewallRulesPage.vue    # 规则管理（规则列表 + 初始化向导）
 │   ├── FirewallTablesPage.vue   # IP 名单管理（可折叠列表 + 条目增删）
-│   └── FirewallSettingsPage.vue # 设置（引擎切换 + 模式切换 + 启动/停止按钮）
+│   └── FirewallSettingsPage.vue # 设置（引擎切换 + 模式切换）
+├── components/shared/
+│   └── FirewallStatusBar.vue    # 共享状态栏：状态、应用、撤消、启停、预览、倒计时确认
 ├── lib/menu.js                  # 两级菜单：/firewall → rules/tables/settings
 ├── composables/useDialog.js     # useCodePreview() + useCountdown() + useFormModal()（含 submitHandler 错误内联展示）
 └── components/ui/DialogHost.vue # 通用弹窗（confirm/alert/code/countdown/form）
 ```
+
+### 共享状态栏
+
+`components/shared/StatusBar.vue` 是紧凑的通用状态栏基础组件，接收 `items` 属性而非左侧内容 slot。每项为 `{ title, value, type?, status? }`：`type` 省略时默认为 `text`，显示普通文字；`type='badge'` 显示胶囊状态，并用固定业务状态映射视觉样式：`ok`=绿色正常、`error`=红色错误、`warning`=黄色警告或转换中、`inactive`=灰色不活跃/停止。调用方不传 CSS class。actions slot 仅用于右侧操作按钮。
+
+```vue
+<StatusBar :items="[
+  { title: 'Driver', value: 'ipfw', type: 'text' },
+  { title: 'Status', value: 'Running', type: 'badge', status: 'ok' },
+]">
+  <template #actions><button>Refresh</button></template>
+</StatusBar>
+```
+
+Jail 与 VM 详情页直接传入状态项数组。`components/shared/FirewallStatusBar.vue` 在此基础上封装防火墙业务，置于规则管理、NAT 管理和设置页面的内容顶部，显示驱动、模式、运行状态、规则数和未应用变更。组件集中处理以下全局操作：
+
+- **应用 / 撤消**：存在 staging 时显示，成功后通过 `refresh` 事件让当前页面重新加载自身数据
+- **启动 / 停止**：启用、停用防火墙；启用触发防锁死倒计时确认时由组件处理 confirm/rollback
+- **配置预览**：读取 `/api/firewall/config` 并打开代码预览弹窗
+- **刷新与倒计时轮询**：每页不再维护重复的 `pending_confirm` 轮询定时器；组件在确认待处理且没有其他全局弹窗时轮询状态
+
+页面将最新状态通过 `status` 事件接收，并分别重新加载规则、NAT 规则或设置数据。规则管理与 NAT 管理的新增、编辑、删除等局部操作仍保留在各自页面。
 
 ### 前端表单弹窗模式
 

@@ -6,6 +6,7 @@ import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
 import SectionCard from '../components/ui/SectionCard.vue';
 import BackButton from '../components/ui/BackButton.vue';
+import StatusBar from '../components/shared/StatusBar.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -21,6 +22,16 @@ const activeTab = ref('overview');
 const acting = ref(false);
 
 const running = computed(() => d.value?.jid > 0);
+const statusItems = computed(() => {
+  if (!d.value) return [];
+  const state = stateBadge(running.value ? (rt.value?.state || 'running') : 'stopped');
+  return [
+    { title: 'JID', value: d.value.jid || '—' },
+    { title: t('common.status'), value: state.text, type: 'badge', status: state.status },
+    { title: 'persist', value: persist.value ? t('common.enabled') : t('common.disabled'), type: 'badge', status: persist.value ? 'ok' : 'inactive' },
+    ...(merged.value.parent ? [{ title: t('jails.parent'), value: merged.value.parent }] : []),
+  ];
+});
 const merged = computed(() => {
   if (!d.value) return {};
   const m = { ...(d.value.params || {}) };
@@ -58,9 +69,9 @@ const tabItems = computed(() => {
 });
 
 function stateBadge(state) {
-  if (state === 'running') return { cls: 'badge-success', text: t('jails.running') };
-  if (state === 'dying') return { cls: 'badge-warn', text: t('jails.dying') };
-  return { cls: 'badge-dim', text: t('jails.stopped') };
+  if (state === 'running') return { status: 'ok', text: t('jails.running') };
+  if (state === 'dying') return { status: 'warning', text: t('jails.dying') };
+  return { status: 'inactive', text: t('jails.stopped') };
 }
 
 function ipModeText(key) {
@@ -135,18 +146,7 @@ onMounted(reload);
   <div v-else-if="!d" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</div>
 
   <template v-else>
-    <!-- Status bar -->
-    <div class="card">
-      <div class="flex" style="flex-wrap:wrap;gap:16px;align-items:center;">
-        <div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">JID</span><strong class="mono">{{ d.jid || '—' }}</strong></div>
-        <div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">{{ t('common.status') }}</span><span :class="['badge', stateBadge(running ? (rt?.state || 'running') : 'stopped').cls]">{{ stateBadge(running ? (rt?.state || 'running') : 'stopped').text }}</span></div>
-        <div class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">persist</span>
-          <span v-if="persist" class="badge badge-success">{{ t('common.enabled') }}</span>
-          <span v-else class="badge badge-dim">{{ t('common.disabled') }}</span>
-        </div>
-        <div v-if="merged.parent" class="flex" style="gap:6px;align-items:center;"><span class="text-dim" style="font-size:12px;">{{ t('jails.parent') }}</span><strong class="mono">{{ merged.parent }}</strong></div>
-      </div>
-    </div>
+    <StatusBar :items="statusItems" />
 
     <SectionCard v-model="activeTab" :tabs="tabItems">
       <template #default="{ active }">

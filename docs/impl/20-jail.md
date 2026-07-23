@@ -330,7 +330,7 @@ UnionFS（联合挂载）在设计阶段曾作为第三种镜像创建方式进�
 #### Jail 详情页（`JailDetailPage.vue`）
 
 - 头部按钮：启动/停止、终端、编辑、删除
-- 状态栏：JID / 状态 / persist / 父级
+- 状态栏：复用 `components/shared/StatusBar.vue`，以紧凑布局显示 JID / 状态 / persist / 父级
 - 分区表格（标签使用翻译名，非原始参数键）：
   - 基本信息：描述、自动启动、path、主机名等
   - 网络：接口、IPv4（模式+地址）、IPv6、vnet（✓/✗ 图标）

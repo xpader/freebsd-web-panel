@@ -652,9 +652,11 @@ pub async fn update_rule(
     let now = state.now_ts();
 
     if is_fw_enabled(driver).await {
+        let had_staging = fw::has_staging();
         let (mut rules, tables, nat_rules) = effective_state(&state).await?;
         let rule = rules.iter_mut().find(|r| r.id == id)
             .ok_or_else(|| ApiError::NotFound("firewall rule not found".into()))?;
+        let disabled = !rule.enabled;
         rule.action = body.action;
         rule.direction = body.direction;
         rule.protocol = body.protocol;
@@ -668,9 +670,20 @@ pub async fn update_rule(
         rule.description = body.description.clone();
         rule.updated_at = now;
         let updated = rule.clone();
-        fw::write_staging(&rules, &tables, &nat_rules)?;
-        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
-            Some(format!("updated firewall rule {id} ({driver:?}) [staging]")));
+        if disabled {
+            let conn = state.db.lock().await;
+            fw::update_rule(&conn, id, &body, now)?;
+            drop(conn);
+            if had_staging {
+                fw::write_staging(&rules, &tables, &nat_rules)?;
+            }
+            audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
+                Some(format!("updated disabled firewall rule {id} ({driver:?})")));
+        } else {
+            fw::write_staging(&rules, &tables, &nat_rules)?;
+            audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
+                Some(format!("updated firewall rule {id} ({driver:?}) [staging]")));
+        }
         Ok(Json(updated))
     } else {
         {
@@ -697,9 +710,22 @@ pub async fn delete_rule(
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
 
     if is_fw_enabled(driver).await {
+        let had_staging = fw::has_staging();
         let (mut rules, tables, nat_rules) = effective_state(&state).await?;
-        rules.retain(|r| r.id != id);
-        fw::write_staging(&rules, &tables, &nat_rules)?;
+        let index = rules.iter().position(|r| r.id == id)
+            .ok_or_else(|| ApiError::NotFound("firewall rule not found".into()))?;
+        let disabled = !rules[index].enabled;
+        rules.remove(index);
+        if disabled {
+            let conn = state.db.lock().await;
+            fw::delete_rule(&conn, id)?;
+            drop(conn);
+            if had_staging {
+                fw::write_staging(&rules, &tables, &nat_rules)?;
+            }
+        } else {
+            fw::write_staging(&rules, &tables, &nat_rules)?;
+        }
     } else {
         {
             let conn = state.db.lock().await;
@@ -1289,9 +1315,11 @@ pub async fn update_nat_rule(
     let now = state.now_ts();
 
     if is_fw_enabled(driver).await {
+        let had_staging = fw::has_staging();
         let (rules, tables, mut nat_rules) = effective_state(&state).await?;
         let rule = nat_rules.iter_mut().find(|r| r.id == id)
             .ok_or_else(|| ApiError::NotFound("NAT rule not found".into()))?;
+        let disabled = !rule.enabled;
         rule.kind = body.kind;
         rule.family = body.family;
         rule.interface = body.interface.clone();
@@ -1304,9 +1332,20 @@ pub async fn update_nat_rule(
         rule.description = body.description.clone();
         rule.updated_at = now;
         let updated = rule.clone();
-        fw::write_staging(&rules, &tables, &nat_rules)?;
-        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/nat/rules/{id}"), 200,
-            Some(format!("updated NAT rule {id} [staging]")));
+        if disabled {
+            let conn = state.db.lock().await;
+            fw::update_nat_rule(&conn, id, &body, now)?;
+            drop(conn);
+            if had_staging {
+                fw::write_staging(&rules, &tables, &nat_rules)?;
+            }
+            audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/nat/rules/{id}"), 200,
+                Some(format!("updated disabled NAT rule {id}")));
+        } else {
+            fw::write_staging(&rules, &tables, &nat_rules)?;
+            audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/nat/rules/{id}"), 200,
+                Some(format!("updated NAT rule {id} [staging]")));
+        }
         Ok(Json(updated))
     } else {
         {
@@ -1333,9 +1372,22 @@ pub async fn delete_nat_rule(
         .ok_or_else(|| ApiError::BadRequest("firewall not initialized".into()))?;
 
     if is_fw_enabled(driver).await {
+        let had_staging = fw::has_staging();
         let (rules, tables, mut nat_rules) = effective_state(&state).await?;
-        nat_rules.retain(|r| r.id != id);
-        fw::write_staging(&rules, &tables, &nat_rules)?;
+        let index = nat_rules.iter().position(|r| r.id == id)
+            .ok_or_else(|| ApiError::NotFound("NAT rule not found".into()))?;
+        let disabled = !nat_rules[index].enabled;
+        nat_rules.remove(index);
+        if disabled {
+            let conn = state.db.lock().await;
+            fw::delete_nat_rule(&conn, id)?;
+            drop(conn);
+            if had_staging {
+                fw::write_staging(&rules, &tables, &nat_rules)?;
+            }
+        } else {
+            fw::write_staging(&rules, &tables, &nat_rules)?;
+        }
     } else {
         {
             let conn = state.db.lock().await;

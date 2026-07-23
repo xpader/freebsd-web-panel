@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import FirewallStatusBar from '../components/shared/FirewallStatusBar.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -253,14 +254,9 @@ onMounted(() => {
       <h1>{{ t('firewall.natRulesTitle') }}</h1>
       <p class="text-dim" style="margin:0;font-size:13px;">{{ t('firewall.natSubtitle') }}</p>
     </div>
-    <div v-if="initialized" class="flex btn-group" style="margin-left:auto;">
-      <button @click="doAddRule">
-        <i class="fa-solid fa-plus"></i> {{ t('firewall.addNatRule') }}
-      </button>
-      <button class="btn-secondary" @click="loadAll">
-        <i class="fa-solid fa-rotate"></i> {{ t('common.refresh') }}
-      </button>
-    </div>
+    <button v-if="initialized" style="margin-left:auto;" @click="doAddRule">
+      <i class="fa-solid fa-plus"></i> {{ t('firewall.addNatRule') }}
+    </button>
   </div>
 
   <div v-if="loading" class="card">
@@ -277,15 +273,12 @@ onMounted(() => {
   </template>
 
   <template v-else>
-    <div v-if="status.pending_apply" class="card" style="padding:12px 16px;">
-      <div class="flex" style="align-items:center;gap:12px;">
-        <i class="fa-solid fa-triangle-exclamation" style="color:var(--warn);"></i>
-        <span class="text-dim">{{ t('firewall.pendingApply') }}</span>
-        <router-link to="/firewall/rules" style="margin-left:auto;">
-          <button class="btn-sm">{{ t('firewall.applyRules') }}</button>
-        </router-link>
-      </div>
-    </div>
+    <FirewallStatusBar
+      :status="status"
+      @status="status = $event"
+      @refresh="loadAll"
+      @discarded="loadRules"
+    />
 
     <div v-if="isIpfw" class="card" style="padding:8px 16px;">
       <div class="flex" style="align-items:center;gap:8px;">
