@@ -28,7 +28,19 @@ async function onSubmit() {
     toast.toast(t('auth.welcome', { name: res.user.username }));
     router.push('/dashboard');
   } catch (err) {
-    const msg = err.status === 401 ? t('auth.invalidCredentials') : (err.message || t('auth.loginFailed'));
+    let msg;
+    if (err.status === 429) {
+      const kind = err.data?.error;
+      if (kind === 'ip_banned') {
+        msg = t('auth.ipBanned');
+      } else {
+        msg = t('auth.tooManyAttempts');
+      }
+    } else if (err.status === 401) {
+      msg = t('auth.invalidCredentials');
+    } else {
+      msg = err.message || t('auth.loginFailed');
+    }
     await alert(t('auth.loginFailed'), msg);
     loading.value = false;
   }

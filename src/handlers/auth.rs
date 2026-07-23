@@ -1,11 +1,13 @@
 //! Authentication endpoints: login, logout, current-user.
 
-use axum::extract::{Request, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{hash_token, mint_token, verify_password, AuthUser};
+use crate::auth::{extract_client_ip, hash_token, mint_token, verify_password, AuthUser};
 use crate::audit;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
@@ -32,8 +34,44 @@ pub struct UserInfo {
 
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> ApiResult<(StatusCode, Json<LoginResponse>)> {
+    let now = state.now_ts();
+    let ip = extract_client_ip(&headers, peer);
+
+    // Layer 2 — IP ban check (strongest): reject any request from a banned IP.
+    if let Err(remaining) = state.login_guard.check_ip(&ip, now) {
+        audit::record(
+            &state,
+            Some(&body.username),
+            "POST",
+            "/api/auth/login",
+            429,
+            Some(format!("IP banned ({ip}), {remaining}s remaining")),
+        );
+        return Err(ApiError::IpBanned(format!(
+            "this IP address has been banned; try again in {} seconds",
+            remaining
+        )));
+    }
+
+    // Layer 1 — username lockout check.
+    if let Err(remaining) = state.login_guard.check_user(&body.username, now) {
+        audit::record(
+            &state,
+            Some(&body.username),
+            "POST",
+            "/api/auth/login",
+            429,
+            Some("account locked".into()),
+        );
+        return Err(ApiError::AccountLocked(format!(
+            "too many failed attempts; try again in {} seconds",
+            remaining
+        )));
+    }
 
     // Lookup the user.
     let (user, phc) = {
@@ -41,13 +79,25 @@ pub async fn login(
         match crate::db::get_user_by_username(&conn, &body.username)? {
             Some(v) => v,
             None => {
+                state.login_guard.record_user_failure(
+                    &body.username,
+                    now,
+                    state.config.auth.max_login_attempts,
+                    state.config.auth.lockout_sec,
+                );
+                state.login_guard.record_ip_failure(
+                    &ip,
+                    now,
+                    state.config.auth.max_ip_login_attempts,
+                    state.config.auth.ip_ban_sec,
+                );
                 audit::record(
                     &state,
                     Some(&body.username),
                     "POST",
                     "/api/auth/login",
                     401,
-                    Some("unknown user".into()),
+                    Some(format!("unknown user (from {ip})")),
                 );
                 return Err(ApiError::Unauthorized);
             }
@@ -56,18 +106,32 @@ pub async fn login(
 
     // Constant-time-ish verify; on failure audit + 401.
     if let Err(e) = verify_password(&body.password, &phc) {
+        state.login_guard.record_user_failure(
+            &body.username,
+            now,
+            state.config.auth.max_login_attempts,
+            state.config.auth.lockout_sec,
+        );
+        state.login_guard.record_ip_failure(
+            &ip,
+            now,
+            state.config.auth.max_ip_login_attempts,
+            state.config.auth.ip_ban_sec,
+        );
         audit::record(
             &state,
             Some(&body.username),
             "POST",
             "/api/auth/login",
             401,
-            Some("bad password".into()),
+            Some(format!("bad password (from {ip})")),
         );
         return Err(e);
     }
 
-    let now = state.now_ts();
+    // Successful authentication — clear both username and IP failed-attempt history.
+    state.login_guard.record_success(&body.username, &ip);
+
     let (token, hash) = mint_token();
     let expires_at = now + (state.config.auth.session_ttl as i64);
 

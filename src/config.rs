@@ -35,6 +35,19 @@ pub struct AuthConfig {
     /// Session lifetime in seconds.
     #[serde(default = "default_session_ttl")]
     pub session_ttl: u64,
+    /// Max failed login attempts before temporary lockout.
+    #[serde(default = "default_max_login_attempts")]
+    pub max_login_attempts: u32,
+    /// Lockout duration in seconds after exceeding max failed attempts.
+    #[serde(default = "default_lockout_sec")]
+    pub lockout_sec: u64,
+    /// Max failed login attempts from a single IP (across all usernames)
+    /// before the IP is banned.
+    #[serde(default = "default_max_ip_login_attempts")]
+    pub max_ip_login_attempts: u32,
+    /// IP ban duration in seconds.
+    #[serde(default = "default_ip_ban_sec")]
+    pub ip_ban_sec: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +90,10 @@ impl Default for Config {
             },
             auth: AuthConfig {
                 session_ttl: default_session_ttl(),
+                max_login_attempts: default_max_login_attempts(),
+                lockout_sec: default_lockout_sec(),
+                max_ip_login_attempts: default_max_ip_login_attempts(),
+                ip_ban_sec: default_ip_ban_sec(),
             },
             monitor: MonitorConfig::default(),
         }
@@ -97,6 +114,18 @@ fn default_audit() -> PathBuf {
 }
 fn default_session_ttl() -> u64 {
     8 * 3600
+}
+fn default_max_login_attempts() -> u32 {
+    5
+}
+fn default_lockout_sec() -> u64 {
+    300
+}
+fn default_max_ip_login_attempts() -> u32 {
+    20
+}
+fn default_ip_ban_sec() -> u64 {
+    1800
 }
 
 impl Config {

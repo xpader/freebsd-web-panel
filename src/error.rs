@@ -32,6 +32,10 @@ pub enum ApiError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Command(String),
+    #[error("{0}")]
+    AccountLocked(String),
+    #[error("{0}")]
+    IpBanned(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -53,6 +57,8 @@ impl ApiError {
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             ApiError::NeedsInit => (StatusCode::PRECONDITION_REQUIRED, "needs_init"),
             ApiError::Command(_) => (StatusCode::UNPROCESSABLE_ENTITY, "command_failed"),
+            ApiError::AccountLocked(_) => (StatusCode::TOO_MANY_REQUESTS, "account_locked"),
+            ApiError::IpBanned(_) => (StatusCode::TOO_MANY_REQUESTS, "ip_banned"),
             ApiError::Database(_) | ApiError::Hash(_) | ApiError::Io(_) | ApiError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }

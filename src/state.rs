@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::audit::AuditLog;
+use crate::auth::LoginGuard;
 use crate::config::Config;
 use crate::db::Db;
 use crate::handlers::debug::TokioMetricsAccum;
@@ -16,6 +17,7 @@ pub struct AppState {
     pub audit: Option<Arc<AuditLog>>,
     pub web_root: Option<PathBuf>,
     pub tokio_accumulator: Arc<parking_lot::Mutex<TokioMetricsAccum>>,
+    pub login_guard: LoginGuard,
 }
 
 impl AppState {

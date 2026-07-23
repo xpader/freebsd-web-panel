@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         audit,
         web_root: Some(config.server.web_root.clone()),
         tokio_accumulator: Arc::new(parking_lot::Mutex::new(Default::default())),
+        login_guard: auth::LoginGuard::new(),
     };
 
     let user_count = {
@@ -116,6 +117,6 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "FWP listening (HTTP)");
 
-    axum::serve(listener, app.into_make_service()).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
