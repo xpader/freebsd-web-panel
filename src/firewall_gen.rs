@@ -713,8 +713,8 @@ pub fn list_nat_rules(conn: &Connection) -> ApiResult<Vec<NatRule>> {
                 dst_port: r.get(9)?,
                 protocol: NatProto::from_str(&r.get::<_, String>(10)?).unwrap_or(NatProto::Both),
                 description: r.get(11)?,
-                created_at: r.get(12)?,
-                updated_at: r.get(13)?,
+                created_at: r.get::<_, i64>(12)?,
+                updated_at: r.get::<_, i64>(13)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1385,12 +1385,6 @@ pub fn generate_pf_nat(rules: &[NatRule]) -> String {
             }
             NatKind::Dnat => {
                 let proto = pf_nat_proto(&rule.protocol);
-                let dport = rule
-                    .src_port
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .map(|p| format!(" port {}", port_to_pf(p)))
-                    .unwrap_or_default();
                 let target = rule
                     .dst_addr
                     .as_deref()
@@ -1402,15 +1396,37 @@ pub fn generate_pf_nat(rules: &[NatRule]) -> String {
                     .filter(|s| !s.is_empty())
                     .map(|p| format!(" port {}", p))
                     .unwrap_or_default();
-                buf.push_str(&format!(
-                    "# [DNAT] {desc}\nrdr on {iface} {af}{proto} from any to any{dport} -> {target}{tport}\n",
-                    iface = rule.interface,
-                    af = af,
-                    proto = proto,
-                    dport = dport,
-                    target = target,
-                    tport = tport,
-                ));
+                let port = rule.src_port.as_deref().unwrap_or("0");
+                // src_addr: alias IPs for this DNAT. "any"/empty → one rdr matching all IPs.
+                let alias_ips: Vec<&str> = if rule.src_addr.is_empty() || rule.src_addr == "any" {
+                    Vec::new()
+                } else {
+                    rule.src_addr.split(',').map(|i| i.trim()).filter(|i| !i.is_empty()).collect()
+                };
+                if alias_ips.is_empty() {
+                    buf.push_str(&format!(
+                        "# [DNAT] {desc}\nrdr on {iface} {af}{proto} from any to any port {port} -> {target}{tport}\n",
+                        iface = rule.interface,
+                        af = af,
+                        proto = proto,
+                        port = port,
+                        target = target,
+                        tport = tport,
+                    ));
+                } else {
+                    for ip in &alias_ips {
+                        buf.push_str(&format!(
+                            "# [DNAT] {desc}\nrdr on {iface} {af}{proto} from any to {ip} port {port} -> {target}{tport}\n",
+                            iface = rule.interface,
+                            af = af,
+                            proto = proto,
+                            ip = ip,
+                            port = port,
+                            target = target,
+                            tport = tport,
+                        ));
+                    }
+                }
             }
             NatKind::Binat => {
                 let ext = rule
@@ -1515,7 +1531,7 @@ fn generate_pf_nat_pass(rules: &[NatRule], mode: FirewallMode) -> String {
     buf
 }
 
-/// Group enabled NAT rules by external interface.
+/// Group enabled NAT rules by interface.
 /// Returns (interface, rules) pairs in first-seen order.
 fn group_nat_by_interface(rules: &[NatRule]) -> Vec<(String, Vec<&NatRule>)> {
     let mut groups: Vec<(String, Vec<&NatRule>)> = Vec::new();
@@ -1532,9 +1548,10 @@ fn group_nat_by_interface(rules: &[NatRule]) -> Vec<(String, Vec<&NatRule>)> {
 /// Generate the ipfw `nat N config` declarations, one per interface.
 ///
 /// Rules on the same interface are merged into a single NAT instance.
-///
-/// SNAT/BINAT contribute `same_ports reset`; each DNAT contributes a
-/// `redirect` clause. Result: one config line per interface.
+/// SNAT/BINAT contribute `same_ports reset`; each DNAT contributes
+/// `redirect_port` clauses. When `src_addr` lists alias IPs, one clause per IP
+/// is emitted (using `IP:port` alias syntax). All stay in one instance so
+/// SNAT and DNAT share the same libalias state.
 pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
     let groups = group_nat_by_interface(rules);
     if groups.is_empty() {
@@ -1554,30 +1571,43 @@ pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
         }
 
         // Each DNAT → redirect_port clause(s)
-        // ipfw syntax: redirect_port <proto> <localIP:localPort> <remotePort>
+        // ipfw syntax: redirect_port <proto> <localIP:localPort> [aliasIP:]aliasPort
+        // src_addr: comma-separated alias IPs to listen on; "any"/empty = all IPs
         for rule in group_rules.iter().filter(|r| r.kind == NatKind::Dnat) {
             let target = rule
                 .dst_addr
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or("127.0.0.1");
-            // localPort = dst_port if set, otherwise same as src_port
-            let orig_port = rule.src_port.as_deref().unwrap_or("0");
+            let port = rule.src_port.as_deref().unwrap_or("0");
             let local_port = rule
                 .dst_port
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .unwrap_or(orig_port);
-            // ipfw redirect_port takes a single protocol per clause
+                .unwrap_or(port);
+            // src_addr: alias IPs for this DNAT. "any"/empty → bare port (all IPs).
+            let alias_ips: Vec<&str> = if rule.src_addr.is_empty() || rule.src_addr == "any" {
+                Vec::new()
+            } else {
+                rule.src_addr.split(',').map(|i| i.trim()).filter(|i| !i.is_empty()).collect()
+            };
             let protos = match rule.protocol {
                 NatProto::Tcp => vec!["tcp"],
                 NatProto::Udp => vec!["udp"],
                 NatProto::Both => vec!["tcp", "udp"],
             };
             for proto in protos {
-                config.push_str(&format!(
-                    " redirect_port {proto} {target}:{local_port} {orig_port}"
-                ));
+                if alias_ips.is_empty() {
+                    config.push_str(&format!(
+                        " redirect_port {proto} {target}:{local_port} {port}"
+                    ));
+                } else {
+                    for ip in &alias_ips {
+                        config.push_str(&format!(
+                            " redirect_port {proto} {target}:{local_port} {ip}:{port}"
+                        ));
+                    }
+                }
             }
         }
 
@@ -1597,7 +1627,7 @@ pub fn generate_ipfw_nat_config(rules: &[NatRule]) -> String {
 
 /// Generate ipfw NAT rules using `via` keyword, placed BEFORE check-state.
 ///
-/// Per interface group, two rules are emitted:
+/// Per NAT instance group, two rules are emitted:
 ///   - Outbound: `nat N ip from <src> to any out via <iface>`
 ///   - Inbound:  `nat N ip from any to any in via <iface>`
 ///
@@ -1796,12 +1826,16 @@ pub fn validate_nat_body(body: &NatBody) -> ApiResult<()> {
     }
 
     // Source address (required)
-    if body.src_addr.is_empty() || body.src_addr.len() > 50 {
+    if body.src_addr.is_empty() || body.src_addr.len() > 200 {
         return Err(ApiError::BadRequest("invalid source address".into()));
     }
-    // "any" is allowed as a wildcard for DNAT src; otherwise validate IP/CIDR.
+    // "any" is allowed as a wildcard; otherwise validate each comma-separated IP/CIDR.
     if body.src_addr != "any" {
-        validate_address(&body.src_addr)?;
+        for part in body.src_addr.split(',').map(|s| s.trim()) {
+            if !part.is_empty() {
+                validate_address(part)?;
+            }
+        }
     }
 
     // Destination address (optional for SNAT, required for DNAT/BINAT)
@@ -2391,5 +2425,30 @@ mod tests {
         let user_pos = pf.find("block in quick inet from 192.168.1.66").unwrap();
         let auto_pos = pf.find("# --- NAT auto-pass").unwrap();
         assert!(user_pos < auto_pos, "user block rule must come before auto-pass");
+    }
+
+    #[test]
+    fn ipfw_dnat_alias_ip_via_src_addr_single_instance() {
+        // src_addr with comma-separated alias IPs generates redirect_port
+        // clauses with aliasIP:aliasPort, all in the same NAT instance as SNAT.
+        let mut dnat = dnat_rule();
+        dnat.src_addr = "203.0.113.5,203.0.113.6".into();
+        let snat = snat_rule(); // same interface
+        let ipfw = generate_ipfw(&[], FirewallMode::Whitelist, &[], &[snat, dnat]);
+        // Single instance with `if vtnet0`
+        assert!(ipfw.contains("nat 1 config if vtnet0"));
+        // redirect_port for each alias IP
+        assert!(ipfw.contains("redirect_port tcp 10.0.0.2:8080 203.0.113.5:80"));
+        assert!(ipfw.contains("redirect_port tcp 10.0.0.2:8080 203.0.113.6:80"));
+    }
+
+    #[test]
+    fn pf_dnat_alias_ip_via_src_addr_multiple_rdr() {
+        // src_addr with comma-separated alias IPs generates a separate rdr per IP.
+        let mut r = dnat_rule();
+        r.src_addr = "203.0.113.5,203.0.113.6".into();
+        let pf = generate_pf(&[], FirewallMode::Whitelist, &[], &[r]);
+        assert!(pf.contains("rdr on vtnet0 inet proto tcp from any to 203.0.113.5 port 80 -> 10.0.0.2 port 8080"));
+        assert!(pf.contains("rdr on vtnet0 inet proto tcp from any to 203.0.113.6 port 80 -> 10.0.0.2 port 8080"));
     }
 }

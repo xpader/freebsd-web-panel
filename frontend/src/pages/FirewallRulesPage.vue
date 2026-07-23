@@ -363,6 +363,19 @@ async function doEditRule(rule) {
   });
 }
 
+async function doCopyRule(rule) {
+  if (tables.value.length === 0) await loadTables();
+  const result = await formModal(t('firewall.addRuleTitle'), makeFields({ ...rule, description: null }), {
+    submitLabel: t('common.create'),
+    submitHandler: async (r) => {
+      await api.post('/api/firewall/rules', extractBody(r));
+      toast.toast(t('firewall.ruleAdded'));
+      await loadStatus();
+      await loadRules();
+    },
+  });
+}
+
 async function doDeleteRule(rule) {
   if (!await confirm(t('firewall.deleteRuleTitle'), t('firewall.deleteRuleConfirm'))) return;
   try {
@@ -606,6 +619,7 @@ onUnmounted(() => clearInterval(pollTimer));
                   <i class="fa-solid fa-arrow-down"></i>
                 </button>
                 <button class="btn-secondary btn-sm" @click="doEditRule(rule)">{{ t('common.edit') }}</button>
+                <button class="btn-secondary btn-sm" @click="doCopyRule(rule)">{{ t('common.copy') }}</button>
                 <button class="btn-danger btn-sm" @click="doDeleteRule(rule)">{{ t('common.delete') }}</button>
               </div>
             </td>

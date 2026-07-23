@@ -26,9 +26,9 @@ struct NatRule {
     kind: NatKind,
     family: NatFamily,
     interface: String,          // 外部接口（如 "em0"），必填
-    src_addr: String,           // SNAT=内部网段；DNAT="any" 或限定源
+    src_addr: String,           // SNAT=内部网段；DNAT=逗号分隔的 alias IP（空/any=所有 IP）
     dst_addr: Option<String>,   // SNAT=空(=接口地址)；DNAT=内部目标 IP
-    src_port: Option<String>,   // DNAT 必填（原端口）
+    src_port: Option<String>,   // DNAT 必填。逗号分隔，每项可为端口号或 IP:端口（alias）
     dst_port: Option<String>,   // DNAT 目标端口
     protocol: NatProto,
     description: Option<String>,
@@ -47,7 +47,7 @@ CREATE TABLE firewall_nat_rules (
     src_addr, dst_addr, src_port, dst_port,
     protocol, description, created_at, updated_at
 );
--- 由 db.rs 的 m2 迁移创建
+-- 由 db.rs 的 m2 迁移创建。m3 添加了 ext_addr 列但后续移除了该字段的使用
 ```
 
 ### 配置生成
@@ -65,7 +65,7 @@ rdr on em0 inet proto tcp from any to any port 80 -> 10.0.0.2 port 8080
 **关键点**：
 - NAT/rdr 段必须在 `block all` **之前**——PF 按规则顺序评估，NAT 在过滤前生效
 - SNAT 用 `nat on $if $af from $src to any -> ($if)` —— `($if)` 表示接口当前地址（DHCP 自动跟随）
-- DNAT 用 `rdr on $if $af proto X from any to any port $port -> $target port $tport`
+- DNAT 用 `rdr on $if $af proto X from any to $dst port $port -> $target port $tport`。`src_port` 中的每个条目（纯端口或 IP:端口）各生成一条 rdr 规则
 - BINAT 用 `binat on $if $af from $ip to any -> $ext_ip`
 - 协议 `Both` 生成 `proto { tcp udp }`
 
@@ -154,12 +154,14 @@ add 65534 deny log ip from any to any
 | 65534 | 默认策略 | whitelist=`deny log`，blacklist=`allow` |
 
 **关键点**：
-- **按接口分组**：同一接口上的所有 NAT 规则（SNAT + DNAT + BINAT）合并为一个 nat 实例
+- **按接口分组**：同一接口上的所有 NAT 规则（SNAT + DNAT + BINAT）合并为一个 nat 实例。**不能拆分为多个实例**——否则 DNAT 的 redirect 状态和 SNAT 的出站处理在不同实例中，状态隔离导致回包无法反向翻译
+- **alias IP 端口转发**：通过 DNAT 的 `src_addr` 字段填入逗号分隔的 alias IP 实现，如 `172.19.210.8,172.19.210.9`。每个 IP 生成一个 `redirect_port IP:port` 子句，全部在同一 nat 实例中，SNAT 和 DNAT 共享 libalias 状态，回包能正确反向翻译
+- **ipfw `redirect_port` alias 语法**：`redirect_port proto localIP:localPort [aliasIP:]aliasPort`。aliasIP 省略时匹配接口主 IP，指定时匹配该 alias IP
 - **`one_pass=0`（必需）**：`apply_ipfw` 在 NAT 规则存在时设置 `sysctl net.inet.ip.fw.one_pass=0`。`one_pass=1`（默认）下，匹配 nat 规则的包翻译后直接退出防火墙不继续检查——入站 de-NAT 规则匹配所有入站流量会导致白名单的 deny 被完全绕过。`one_pass=0` 让翻译后的包重新走防火墙，经过 check-state 到达 auto-pass / deny
 - **`check-state` 是关键**：没有它，ipfw 隐式在所有规则之前求值动态状态，NAT 规则被 shadow（jail 包带私有地址直接出去，互联网无法回包）
 - **`65000` 用 `from me`**：不是 `from any`——`from any to any out` 会匹配 jail 的出站流量并创建动态状态，导致后续包绕过 NAT
 - SNAT 出站规则精确匹配源网段（`from <src>`），只有 jail 子网进入 libalias
-- DNAT 在 nat config 中用 `redirect_port` 子句，语法 `redirect_port <proto> <localIP:localPort> <remotePort>`，`Both` 协议拆成 `redirect_port tcp ... redirect_port udp ...` 两条；同一实例可配多个 redirect
+- DNAT 在 nat config 中用 `redirect_port` 子句，语法 `redirect_port <proto> <localIP:localPort> [aliasIP:]aliasPort`。当 DNAT 的 `src_addr` 指定 alias IP 时，每个 IP 生成一条 `IP:port` 子句；`src_addr` 为 `any`/空时生成裸端口子句。`Both` 协议拆成 `redirect_port tcp ... redirect_port udp ...`；同一实例可配多个 redirect
 
 ### 生成器签名变更（破坏性）
 
@@ -198,8 +200,9 @@ struct StagingData {
 | 字段 | 规则 |
 |---|---|
 | `interface` | 必填，匹配 `^[a-zA-Z0-9_.]{1,15}$` |
-| `src_addr` | 必填；`"any"` 或合法 IPv4/IPv6/CIDR |
+| `src_addr` | 必填。SNAT=内部网段（CIDR）；DNAT=逗号分隔的 alias IP 或 `any` |
 | `dst_addr` | 可选；非空时校验 IP/CIDR |
+| `src_port` | DNAT 必填。逗号分隔，每项可为纯端口或 IP:端口格式（用于 alias IP 绑定）|
 | `src_port` / `dst_port` | 匹配 `^(\d+)(-(\d+))?(,(\d+)(-(\d+))?)*$`，1-65535 |
 | `kind=dnat` | `src_port` 必填（原端口）；`dst_addr` 必填（内部目标） |
 | `kind=binat` | `dst_addr` 必填（外部地址） |
@@ -282,7 +285,7 @@ frontend/src/
 - **编辑表单**（`useFormModal` + `DialogHost.vue` form 类型）：
   - 类型/地址族：`type: 'radio'`（radio-pill 样式）
   - 协议/接口：`type: 'select'`，`row: 'proto-iface'` 同行
-  - DNAT 时动态显示原端口 + 目标端口（`row: 'dnat-ports'` 同行）
+  - DNAT 时显示源 IP（可选，alias IP 逗号分隔）+ 源端口（同行）+ 目标地址:端口（同行）
   - `submitHandler` 模式：API 失败时错误内联显示在弹窗内，不丢失输入
 - **外部接口自动检测**：页面加载时调用 `/api/network/gateway` 获取默认路由出口，作为接口字段默认值；`/api/network/interfaces` 提供下拉选项
 - **pending_apply 提示**：staging 存在时顶部显示警告 + 跳转到规则页应用

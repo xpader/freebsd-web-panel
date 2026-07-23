@@ -102,24 +102,31 @@ function makeFields(rule = null) {
       showIf: { kind: 'snat' },
       requiredIf: { kind: 'snat' },
     },
-    // DNAT: internal target IP (required)
+    // DNAT: source IP (optional alias IPs) + source port (required) — same row
     {
-      key: 'dst_addr', label: t('firewall.natDstAddr'),
-      value: rule?.dst_addr || '',
-      placeholder: '10.0.0.2',
+      key: 'src_addr', label: t('firewall.natSrcIp'),
+      value: rule?.src_addr === 'any' ? '' : (rule?.src_addr || ''),
+      placeholder: t('firewall.natSrcIpPh'),
+      hint: t('firewall.natSrcIpHint'),
+      half: true, row: 'dnat-src',
+      showIf: { kind: 'dnat' },
+    },
+    {
+      key: 'src_port', label: t('firewall.srcPort'),
+      value: rule?.src_port || '', placeholder: '80', half: true, row: 'dnat-src',
       showIf: { kind: 'dnat' },
       requiredIf: { kind: 'dnat' },
     },
-    // DNAT: original port (required) + target port (optional, defaults to same as original)
+    // DNAT: internal target IP (required) + target port (optional) — same row
     {
-      key: 'src_port', label: t('firewall.natOrigPort'),
-      value: rule?.src_port || '', placeholder: '80', half: true, row: 'dnat-ports',
+      key: 'dst_addr', label: t('firewall.natDstAddr'),
+      value: rule?.dst_addr || '', placeholder: '10.0.0.2', half: true, row: 'dnat-target',
       showIf: { kind: 'dnat' },
       requiredIf: { kind: 'dnat' },
     },
     {
       key: 'dst_port', label: t('firewall.natTargetPort'),
-      value: rule?.dst_port || '', placeholder: '8080', half: true, row: 'dnat-ports',
+      value: rule?.dst_port || '', placeholder: '8080', half: true, row: 'dnat-target',
       showIf: { kind: 'dnat' },
     },
   ];
@@ -130,7 +137,7 @@ function extractBody(result) {
     kind: result.kind,
     family: result.family,
     interface: result.interface,
-    src_addr: result.src_addr || (result.kind === 'dnat' ? 'any' : ''),
+    src_addr: result.kind === 'dnat' ? (result.src_addr || 'any') : (result.src_addr || ''),
     protocol: result.protocol,
     enabled: true,
     description: result.description || null,
@@ -163,6 +170,19 @@ async function doEditRule(rule) {
     submitHandler: async (r) => {
       await api.put(`/api/firewall/nat/rules/${rule.id}`, extractBody(r));
       toast.toast(t('firewall.natRuleUpdated'));
+      await loadStatus();
+      await loadRules();
+    },
+  });
+}
+
+async function doCopyRule(rule) {
+  if (!interfaces.value.length) await loadInterfaces();
+  await formModal(t('firewall.addNatTitle'), makeFields({ ...rule, description: null }), {
+    submitLabel: t('common.create'),
+    submitHandler: async (r) => {
+      await api.post('/api/firewall/nat/rules', extractBody(r));
+      toast.toast(t('firewall.natRuleAdded'));
       await loadStatus();
       await loadRules();
     },
@@ -312,6 +332,7 @@ onMounted(() => {
             <td>
               <div class="btn-group">
                 <button class="btn-secondary btn-sm" @click="doEditRule(rule)">{{ t('common.edit') }}</button>
+                <button class="btn-secondary btn-sm" @click="doCopyRule(rule)">{{ t('common.copy') }}</button>
                 <button class="btn-danger btn-sm" @click="doDeleteRule(rule)">{{ t('common.delete') }}</button>
               </div>
             </td>
