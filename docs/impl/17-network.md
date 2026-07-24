@@ -16,7 +16,8 @@
 | 驱动状态文本 | `SIOCGIFSTATUS` ioctl（`fill_iface_ioctl`） | ❌ |
 | Bridge 成员 | `SIOCGDRVSPEC(BRDGGIFS)` ioctl（`fill_iface_ioctl`） | ❌ |
 | 路由表 | `sysctl([CTL_NET, PF_ROUTE, 0, 0, NET_RT_DUMP, 0])` | ❌ |
-| rc.conf `defaultrouter` / `ifconfig_*` / `cloned_interfaces` | `sysrc` | ✅ |
+| rc.conf `defaultrouter` / `ifconfig_*` / `cloned_interfaces`（读） | `sysrc::read_rcconf_files`（直接文件解析） | ❌ |
+| rc.conf 写入（网关/接口配置/cloned_interfaces） | `sysrc` 命令 | ✅ |
 | DNS 配置 | 直接读写 `/etc/resolv.conf` | ❌ |
 | 配置应用/接口创建/销毁 | `ifconfig` 命令 | ✅ |
 
@@ -66,7 +67,7 @@ flags 从任意记录的 `ifa_flags` 读取（同一接口所有记录的 flags 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/network/interfaces` | 全部接口列表（含 groups/description/status/members） |
-| GET | `/api/network/interfaces/{name}` | 单接口详情（实时状态 + rc.conf 配置，返回 `{ live, config }`） |
+| GET | `/api/network/interfaces/{name}` | 单接口 rc.conf 配置（返回 `IfaceRcConfConfig`） |
 | GET | `/api/network/routes` | 完整路由表（IPv4 + IPv6） |
 | GET | `/api/network/gateway` | 默认网关 IPv4+IPv6（运行时值 + rc.conf 持久值） |
 | PUT | `/api/network/gateway` | 设置/清除默认网关（IPv4 + IPv6 独立控制，写 rc.conf + 应用路由） |
@@ -141,8 +142,9 @@ IfaceRcConfConfig {
 
 **解析**（`parse_merged_rcconf(live_name)`）：
 1. 用 `resolve_driver_name(live_name)` 获取 driver name
-2. 解析 driver name 的三个键（primary/aliases/ipv6）
-3. 若 driver ≠ live name，额外解析 live name 的三个键，合并字段（live name 的配置优先）
+2. 调用 `sysrc::read_rcconf_files()` 直接读取 rc.conf 文件（无子进程，<1ms）
+3. 从中解析 driver name 的三个键（primary/aliases/ipv6）
+4. 若 driver ≠ live name，额外解析 live name 的三个键，合并字段（live name 的配置优先）
 4. 确保 `name <live>` 指令始终存在于 options 中
 
 **IPv4 模式检测**：`ipv4` 为 `null` → `ipv4_mode = "none"`（不配置 IPv4）；主值包含 `DHCP` 或 `SYNCDHCP` → `ipv4_mode = "dhcp"`，前端隐藏 IP/掩码输入；否则为 `static`。
@@ -213,10 +215,11 @@ IfaceRcConfConfig {
 ### 前端布局
 
 1. 工具栏：创建接口按钮 + 刷新按钮
-2. 物理接口卡片网格（含详情/配置/销毁按钮）
-3. 虚拟接口卡片网格（同上）
-4. 默认网关卡片（IPv4 + IPv6 运行时值，配置按钮打开网关设置弹窗）
-5. 路由表（IPv4/IPv6 分段）
+2. 物理接口卡片网格（含详情/配置按钮）
+3. 网桥接口卡片网格（含详情/配置/销毁按钮）
+4. 虚拟/其他接口卡片网格（同上）
+5. 默认网关卡片（IPv4 + IPv6 运行时值，配置按钮打开网关设置弹窗）
+6. 路由表（IPv4/IPv6 分段）
 
 ### 网关设置弹窗
 

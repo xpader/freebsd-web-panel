@@ -2076,10 +2076,12 @@ pub fn set_ipfw_mode(_mode: FirewallMode) -> ApiResult<()> {
 pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     use crate::sysrc;
 
-    sysrc::set("firewall_enable", "YES").map_err(|e| ApiError::Command(e))?;
-    sysrc::set("firewall_type", IPFW_RULES_PATH).map_err(|e| ApiError::Command(e))?;
-    sysrc::set("firewall_quiet", "YES").map_err(|e| ApiError::Command(e))?;
-    sysrc::set("firewall_logging", "YES").map_err(|e| ApiError::Command(e))?;
+    sysrc::set_multi(&[
+        ("firewall_enable", "YES"),
+        ("firewall_type", IPFW_RULES_PATH),
+        ("firewall_quiet", "YES"),
+        ("firewall_logging", "YES"),
+    ]).map_err(|e| ApiError::Command(e))?;
     // Remove firewall_script so rc.d falls back to /etc/rc.firewall,
     // which loads our rules via `ipfw -q ${firewall_type}` (pathname mode).
     sysrc::delete("firewall_script");
@@ -2105,8 +2107,10 @@ pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable],
 pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     use crate::sysrc;
 
-    sysrc::set("pf_enable", "YES").map_err(|e| ApiError::Command(e))?;
-    sysrc::set("pf_rules", PF_CONF_PATH).map_err(|e| ApiError::Command(e))?;
+    sysrc::set_multi(&[
+        ("pf_enable", "YES"),
+        ("pf_rules", PF_CONF_PATH),
+    ]).map_err(|e| ApiError::Command(e))?;
 
     ensure_module(FirewallDriver::Pf)?;
 
@@ -2120,7 +2124,7 @@ pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], n
 pub fn deactivate_ipfw() -> ApiResult<()> {
     use crate::sysrc;
     disable_firewall(FirewallDriver::Ipfw)?;
-    sysrc::set("firewall_enable", "NO").map_err(|e| ApiError::Command(e))?;
+    sysrc::ensure_no("firewall_enable");
     Ok(())
 }
 
@@ -2128,7 +2132,7 @@ pub fn deactivate_ipfw() -> ApiResult<()> {
 pub fn deactivate_pf() -> ApiResult<()> {
     use crate::sysrc;
     disable_firewall(FirewallDriver::Pf)?;
-    sysrc::set("pf_enable", "NO").map_err(|e| ApiError::Command(e))?;
+    sysrc::ensure_no("pf_enable");
     Ok(())
 }
 

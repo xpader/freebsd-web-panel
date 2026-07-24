@@ -128,7 +128,7 @@ CREATE TABLE firewall_table_entries (
 ### 初始化流程
 
 `init_ipfw(mode, rules, tables, nat_rules)`：
-1. sysrc 设置 `firewall_enable=YES`、`firewall_type=/etc/ipfw.rules`、`firewall_quiet=YES`、`firewall_logging=YES`
+1. `sysrc::set_multi` 一次性设置 `firewall_enable=YES`、`firewall_type=/etc/ipfw.rules`、`firewall_quiet=YES`、`firewall_logging=YES`（1 次 sysrc 调用）
 2. sysrc 删除 `firewall_script`（回退到 `/etc/rc.firewall`，由其 `*)` 分支执行 `ipfw -q ${firewall_type}` 加载规则）
 3. `kldload ipfw`（如未加载）
 4. **立即 `sysctl net.inet.ip.fw.enable=0`**——kldload 默认启用 ipfw 且默认规则为 deny，不显式禁用会断网
@@ -136,7 +136,7 @@ CREATE TABLE firewall_table_entries (
 6. **不加载规则、不启用防火墙**——用户手动 Apply + Enable
 
 `init_pf(mode, rules, tables)`：
-1. sysrc 设置 `pf_enable=YES`、`pf_rules=/etc/pf.conf`
+1. `sysrc::set_multi` 一次性设置 `pf_enable=YES`、`pf_rules=/etc/pf.conf`（1 次 sysrc 调用）
 2. `kldload pf`（如未加载）
 3. 生成配置文件
 4. **不加载规则、不启用防火墙**
@@ -150,8 +150,8 @@ CREATE TABLE firewall_table_entries (
 - **防锁死**：enable 必定触发倒计时（`was_enabled=false`，回滚时禁用防火墙）
 
 **disable**：运行时禁用 + rc.conf 设为 `NO`，同时清除 staging 文件（若有未提交的变更则丢弃）。
-- ipfw: `service ipfw stop`（`sysctl net.inet.ip.fw.enable=0`）+ `sysrc firewall_enable=NO`
-- pf: `pfctl -d`（fire-and-forget）+ `sysrc pf_enable=NO`
+- ipfw: `service ipfw stop`（`sysctl net.inet.ip.fw.enable=0`）+ `sysrc::ensure_no("firewall_enable")`
+- pf: `pfctl -d`（fire-and-forget）+ `sysrc::ensure_no("pf_enable")`
 
 **status handler**：`is_firewall_enabled` / `module_loaded` 通过 `spawn_blocking` 调用，避免阻塞 async 线程。`pending_apply` 字段反映 staging 文件是否存在。
 

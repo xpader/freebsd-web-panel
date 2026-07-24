@@ -1762,10 +1762,7 @@ pub async fn jail_create(
 
     // Add to rc.conf jail_list if auto_start is requested.
     if body.auto_start.unwrap_or(false) {
-        let mut list = read_jail_list();
-        list.insert(body.name.clone());
-        let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-        crate::sysrc::set_forget("jail_list", &val);
+        let _ = crate::sysrc::list_add("jail_list", &body.name);
         crate::sysrc::ensure_yes("jail_enable");
     }
 
@@ -2694,21 +2691,17 @@ pub async fn jail_update(
 
     // Update rc.conf jail_list if auto_start was provided.
     if let Some(want_auto) = body.auto_start {
-        let mut list = read_jail_list();
+        let list = read_jail_list();
         let was_in = list.contains(&name);
         if want_auto && !was_in {
-            list.insert(name.clone());
-            let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-            crate::sysrc::set_forget("jail_list", &val);
+            let _ = crate::sysrc::list_add("jail_list", &name);
             crate::sysrc::ensure_yes("jail_enable");
             crate::audit::record(
                 &state, None, "PUT", &format!("/api/jails/{name}"), 200,
                 Some(format!("added {name} to jail_list (auto-start)")),
             );
         } else if !want_auto && was_in {
-            list.remove(&name);
-            let val = list.iter().cloned().collect::<Vec<_>>().join(" ");
-            crate::sysrc::set_forget("jail_list", &val);
+            let _ = crate::sysrc::list_remove("jail_list", &name);
             crate::audit::record(
                 &state, None, "PUT", &format!("/api/jails/{name}"), 200,
                 Some(format!("removed {name} from jail_list (auto-start)")),

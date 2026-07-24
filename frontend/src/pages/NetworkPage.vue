@@ -51,7 +51,8 @@ const createPreview = computed(() => {
 });
 
 const physical = computed(() => interfaces.value.filter((i) => i.is_physical));
-const others = computed(() => interfaces.value.filter((i) => !i.is_physical));
+const bridges = computed(() => interfaces.value.filter((i) => !i.is_physical && (i.name.startsWith('bridge') || i.driver_name?.startsWith('bridge'))));
+const others = computed(() => interfaces.value.filter((i) => !i.is_physical && !i.name.startsWith('bridge') && !i.driver_name?.startsWith('bridge')));
 const routesV4 = computed(() => routes.value.filter((r) => r.family === 'Internet'));
 const routesV6 = computed(() => routes.value.filter((r) => r.family === 'Internet6'));
 
@@ -138,7 +139,7 @@ async function showConfig(iface) {
   configLoading.value = true;
   try {
     const resp = await api.get(`/api/network/interfaces/${iface.name}`);
-    configData.value = resp.config;
+    configData.value = resp;
   } catch (err) {
     await alert(t('common.operationFailed'), err.message || t('common.loadFailed', { msg: '' }));
     configIfaceName.value = null;
@@ -400,8 +401,44 @@ onMounted(load);
       </div>
     </template>
 
+    <template v-if="bridges.length">
+      <div class="section-title" :style="{ marginTop: physical.length ? '32px' : '' }">{{ t('net.bridge') }}</div>
+      <div class="card-grid">
+        <div v-for="iface in bridges" :key="iface.name" class="card net-iface">
+          <div class="net-iface-header">
+            <i :class="['fa-solid', iface.is_loopback ? 'fa-rotate' : 'fa-ethernet', 'net-iface-icon', iface.is_up ? 'up' : 'down']"></i>
+            <span class="net-iface-name mono">{{ iface.name }}</span>
+            <span v-if="iface.driver_name" class="text-dim mono" style="font-size:0.85em;">({{ iface.driver_name }})</span>
+            <span class="net-iface-name-spacer"></span>
+            <span class="badge">{{ linkLabel(iface) }}</span>
+          </div>
+          <div class="net-iface-body">
+            <div v-if="iface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ iface.description }}</span></div>
+            <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">
+              <div v-for="ip in iface.ipv4" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
+                {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
+                <span v-if="ip.is_alias" class="badge">{{ t('net.alias') }}</span>
+              </div>
+              <span v-if="!iface.ipv4.length" class="text-dim">—</span>
+            </span></div>
+            <div class="kv"><span class="kv-key">MAC</span><span class="kv-val mono">{{ iface.mac || '—' }}</span></div>
+            <div v-if="iface.groups.length" class="kv"><span class="kv-key">{{ t('net.groups') }}</span><span class="kv-val"><span v-for="g in iface.groups" :key="g" class="badge badge-dim">{{ g }}</span></span></div>
+            <div v-if="iface.members.length" class="kv"><span class="kv-key">{{ t('net.members') }}</span><span class="kv-val">{{ iface.members.length }}</span></div>
+            <div v-if="iface.status" class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val" style="white-space:pre-line;">{{ iface.status }}</span></div>
+          </div>
+          <div class="net-iface-footer">
+            <div class="btn-group">
+              <button class="btn-secondary btn-sm" @click="showDetail(iface)">{{ t('net.detail') }}</button>
+              <button v-if="canConfigure(iface)" class="btn-secondary btn-sm" @click="showConfig(iface)">{{ t('common.config') }}</button>
+              <button v-if="canDestroy(iface)" class="btn-danger btn-sm" @click="destroyIface(iface)"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <template v-if="others.length">
-      <div class="section-title" :style="{ marginTop: physical.length ? '32px' : '' }">{{ t('net.virtual') }}</div>
+      <div class="section-title" :style="{ marginTop: (physical.length || bridges.length) ? '32px' : '' }">{{ t('net.virtual') }}</div>
       <div class="card-grid">
         <div v-for="iface in others" :key="iface.name" class="card net-iface">
           <div class="net-iface-header">

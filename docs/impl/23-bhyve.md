@@ -153,8 +153,8 @@ spec 格式（由前端构造）：
 
 返回 `BhyveStatus { installed, enabled, vm_dir, initialized, resolved_path }`：
 - `installed` — `/usr/local/sbin/vm` 文件是否存在
-- `enabled` — `sysrc -n vm_enable` 是否为 `YES`
-- `vm_dir` — `sysrc -n vm_dir` 的值（如 `zfs:zroot/vm` 或 `/home/vm`）
+- `enabled` — `sysrc::read_rcconf_files().get("vm_enable")` 是否为 `YES`
+- `vm_dir` — `sysrc::read_rcconf_files().get("vm_dir")` 的值（如 `zfs:zroot/vm` 或 `/home/vm`）
 - `initialized` — 解析后的路径下 `.config/` 目录是否存在（`vm init` 创建）
 - `resolved_path` — ZFS 类型时查询 `zfs get mountpoint` 得到的实际路径
 
@@ -163,7 +163,7 @@ spec 格式（由前端构造）：
 #### 初始化流程（`bhyve::init_bhyve(spec)`）
 
 1. `pkg install -y vm-bhyve bhyve-firmware grub2-bhyve`
-2. `sysrc vm_enable=YES` + `sysrc vm_dir=<spec>`
+2. `sysrc::set_multi` 一次性设置 `vm_enable=YES` + `vm_dir=<spec>`（1 次 sysrc 调用）
 3. 准备存储：ZFS 类型则 `zfs create <dataset>`（若不存在）；目录类型则 `mkdir -p <path>`
 4. `vm init` — 加载内核模块（nmdm/if_bridge/if_tuntap），创建 `.config`/`.templates`/`.iso`/`.img`/`null.iso`
 5. 复制 `/usr/local/share/examples/vm-bhyve/*` 到 `<resolved_path>/.templates/`

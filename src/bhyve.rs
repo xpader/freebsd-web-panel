@@ -1565,9 +1565,10 @@ pub struct BhyveStatus {
 /// Check whether vm-bhyve is installed, enabled, and initialized.
 pub fn check_status() -> BhyveStatus {
     let installed = std::path::Path::new(VM).exists();
-    let vm_enable = crate::sysrc::get("vm_enable");
+    let rc = crate::sysrc::read_rcconf_files();
+    let vm_enable = rc.get("vm_enable").cloned();
     let enabled = vm_enable.as_deref() == Some("YES");
-    let vm_dir = crate::sysrc::get("vm_dir");
+    let vm_dir = rc.get("vm_dir").cloned();
     let resolved_path = vm_dir.as_deref().and_then(resolve_vm_dir);
     let initialized = resolved_path
         .as_ref()
@@ -1601,8 +1602,10 @@ pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
     steps.push("Installed packages: vm-bhyve, bhyve-firmware, grub2-bhyve".into());
 
     // 2. Configure rc.conf
-    crate::sysrc::set("vm_enable", "YES")?;
-    crate::sysrc::set("vm_dir", spec)?;
+    crate::sysrc::set_multi(&[
+        ("vm_enable", "YES"),
+        ("vm_dir", spec),
+    ])?;
     steps.push(format!("rc.conf configured: vm_enable=YES, vm_dir={spec}"));
 
     // 3. Prepare storage
@@ -1659,16 +1662,11 @@ pub fn read_vm_list() -> Vec<String> {
 
 /// Add or remove a VM from the `vm_list` rc.conf variable (auto-start on boot).
 pub fn set_vm_auto_start(name: &str, enabled: bool) -> Result<(), String> {
-    let mut list = read_vm_list();
-    let was_in = list.iter().any(|n| n == name);
-    if enabled && !was_in {
-        list.push(name.to_string());
-        crate::sysrc::set("vm_list", &list.join(" "))?;
-    } else if !enabled && was_in {
-        list.retain(|n| n != name);
-        crate::sysrc::set("vm_list", &list.join(" "))?;
+    if enabled {
+        crate::sysrc::list_add("vm_list", name)
+    } else {
+        crate::sysrc::list_remove("vm_list", name)
     }
-    Ok(())
 }
 
 /// Resolve a vm_dir spec to a filesystem path.

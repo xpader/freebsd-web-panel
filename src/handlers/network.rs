@@ -976,40 +976,13 @@ pub async fn list_interfaces() -> ApiResult<Json<Vec<NetworkInterface>>> {
     Ok(Json(interfaces))
 }
 
-/// GET `/api/network/interfaces/{name}` — single interface detail + rc.conf config.
-pub async fn interface_detail(Path(name): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+/// GET `/api/network/interfaces/{name}` — rc.conf config for a single interface.
+pub async fn interface_detail(Path(name): Path<String>) -> ApiResult<Json<IfaceRcConfConfig>> {
     validate_iface_name(&name)?;
-    let detail_name = name.clone();
-    let result = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {
-        let interfaces = read_interfaces().map_err(ApiError::Io)?;
-        let mut iface = interfaces
-            .into_iter()
-            .find(|i| i.name == detail_name)
-            .ok_or_else(|| ApiError::NotFound(format!("interface '{detail_name}' not found")))?;
-
-        // Populate driver_name.
-        if let Some(drv) = crate::ifutil::get_drivername(&iface.name) {
-            if drv != iface.name {
-                iface.driver_name = Some(drv);
-            }
-        }
-
-        // Parse rc.conf config (merges driver + live name keys if split).
-        let cfg = parse_merged_rcconf(&detail_name);
-
-        let iface_json = serde_json::to_value(&iface)
-            .map_err(|e| ApiError::Internal(format!("serialize: {e}")))?;
-        let cfg_json = serde_json::to_value(&cfg)
-            .map_err(|e| ApiError::Internal(format!("serialize: {e}")))?;
-
-        Ok(serde_json::json!({
-            "live": iface_json,
-            "config": cfg_json,
-        }))
-    })
-    .await
-    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
-    Ok(Json(result))
+    let cfg = tokio::task::spawn_blocking(move || parse_merged_rcconf(&name))
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    Ok(Json(cfg))
 }
 
 /// PUT `/api/network/interfaces/{name}` — save structured ifconfig config: apply to live system, then persist to rc.conf.
@@ -1327,36 +1300,18 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
     }
 }
 
-/// Read `cloned_interfaces` from rc.conf as a Vec of interface names.
-fn read_cloned_interfaces() -> Vec<String> {
-    crate::sysrc::get_list("cloned_interfaces")
-}
-
 /// Add a name to `cloned_interfaces` in rc.conf (idempotent).
 /// For epair, the base name (e.g. "epair0" from "epair0a") is used.
 fn add_cloned_interface(name: &str) {
     let clone_name = epair_base_name(name).unwrap_or_else(|| name.to_string());
-    let mut list = read_cloned_interfaces();
-    if list.iter().any(|s| s == &clone_name) {
-        return;
-    }
-    list.push(clone_name);
-    let val = list.join(" ");
-    crate::sysrc::set_forget("cloned_interfaces", &val);
+    let _ = crate::sysrc::list_add("cloned_interfaces", &clone_name);
 }
 
 /// Remove a name from `cloned_interfaces` in rc.conf.
 /// For epair, the base name is used.
 fn remove_cloned_interface(name: &str) {
     let clone_name = epair_base_name(name).unwrap_or_else(|| name.to_string());
-    let list = read_cloned_interfaces();
-    let new_list: Vec<&String> = list.iter().filter(|s| s.as_str() != clone_name).collect();
-    if new_list.is_empty() {
-        crate::sysrc::delete("cloned_interfaces");
-    } else {
-        let val = new_list.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
-        crate::sysrc::set_forget("cloned_interfaces", &val);
-    }
+    let _ = crate::sysrc::list_remove("cloned_interfaces", &clone_name);
 }
 
 /// For epair interfaces like "epair0a" or "epair0b", return "epair0".
@@ -1644,14 +1599,18 @@ pub async fn set_nameservers(
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-/// Read `defaultrouter` from rc.conf via sysrc.
+/// Read `defaultrouter` from rc.conf (direct file read, no subprocess).
 fn read_defaultrouter() -> Option<String> {
-    crate::sysrc::get("defaultrouter")
+    let v = crate::sysrc::read_rcconf_files().get("defaultrouter").cloned();
+    v.filter(|s| !s.is_empty() && s != "NO")
 }
 
-/// Read `ipv6_defaultrouter` from rc.conf via sysrc.
+/// Read `ipv6_defaultrouter` from rc.conf (direct file read, no subprocess).
 fn read_ipv6_defaultrouter() -> Option<String> {
-    crate::sysrc::get("ipv6_defaultrouter")
+    let v = crate::sysrc::read_rcconf_files()
+        .get("ipv6_defaultrouter")
+        .cloned();
+    v.filter(|s| !s.is_empty() && s != "NO")
 }
 
 /// Resolve the driver name (rc.conf key name) for an interface.
@@ -1673,10 +1632,11 @@ fn resolve_driver_name(live_name: &str) -> String {
 /// back as a single key.
 fn parse_merged_rcconf(live_name: &str) -> IfaceRcConfConfig {
     let driver = resolve_driver_name(live_name);
-    let mut cfg = parse_iface_rcconf(&driver);
+    let kv = crate::sysrc::read_rcconf_files();
+    let mut cfg = parse_iface_rcconf(&driver, &kv);
 
     if driver != live_name {
-        let live_cfg = parse_iface_rcconf(live_name);
+        let live_cfg = parse_iface_rcconf(live_name, &kv);
 
         // Live name's config fields take precedence.
         if live_cfg.ipv4.is_some() {
@@ -1739,8 +1699,7 @@ fn parse_merged_rcconf(live_name: &str) -> IfaceRcConfConfig {
 }
 
 /// Read all `ifconfig_<name>` rc.conf entries and parse into structured config.
-fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
-    let kv = crate::sysrc::list_all();
+fn parse_iface_rcconf(name: &str, kv: &std::collections::HashMap<String, String>) -> IfaceRcConfConfig {
     let primary_key = format!("ifconfig_{name}");
     let aliases_key = format!("ifconfig_{name}_aliases");
     let ipv6_key = format!("ifconfig_{name}_ipv6");

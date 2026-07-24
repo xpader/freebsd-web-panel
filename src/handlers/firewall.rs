@@ -382,10 +382,10 @@ pub async fn enable(
 
     let d = driver;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        crate::sysrc::set("firewall_enable", if d == FirewallDriver::Ipfw { "YES" } else { "NO" })
-            .map_err(|e| ApiError::Command(e))?;
-        crate::sysrc::set("pf_enable", if d == FirewallDriver::Pf { "YES" } else { "NO" })
-            .map_err(|e| ApiError::Command(e))?;
+        crate::sysrc::set_multi(&[
+            ("firewall_enable", if d == FirewallDriver::Ipfw { "YES" } else { "NO" }),
+            ("pf_enable", if d == FirewallDriver::Pf { "YES" } else { "NO" }),
+        ]).map_err(|e| ApiError::Command(e))?;
         fw::enable_firewall(d)?;
         Ok(())
     })
@@ -434,12 +434,8 @@ pub async fn disable(
         fw::disable_firewall(d)?;
         // Also set rc.conf to NO so it won't start on boot
         match d {
-            FirewallDriver::Ipfw => {
-                crate::sysrc::set("firewall_enable", "NO").map_err(|e| ApiError::Command(e))?;
-            }
-            FirewallDriver::Pf => {
-                crate::sysrc::set("pf_enable", "NO").map_err(|e| ApiError::Command(e))?;
-            }
+            FirewallDriver::Ipfw => crate::sysrc::ensure_no("firewall_enable"),
+            FirewallDriver::Pf => crate::sysrc::ensure_no("pf_enable"),
         }
         Ok(())
     })
