@@ -21,8 +21,9 @@ AI 编码代理在 FreeBSD Web Panel（`fwp`）项目上工作时的指引。
 cd frontend && npm install && npm run build   # 输出到 ../web/
 
 # 后端构建
-cargo build                  # debug 构建
-cargo build --release        # release 构建（LTO、strip）
+cargo check                  # 验证编译通过（最快，开发首选）
+cargo build                  # debug 构建（需要实际运行时）
+cargo build --release        # release 构建（LTO、strip）— 仅部署时使用，不要用于开发验证
 cargo run -- --config /path/to/fwp.toml   # 用指定配置运行
 cargo run -- --config fwp.toml            # 开发配置（见下）
 

@@ -124,6 +124,7 @@ export const MENU = [
       { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: 'fa-solid fa-memory' },
       { path: '/monitor/network', labelKey: 'common.network', icon: 'fa-solid fa-network-wired' },
       { path: '/monitor/fwp', labelKey: 'nav.monitorFwp', icon: 'fa-solid fa-circle-info' },
+      { path: '/mail', labelKey: 'nav.mail', icon: 'fa-solid fa-envelope' },
     ],
   },
 ];

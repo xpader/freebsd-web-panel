@@ -8,6 +8,7 @@ pub mod files;
 pub mod filesystem;
 pub mod firewall;
 pub mod jails;
+pub mod mail;
 pub mod network;
 pub mod pkg;
 pub mod rcconf;

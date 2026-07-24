@@ -170,6 +170,13 @@ pub fn build(state: AppState) -> Router {
         .route("/api/monitor/grouped", get(crate::monitor::grouped))
         .route("/api/monitor/aggregate", get(crate::monitor::aggregate))
         .route("/api/monitor/latest", get(crate::monitor::latest))
+        // --- System mail (mbox) ---
+        .route("/api/mail/boxes", get(handlers::mail::list_mailboxes))
+        .route("/api/mail/{user}", get(handlers::mail::list_mails).delete(handlers::mail::clear_mailbox))
+        .route("/api/mail/{user}/delete", post(handlers::mail::batch_delete))
+        .route("/api/mail/{user}/{index}", get(handlers::mail::read_mail).delete(handlers::mail::delete_mail))
+        .route("/api/mail/{user}/{index}/read", put(handlers::mail::mark_read))
+        .route("/api/mail/{user}/{index}/unread", put(handlers::mail::mark_unread))
         // --- Debug / diagnostics ---
         .route("/api/debug/jemalloc-stats", get(handlers::debug::jemalloc_stats))
         .route("/api/debug/tokio-metrics", get(handlers::debug::tokio_metrics))

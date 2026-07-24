@@ -14,6 +14,7 @@ import MonitorCpuPage from '../pages/MonitorCpuPage.vue';
 import MonitorMemoryPage from '../pages/MonitorMemoryPage.vue';
 import MonitorNetworkPage from '../pages/MonitorNetworkPage.vue';
 import MonitorFwpPage from '../pages/MonitorFwpPage.vue';
+import MailPage from '../pages/MailPage.vue';
 import FilesystemOverviewPage from '../pages/FilesystemOverviewPage.vue';
 import DisksPage from '../pages/DisksPage.vue';
 import FilesPage from '../pages/FilesPage.vue';
@@ -77,6 +78,7 @@ const routes = [
       { path: 'monitor/memory', name: 'monitor-memory', component: MonitorMemoryPage },
       { path: 'monitor/network', name: 'monitor-network', component: MonitorNetworkPage },
       { path: 'monitor/fwp', name: 'monitor-fwp', component: MonitorFwpPage },
+      { path: 'mail', name: 'mail', component: MailPage },
       { path: 'filesystem', name: 'filesystem', component: FilesystemOverviewPage },
       { path: 'filesystem/disks', name: 'disks', component: DisksPage },
       { path: 'filesystem/files', name: 'files', component: FilesPage },
