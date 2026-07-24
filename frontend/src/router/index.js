@@ -22,6 +22,7 @@ import RcconfPage from '../pages/RcconfPage.vue';
 import CronPage from '../pages/CronPage.vue';
 import NetworkPage from '../pages/NetworkPage.vue';
 import DnsPage from '../pages/DnsPage.vue';
+import StaticRoutesPage from '../pages/StaticRoutesPage.vue';
 import ServicesPage from '../pages/ServicesPage.vue';
 import AccountsUsersPage from '../pages/AccountsUsersPage.vue';
 import AccountsGroupsPage from '../pages/AccountsGroupsPage.vue';
@@ -84,6 +85,7 @@ const routes = [
       { path: 'cron', name: 'cron', component: CronPage },
       { path: 'network', name: 'network', component: NetworkPage },
       { path: 'network/dns', name: 'dns', component: DnsPage },
+      { path: 'network/routes', name: 'static-routes', component: StaticRoutesPage },
       { path: 'services', name: 'services', component: ServicesPage },
       { path: 'pf', redirect: '/firewall/rules' },
       { path: 'firewall', redirect: '/firewall/rules' },

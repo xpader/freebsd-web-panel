@@ -72,6 +72,10 @@ flags 从任意记录的 `ifa_flags` 读取（同一接口所有记录的 flags 
 | GET | `/api/network/gateway` | 默认网关 IPv4+IPv6（运行时值 + rc.conf 持久值） |
 | PUT | `/api/network/gateway` | 设置/清除默认网关（IPv4 + IPv6 独立控制，写 rc.conf + 应用路由） |
 | GET | `/api/network/dns` | DNS 配置（解析 `/etc/resolv.conf`） |
+| GET | `/api/network/static-routes` | 静态路由列表（从 rc.conf 解析） |
+| POST | `/api/network/static-routes` | 添加静态路由（写 rc.conf + 应用 `route add`） |
+| PUT | `/api/network/static-routes/{name}` | 修改静态路由（更新 rc.conf + 替换运行时路由） |
+| DELETE | `/api/network/static-routes/{name}` | 删除静态路由（从 rc.conf 移除 + `route delete`） |
 
 ### 接口配置管理
 
@@ -242,6 +246,43 @@ IfaceRcConfConfig {
 - 编号输入（自定义类型时为名称输入）
 - 名称预览（epair 显示 `epair0a epair0b`）
 
+### 静态路由管理
+
+独立页面 `frontend/src/pages/StaticRoutesPage.vue`（路由 `/network/routes`）。
+
+**rc.conf 机制**：FreeBSD 通过 `static_routes` + `route_<name>` 管理持久化静态路由：
+```sh
+static_routes="fwp_1 fwp_2"
+route_fwp_1="-net 192.168.1.0/24 10.0.0.1"
+route_fwp_2="-6 -host 2001:db8::1 fe80::1%em0"
+```
+`/etc/rc.d/routing` 启动时对每个 name 执行 `route add $route_<name>`。
+
+**命名**：创建时可通过 `name` 字段自定义路由名（校验 `[a-zA-Z0-9_]+`，重名返回 409）。留空时自动生成 `net1`、`net2`、…（取已有 `net<N>` 的最大值 +1）。面板也兼容手动配置的任意 name。
+
+**解析**（`parse_route_value`）：从 `route_<name>` 值中提取 destination、gateway、family、is_host：
+- 跳过 `-6`/`-inet6` 前缀 → 标记 IPv6
+- 跳过 `-net`/`-host` 前缀 → 标记路由类型
+- 第一个非 `-` 开头 token = destination
+- 第二个非 `-` 开头 token = gateway
+- 未指定 `-net`/`-host` 时，根据 destination 是否含 `/` 自动判定
+
+**写入**（`build_route_args`）：
+- IPv6 路由前缀 `-6`
+- 网络/主机路由前缀 `-net`/`-host`
+- 格式：`[-6] -net|-host <dest> <gw>`
+
+**应用**：
+- 添加：`route add [-6] -net|-host <dest> <gw>`（fire-and-forget）
+- 修改：先 `route delete` 旧路由，再 `route add` 新路由
+- 删除：`route delete [-6] -net|-host <dest>`
+
+**校验**：
+- destination 非空，须为合法 IP 或 CIDR
+- gateway 非空，须为合法 IP 地址
+- family 自动检测（gateway 含 `:` → IPv6）
+- is_host 自动检测（destination 无 `/` → host route）
+
 ## 文件清单
 
 | 文件 | 说明 |
@@ -249,7 +290,8 @@ IfaceRcConfConfig {
 | `src/handlers/network.rs` | 全部 handler + getifaddrs/sysctl/ioctl 解析 + rc.conf 解析/写入/应用 |
 | `src/app.rs` | 路由注册（12 条 network 路由） |
 | `frontend/src/pages/NetworkPage.vue` | 接口卡片 + 路由表 + 网关 + 详情弹窗 + 配置弹窗 + 创建弹窗 |
-| `frontend/src/i18n/translations.js` | `net.*` 命名空间（en + zh） |
+| `frontend/src/pages/StaticRoutesPage.vue` | 静态路由 CRUD 页面 |
+| `frontend/src/i18n/translations.js` | `net.*`、`staticRoutes.*` 命名空间（en + zh） |
 | `frontend/src/assets/app.css` | `.net-iface`、`.config-section`、`.config-grid`、`.checkbox-row`、`.radio-pill-group`、`.form-table` 等样式 |
 
 ## 已知限制

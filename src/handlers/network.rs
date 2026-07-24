@@ -1597,6 +1597,338 @@ pub async fn set_nameservers(
     Ok(Json(cfg))
 }
 
+// ─── Static routes ────────────────────────────────────────────────────────
+
+/// A static route entry stored in rc.conf.
+#[derive(Debug, Clone, Serialize)]
+pub struct StaticRoute {
+    pub name: String,
+    pub destination: String,
+    pub gateway: String,
+    pub family: String,
+    pub is_host: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StaticRouteInput {
+    pub destination: String,
+    pub gateway: String,
+    pub name: Option<String>,
+}
+
+/// GET `/api/network/static-routes` — list all configured static routes from rc.conf.
+pub async fn list_static_routes() -> ApiResult<Json<Vec<StaticRoute>>> {
+    let routes = read_static_routes();
+    Ok(Json(routes))
+}
+
+/// POST `/api/network/static-routes` — add a static route.
+/// Writes `static_routes` and `route_<name>` in rc.conf, then applies with `route add`.
+pub async fn create_static_route(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<StaticRouteInput>,
+) -> ApiResult<Json<StaticRoute>> {
+    let dest = body.destination.trim();
+    let gw = body.gateway.trim();
+    validate_route_input(dest, gw)?;
+
+    let is_ipv6 = gw.contains(':');
+    let is_host = !dest.contains('/');
+
+    let mut existing = read_static_routes();
+    let name = match body.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(n) => {
+            validate_route_name(&n)?;
+            if existing.iter().any(|r| r.name == n) {
+                return Err(ApiError::Conflict(format!(
+                    "route name '{n}' already exists"
+                )));
+            }
+            n.to_string()
+        }
+        None => next_route_name(&existing),
+    };
+    let args = build_route_args(dest, gw, is_ipv6, is_host);
+
+    crate::sysrc::set_async("static_routes", &add_to_list(&existing, &name)).await?;
+    crate::sysrc::set_async(&format!("route_{name}"), &args).await?;
+
+    apply_route_add(dest, gw, is_ipv6, is_host);
+
+    existing.push(StaticRoute {
+        name: name.clone(),
+        destination: dest.to_string(),
+        gateway: gw.to_string(),
+        family: if is_ipv6 { "ipv6" } else { "ipv4" }.into(),
+        is_host,
+    });
+
+    audit::record(
+        &state, Some(&auth.username), "POST", "/api/network/static-routes", 200,
+        Some(format!("added static route {name}: {dest} via {gw}")),
+    );
+
+    let last = existing.last().unwrap().clone();
+    Ok(Json(last))
+}
+
+/// PUT `/api/network/static-routes/{name}` — update an existing static route.
+pub async fn update_static_route(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+    Json(body): Json<StaticRouteInput>,
+) -> ApiResult<Json<StaticRoute>> {
+    validate_route_name(&name)?;
+    let dest = body.destination.trim();
+    let gw = body.gateway.trim();
+    validate_route_input(dest, gw)?;
+
+    let existing = read_static_routes();
+    let old = existing.iter().find(|r| r.name == name).ok_or_else(|| {
+        ApiError::NotFound(format!("static route '{name}' not found"))
+    })?;
+
+    // Remove old live route, then apply the new one.
+    apply_route_delete(&old.destination, old.family == "ipv6", old.is_host);
+
+    let is_ipv6 = gw.contains(':');
+    let is_host = !dest.contains('/');
+    let args = build_route_args(dest, gw, is_ipv6, is_host);
+
+    crate::sysrc::set_async(&format!("route_{name}"), &args).await?;
+
+    apply_route_add(dest, gw, is_ipv6, is_host);
+
+    audit::record(
+        &state, Some(&auth.username), "PUT", &format!("/api/network/static-routes/{name}"), 200,
+        Some(format!("updated static route {name}: {dest} via {gw}")),
+    );
+
+    Ok(Json(StaticRoute {
+        name,
+        destination: dest.to_string(),
+        gateway: gw.to_string(),
+        family: if is_ipv6 { "ipv6" } else { "ipv4" }.into(),
+        is_host,
+    }))
+}
+
+/// DELETE `/api/network/static-routes/{name}` — remove a static route.
+pub async fn delete_static_route(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    validate_route_name(&name)?;
+
+    let existing = read_static_routes();
+    let route = existing.iter().find(|r| r.name == name).ok_or_else(|| {
+        ApiError::NotFound(format!("static route '{name}' not found"))
+    })?;
+
+    let dest = route.destination.clone();
+    let is_ipv6 = route.family == "ipv6";
+    let is_host = route.is_host;
+
+    let remaining: Vec<&StaticRoute> = existing.iter().filter(|r| r.name != name).collect();
+    if remaining.is_empty() {
+        crate::sysrc::delete_async("static_routes").await?;
+    } else {
+        let list_str = remaining.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(" ");
+        crate::sysrc::set_async("static_routes", &list_str).await?;
+    }
+    crate::sysrc::delete_async(&format!("route_{name}")).await?;
+
+    apply_route_delete(&dest, is_ipv6, is_host);
+
+    audit::record(
+        &state, Some(&auth.username), "DELETE", &format!("/api/network/static-routes/{name}"), 200,
+        Some(format!("deleted static route {name}: {dest}")),
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── Static route helpers ─────────────────────────────────────────────────
+
+/// Read all static routes from rc.conf (`static_routes` + `route_<name>` entries).
+fn read_static_routes() -> Vec<StaticRoute> {
+    let kv = crate::sysrc::read_rcconf_files();
+    let names: Vec<&str> = kv
+        .get("static_routes")
+        .map(|s| s.split_whitespace().collect())
+        .unwrap_or_default();
+
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let key = format!("route_{name}");
+            let value = kv.get(&key)?;
+            let (dest, gw, is_ipv6, is_host) = parse_route_value(value)?;
+            Some(StaticRoute {
+                name: name.to_string(),
+                destination: dest,
+                gateway: gw,
+                family: if is_ipv6 { "ipv6" } else { "ipv4" }.into(),
+                is_host,
+            })
+        })
+        .collect()
+}
+
+/// Parse a `route_<name>` rc.conf value into (destination, gateway, is_ipv6, is_host).
+fn parse_route_value(value: &str) -> Option<(String, String, bool, bool)> {
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    let mut idx = 0;
+    let mut is_ipv6 = false;
+
+    if tokens[idx] == "-6" || tokens[idx] == "-inet6" {
+        is_ipv6 = true;
+        idx += 1;
+    }
+
+    let mut explicit_type = false;
+    let mut is_host = false;
+    while idx < tokens.len() && (tokens[idx] == "-net" || tokens[idx] == "-host") {
+        is_host = tokens[idx] == "-host";
+        explicit_type = true;
+        idx += 1;
+    }
+
+    if idx >= tokens.len() {
+        return None;
+    }
+    let destination = tokens[idx].to_string();
+    idx += 1;
+
+    let mut gateway = String::new();
+    while idx < tokens.len() {
+        let t = tokens[idx];
+        if t.starts_with('-') {
+            idx += 1;
+            continue;
+        }
+        gateway = t.to_string();
+        break;
+    }
+    if gateway.is_empty() {
+        return None;
+    }
+
+    if !is_ipv6 {
+        is_ipv6 = gateway.contains(':') || destination.contains(':');
+    }
+    if !explicit_type {
+        is_host = !destination.contains('/');
+    }
+
+    Some((destination, gateway, is_ipv6, is_host))
+}
+
+/// Build the rc.conf `route_<name>` value from components.
+fn build_route_args(dest: &str, gw: &str, is_ipv6: bool, is_host: bool) -> String {
+    let mut parts = Vec::new();
+    if is_ipv6 {
+        parts.push("-6");
+    }
+    parts.push(if is_host { "-host" } else { "-net" });
+    parts.push(dest);
+    parts.push(gw);
+    parts.join(" ")
+}
+
+/// Generate the next available route name (`fwp_1`, `fwp_2`, ...).
+fn next_route_name(existing: &[StaticRoute]) -> String {
+    let mut max_n = 0;
+    for r in existing {
+        if let Some(n_str) = r.name.strip_prefix("net") {
+            if let Ok(n) = n_str.parse::<u32>() {
+                if n > max_n {
+                    max_n = n;
+                }
+            }
+        }
+    }
+    format!("net{}", max_n + 1)
+}
+
+/// Build the space-separated `static_routes` list value after adding a new name.
+fn add_to_list(existing: &[StaticRoute], new_name: &str) -> String {
+    let mut names: Vec<&str> = existing.iter().map(|r| r.name.as_str()).collect();
+    names.push(new_name);
+    names.join(" ")
+}
+
+/// Validate destination and gateway.
+fn validate_route_input(dest: &str, gw: &str) -> ApiResult<()> {
+    if dest.is_empty() {
+        return Err(ApiError::BadRequest("destination is required".into()));
+    }
+    if gw.is_empty() {
+        return Err(ApiError::BadRequest("gateway is required".into()));
+    }
+    // Gateway must be a valid IP address.
+    if gw.parse::<std::net::IpAddr>().is_err() {
+        return Err(ApiError::BadRequest(format!(
+            "'{gw}' is not a valid IP address"
+        )));
+    }
+    // Destination must be IP or IP/prefix.
+    if let Some((ip, _plen)) = dest.split_once('/') {
+        if ip.parse::<std::net::IpAddr>().is_err() {
+            return Err(ApiError::BadRequest(format!(
+                "'{dest}' is not a valid destination"
+            )));
+        }
+    } else if dest.parse::<std::net::IpAddr>().is_err() {
+        return Err(ApiError::BadRequest(format!(
+            "'{dest}' is not a valid destination"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate route name to prevent injection.
+fn validate_route_name(name: &str) -> ApiResult<()> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(ApiError::BadRequest("invalid route name".into()));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ApiError::BadRequest(
+            "route name must match [a-zA-Z0-9_]+".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Apply `route add` (or `route -6 add`) to the live system. Best-effort: errors are ignored.
+fn apply_route_add(dest: &str, gw: &str, is_ipv6: bool, is_host: bool) {
+    let route_type = if is_host { "-host" } else { "-net" };
+    let mut args = Vec::new();
+    if is_ipv6 {
+        args.push("-6");
+    }
+    args.extend_from_slice(&["add", route_type, dest, gw]);
+    cmd::run_forget_sync("/sbin/route", &args);
+}
+
+/// Apply `route delete` (or `route -6 delete`) to the live system. Best-effort.
+fn apply_route_delete(dest: &str, is_ipv6: bool, is_host: bool) {
+    let route_type = if is_host { "-host" } else { "-net" };
+    let mut args = Vec::new();
+    if is_ipv6 {
+        args.push("-6");
+    }
+    args.extend_from_slice(&["delete", route_type, dest]);
+    cmd::run_forget_sync("/sbin/route", &args);
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 /// Read `defaultrouter` from rc.conf (direct file read, no subprocess).

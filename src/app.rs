@@ -59,6 +59,8 @@ pub fn build(state: AppState) -> Router {
         .route("/api/network/interfaces/{name}/apply", post(handlers::network::interface_apply))
         .route("/api/network/routes", get(handlers::network::list_routes))
         .route("/api/network/gateway", get(handlers::network::default_gateway).put(handlers::network::set_default_gateway))
+        .route("/api/network/static-routes", get(handlers::network::list_static_routes).post(handlers::network::create_static_route))
+        .route("/api/network/static-routes/{name}", put(handlers::network::update_static_route).delete(handlers::network::delete_static_route))
         .route("/api/network/dns", get(handlers::network::dns_config))
         .route("/api/network/dns/nameservers", put(handlers::network::set_nameservers))
         .route("/api/services", get(handlers::services::list))

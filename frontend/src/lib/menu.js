@@ -48,6 +48,7 @@ export const MENU = [
     default: '/network',
     items: [
       { path: '/network', labelKey: 'nav.networkIf', icon: 'fa-solid fa-ethernet' },
+      { path: '/network/routes', labelKey: 'nav.staticRoutes', icon: 'fa-solid fa-route' },
       { path: '/network/dns', labelKey: 'nav.networkDns', icon: 'fa-solid fa-server' },
       {
         path: '/firewall',
