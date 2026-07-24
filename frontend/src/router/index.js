@@ -1,132 +1,79 @@
 // Vue Router configuration — hash mode with auth guards.
+// All page components are lazy-loaded (dynamic import) so Vite splits
+// them into separate chunks, reducing initial bundle size.
 
 import { createRouter, createWebHashHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth.js';
 
 import AppLayout from '../components/layout/AppLayout.vue';
-import LoginPage from '../pages/LoginPage.vue';
-import SetupPage from '../pages/SetupPage.vue';
-import DashboardPage from '../pages/DashboardPage.vue';
-import UsersPage from '../pages/UsersPage.vue';
-import AuditPage from '../pages/AuditPage.vue';
-import ShellPage from '../pages/ShellPage.vue';
-import MonitorCpuPage from '../pages/MonitorCpuPage.vue';
-import MonitorMemoryPage from '../pages/MonitorMemoryPage.vue';
-import MonitorNetworkPage from '../pages/MonitorNetworkPage.vue';
-import MonitorFwpPage from '../pages/MonitorFwpPage.vue';
-import MailPage from '../pages/MailPage.vue';
-import FilesystemOverviewPage from '../pages/FilesystemOverviewPage.vue';
-import DisksPage from '../pages/DisksPage.vue';
-import FilesPage from '../pages/FilesPage.vue';
-import SysctlPage from '../pages/SysctlPage.vue';
-import RcconfPage from '../pages/RcconfPage.vue';
-import CronPage from '../pages/CronPage.vue';
-import NetworkPage from '../pages/NetworkPage.vue';
-import DnsPage from '../pages/DnsPage.vue';
-import StaticRoutesPage from '../pages/StaticRoutesPage.vue';
-import ServicesPage from '../pages/ServicesPage.vue';
-import AccountsUsersPage from '../pages/AccountsUsersPage.vue';
-import AccountsGroupsPage from '../pages/AccountsGroupsPage.vue';
-import FirewallRulesPage from '../pages/FirewallRulesPage.vue';
-import FirewallNatPage from '../pages/FirewallNatPage.vue';
-import FirewallTablesPage from '../pages/FirewallTablesPage.vue';
-import FirewallSettingsPage from '../pages/FirewallSettingsPage.vue';
-import BhyveVmsPage from '../pages/BhyveVmsPage.vue';
-import BhyveCreatePage from '../pages/BhyveCreatePage.vue';
-import BhyveDetailPage from '../pages/BhyveDetailPage.vue';
-import BhyveEditPage from '../pages/BhyveEditPage.vue';
-import BhyveConsolePage from '../pages/BhyveConsolePage.vue';
-import BhyveVncPage from '../pages/BhyveVncPage.vue';
-import BhyveImagesPage from '../pages/BhyveImagesPage.vue';
-import BhyveSwitchesPage from '../pages/BhyveSwitchesPage.vue';
-import BhyveSwitchDetailPage from '../pages/BhyveSwitchDetailPage.vue';
-import BhyveDatastoresPage from '../pages/BhyveDatastoresPage.vue';
-import BhyveIsosPage from '../pages/BhyveIsosPage.vue';
-import BhyveInitPage from '../pages/BhyveInitPage.vue';
-import JailsListPage from '../pages/JailsListPage.vue';
-import JailCreatePage from '../pages/JailCreatePage.vue';
-import JailDetailPage from '../pages/JailDetailPage.vue';
-import JailEditPage from '../pages/JailEditPage.vue';
-import JailTerminalPage from '../pages/JailTerminalPage.vue';
-import JailBasesPage from '../pages/JailBasesPage.vue';
-import JailDefaultsPage from '../pages/JailDefaultsPage.vue';
-import ZfsPoolsPage from '../pages/ZfsPoolsPage.vue';
-import ZfsPoolDetailPage from '../pages/ZfsPoolDetailPage.vue';
-import ZfsDatasetsPage from '../pages/ZfsDatasetsPage.vue';
-import ZfsSnapshotsPage from '../pages/ZfsSnapshotsPage.vue';
-import PackagesPage from '../pages/PackagesPage.vue';
-import PackageDetailPage from '../pages/PackageDetailPage.vue';
-import PkgReposPage from '../pages/PkgReposPage.vue';
-import DialogDemoPage from '../pages/DialogDemoPage.vue';
-import NotFoundPage from '../pages/NotFoundPage.vue';
 
 const routes = [
-  { path: '/login', name: 'login', component: LoginPage, meta: { auth: false } },
-  { path: '/setup', name: 'setup', component: SetupPage, meta: { auth: false } },
+  { path: '/login', name: 'login', component: () => import('../pages/LoginPage.vue'), meta: { auth: false } },
+  { path: '/setup', name: 'setup', component: () => import('../pages/SetupPage.vue'), meta: { auth: false } },
   {
     path: '/',
     component: AppLayout,
     meta: { auth: true },
     children: [
       { path: '', redirect: '/dashboard' },
-      { path: 'dashboard', name: 'dashboard', component: DashboardPage },
-      { path: 'shell', name: 'shell', component: ShellPage },
-      { path: 'dialog-demo', name: 'dialog-demo', component: DialogDemoPage },
-      { path: 'users', name: 'users', component: UsersPage },
-      { path: 'audit', name: 'audit', component: AuditPage },
-      { path: 'monitor', name: 'monitor-cpu', component: MonitorCpuPage },
-      { path: 'monitor/memory', name: 'monitor-memory', component: MonitorMemoryPage },
-      { path: 'monitor/network', name: 'monitor-network', component: MonitorNetworkPage },
-      { path: 'monitor/fwp', name: 'monitor-fwp', component: MonitorFwpPage },
-      { path: 'mail', name: 'mail', component: MailPage },
-      { path: 'filesystem', name: 'filesystem', component: FilesystemOverviewPage },
-      { path: 'filesystem/disks', name: 'disks', component: DisksPage },
-      { path: 'filesystem/files', name: 'files', component: FilesPage },
-      { path: 'sysctl', name: 'sysctl', component: SysctlPage },
-      { path: 'rcconf', name: 'rcconf', component: RcconfPage },
-      { path: 'cron', name: 'cron', component: CronPage },
-      { path: 'network', name: 'network', component: NetworkPage },
-      { path: 'network/dns', name: 'dns', component: DnsPage },
-      { path: 'network/routes', name: 'static-routes', component: StaticRoutesPage },
-      { path: 'services', name: 'services', component: ServicesPage },
+      { path: 'dashboard', name: 'dashboard', component: () => import('../pages/DashboardPage.vue') },
+      { path: 'shell', name: 'shell', component: () => import('../pages/ShellPage.vue') },
+      { path: 'dialog-demo', name: 'dialog-demo', component: () => import('../pages/DialogDemoPage.vue') },
+      { path: 'users', name: 'users', component: () => import('../pages/UsersPage.vue') },
+      { path: 'audit', name: 'audit', component: () => import('../pages/AuditPage.vue') },
+      { path: 'monitor', name: 'monitor-cpu', component: () => import('../pages/MonitorCpuPage.vue') },
+      { path: 'monitor/memory', name: 'monitor-memory', component: () => import('../pages/MonitorMemoryPage.vue') },
+      { path: 'monitor/network', name: 'monitor-network', component: () => import('../pages/MonitorNetworkPage.vue') },
+      { path: 'monitor/fwp', name: 'monitor-fwp', component: () => import('../pages/MonitorFwpPage.vue') },
+      { path: 'mail', name: 'mail', component: () => import('../pages/MailPage.vue') },
+      { path: 'filesystem', name: 'filesystem', component: () => import('../pages/FilesystemOverviewPage.vue') },
+      { path: 'filesystem/disks', name: 'disks', component: () => import('../pages/DisksPage.vue') },
+      { path: 'filesystem/files', name: 'files', component: () => import('../pages/FilesPage.vue') },
+      { path: 'sysctl', name: 'sysctl', component: () => import('../pages/SysctlPage.vue') },
+      { path: 'rcconf', name: 'rcconf', component: () => import('../pages/RcconfPage.vue') },
+      { path: 'cron', name: 'cron', component: () => import('../pages/CronPage.vue') },
+      { path: 'network', name: 'network', component: () => import('../pages/NetworkPage.vue') },
+      { path: 'network/dns', name: 'dns', component: () => import('../pages/DnsPage.vue') },
+      { path: 'network/routes', name: 'static-routes', component: () => import('../pages/StaticRoutesPage.vue') },
+      { path: 'services', name: 'services', component: () => import('../pages/ServicesPage.vue') },
       { path: 'pf', redirect: '/firewall/rules' },
       { path: 'firewall', redirect: '/firewall/rules' },
-      { path: 'firewall/rules', name: 'firewall-rules', component: FirewallRulesPage },
-      { path: 'firewall/nat', name: 'firewall-nat', component: FirewallNatPage },
-      { path: 'firewall/tables', name: 'firewall-tables', component: FirewallTablesPage },
-      { path: 'firewall/settings', name: 'firewall-settings', component: FirewallSettingsPage },
+      { path: 'firewall/rules', name: 'firewall-rules', component: () => import('../pages/FirewallRulesPage.vue') },
+      { path: 'firewall/nat', name: 'firewall-nat', component: () => import('../pages/FirewallNatPage.vue') },
+      { path: 'firewall/tables', name: 'firewall-tables', component: () => import('../pages/FirewallTablesPage.vue') },
+      { path: 'firewall/settings', name: 'firewall-settings', component: () => import('../pages/FirewallSettingsPage.vue') },
       { path: 'bhyve', redirect: '/bhyve/vms' },
-      { path: 'bhyve/vms', name: 'bhyve-vms', component: BhyveVmsPage },
-      { path: 'bhyve/create', name: 'bhyve-create', component: BhyveCreatePage },
-      { path: 'bhyve/detail/:name', name: 'bhyve-detail', component: BhyveDetailPage },
-      { path: 'bhyve/edit/:name', name: 'bhyve-edit', component: BhyveEditPage },
-      { path: 'bhyve/console/:name', name: 'bhyve-console', component: BhyveConsolePage },
-      { path: 'bhyve/vnc/:name', name: 'bhyve-vnc', component: BhyveVncPage },
-      { path: 'bhyve/images', name: 'bhyve-images', component: BhyveImagesPage },
-      { path: 'bhyve/switches', name: 'bhyve-switches', component: BhyveSwitchesPage },
-      { path: 'bhyve/switches/:name', name: 'bhyve-switch-detail', component: BhyveSwitchDetailPage },
-      { path: 'bhyve/datastores', name: 'bhyve-datastores', component: BhyveDatastoresPage },
-      { path: 'bhyve/isos', name: 'bhyve-isos', component: BhyveIsosPage },
-      { path: 'bhyve/init', name: 'bhyve-init', component: BhyveInitPage },
-      { path: 'accounts/users', name: 'accounts-users', component: AccountsUsersPage },
-      { path: 'accounts/groups', name: 'accounts-groups', component: AccountsGroupsPage },
-      { path: 'jails/running', name: 'jails-list', component: JailsListPage },
-      { path: 'jails/create', name: 'jail-create', component: JailCreatePage },
-      { path: 'jails/detail/:name', name: 'jail-detail', component: JailDetailPage },
-      { path: 'jails/edit/:name', name: 'jail-edit', component: JailEditPage },
-      { path: 'jails/terminal/:name', name: 'jail-terminal', component: JailTerminalPage },
-      { path: 'jails/bases', name: 'jail-bases', component: JailBasesPage },
-      { path: 'jails/defaults', name: 'jail-defaults', component: JailDefaultsPage },
-      { path: 'zfs/pools', name: 'zfs-pools', component: ZfsPoolsPage },
-      { path: 'zfs/pools/:name', name: 'zfs-pool-detail', component: ZfsPoolDetailPage },
-      { path: 'zfs/datasets', name: 'zfs-datasets', component: ZfsDatasetsPage },
-      { path: 'zfs/snapshots', name: 'zfs-snapshots', component: ZfsSnapshotsPage },
-      { path: 'pkg', name: 'packages', component: PackagesPage },
-      { path: 'pkg/repos', name: 'pkg-repos', component: PkgReposPage },
-      { path: 'pkg/:name', name: 'package-detail', component: PackageDetailPage },
+      { path: 'bhyve/vms', name: 'bhyve-vms', component: () => import('../pages/BhyveVmsPage.vue') },
+      { path: 'bhyve/create', name: 'bhyve-create', component: () => import('../pages/BhyveCreatePage.vue') },
+      { path: 'bhyve/detail/:name', name: 'bhyve-detail', component: () => import('../pages/BhyveDetailPage.vue') },
+      { path: 'bhyve/edit/:name', name: 'bhyve-edit', component: () => import('../pages/BhyveEditPage.vue') },
+      { path: 'bhyve/console/:name', name: 'bhyve-console', component: () => import('../pages/BhyveConsolePage.vue') },
+      { path: 'bhyve/vnc/:name', name: 'bhyve-vnc', component: () => import('../pages/BhyveVncPage.vue') },
+      { path: 'bhyve/images', name: 'bhyve-images', component: () => import('../pages/BhyveImagesPage.vue') },
+      { path: 'bhyve/switches', name: 'bhyve-switches', component: () => import('../pages/BhyveSwitchesPage.vue') },
+      { path: 'bhyve/switches/:name', name: 'bhyve-switch-detail', component: () => import('../pages/BhyveSwitchDetailPage.vue') },
+      { path: 'bhyve/datastores', name: 'bhyve-datastores', component: () => import('../pages/BhyveDatastoresPage.vue') },
+      { path: 'bhyve/isos', name: 'bhyve-isos', component: () => import('../pages/BhyveIsosPage.vue') },
+      { path: 'bhyve/init', name: 'bhyve-init', component: () => import('../pages/BhyveInitPage.vue') },
+      { path: 'accounts/users', name: 'accounts-users', component: () => import('../pages/AccountsUsersPage.vue') },
+      { path: 'accounts/groups', name: 'accounts-groups', component: () => import('../pages/AccountsGroupsPage.vue') },
+      { path: 'jails/running', name: 'jails-list', component: () => import('../pages/JailsListPage.vue') },
+      { path: 'jails/create', name: 'jail-create', component: () => import('../pages/JailCreatePage.vue') },
+      { path: 'jails/detail/:name', name: 'jail-detail', component: () => import('../pages/JailDetailPage.vue') },
+      { path: 'jails/edit/:name', name: 'jail-edit', component: () => import('../pages/JailEditPage.vue') },
+      { path: 'jails/terminal/:name', name: 'jail-terminal', component: () => import('../pages/JailTerminalPage.vue') },
+      { path: 'jails/bases', name: 'jail-bases', component: () => import('../pages/JailBasesPage.vue') },
+      { path: 'jails/defaults', name: 'jail-defaults', component: () => import('../pages/JailDefaultsPage.vue') },
+      { path: 'zfs/pools', name: 'zfs-pools', component: () => import('../pages/ZfsPoolsPage.vue') },
+      { path: 'zfs/pools/:name', name: 'zfs-pool-detail', component: () => import('../pages/ZfsPoolDetailPage.vue') },
+      { path: 'zfs/datasets', name: 'zfs-datasets', component: () => import('../pages/ZfsDatasetsPage.vue') },
+      { path: 'zfs/snapshots', name: 'zfs-snapshots', component: () => import('../pages/ZfsSnapshotsPage.vue') },
+      { path: 'pkg', name: 'packages', component: () => import('../pages/PackagesPage.vue') },
+      { path: 'pkg/repos', name: 'pkg-repos', component: () => import('../pages/PkgReposPage.vue') },
+      { path: 'pkg/:name', name: 'package-detail', component: () => import('../pages/PackageDetailPage.vue') },
     ],
   },
-  { path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundPage },
+  { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../pages/NotFoundPage.vue') },
 ];
 
 const router = createRouter({
