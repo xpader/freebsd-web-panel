@@ -200,6 +200,7 @@ pub struct NetworkInterface {
     pub members: Vec<BridgeMember>,
     pub ipv4: Vec<IpConfig>,
     pub ipv6: Vec<IpConfig>,
+    pub driver_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -306,6 +307,7 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
             members: Vec::new(),
             ipv4: Vec::new(),
             ipv6: Vec::new(),
+            driver_name: None,
         });
 
         if ifa.ifa_addr.is_null() {
@@ -916,7 +918,7 @@ pub async fn interface_create(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<CreateIfaceBody>,
-) -> ApiResult<(StatusCode, Json<NetworkInterface>)> {
+) -> ApiResult<StatusCode> {
     validate_iface_name(&body.name)?;
 
     // Reject names that look like physical interfaces.
@@ -926,31 +928,20 @@ pub async fn interface_create(
         ));
     }
 
-    // Create via ifconfig + read back + persist to rc.conf.
+    // Create via ifconfig, apply any existing rc.conf config, persist to cloned_interfaces.
     let iface_name = body.name.clone();
-    let iface = tokio::task::spawn_blocking(move || -> ApiResult<NetworkInterface> {
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
         cmd::run_sync(IFCONFIG, &[&iface_name, "create"])?;
 
-        let interfaces = read_interfaces().map_err(ApiError::Io)?;
-        let lookup_name = if iface_name.starts_with("epair")
-            && !iface_name.ends_with('a')
-            && !iface_name.ends_with('b')
-        {
-            format!("{}a", iface_name)
-        } else {
-            iface_name.clone()
-        };
-        let iface = interfaces
-            .into_iter()
-            .find(|i| i.name == lookup_name)
-            .ok_or_else(|| {
-                ApiError::Internal(format!(
-                    "interface '{}' created but not found on re-read",
-                    iface_name
-                ))
-            })?;
+        // Immediately apply any existing rc.conf config for this interface.
+        // devd also does this asynchronously, but we do it synchronously so
+        // the frontend's refresh sees the final state (e.g. a rename via
+        // `name vvswitch`) without a timing race.
+        let cfg = parse_merged_rcconf(&iface_name);
+        let _ = apply_ifconfig(&iface_name, &cfg);
+
         add_cloned_interface(&iface_name);
-        Ok(iface)
+        Ok(())
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
@@ -964,43 +955,65 @@ pub async fn interface_create(
         Some(format!("created interface {}", body.name)),
     );
 
-    Ok((StatusCode::CREATED, Json(iface)))
+    Ok(StatusCode::CREATED)
 }
 
 /// GET `/api/network/interfaces` — list all network interfaces.
 pub async fn list_interfaces() -> ApiResult<Json<Vec<NetworkInterface>>> {
-    let interfaces = read_interfaces().map_err(ApiError::Io)?;
+    let interfaces = tokio::task::spawn_blocking(|| {
+        let mut ifaces = read_interfaces().map_err(ApiError::Io)?;
+        for iface in &mut ifaces {
+            if let Some(drv) = crate::ifutil::get_drivername(&iface.name) {
+                if drv != iface.name {
+                    iface.driver_name = Some(drv);
+                }
+            }
+        }
+        Ok::<_, ApiError>(ifaces)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
     Ok(Json(interfaces))
 }
 
-/// GET `/api/network/interfaces/{name}` — single interface detail.
-pub async fn interface_detail(Path(name): Path<String>) -> ApiResult<Json<NetworkInterface>> {
+/// GET `/api/network/interfaces/{name}` — single interface detail + rc.conf config.
+pub async fn interface_detail(Path(name): Path<String>) -> ApiResult<Json<serde_json::Value>> {
     validate_iface_name(&name)?;
-    let interfaces = read_interfaces().map_err(ApiError::Io)?;
-    interfaces
-        .into_iter()
-        .find(|iface| iface.name == name)
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("interface '{name}' not found")))
-}
+    let detail_name = name.clone();
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {
+        let interfaces = read_interfaces().map_err(ApiError::Io)?;
+        let mut iface = interfaces
+            .into_iter()
+            .find(|i| i.name == detail_name)
+            .ok_or_else(|| ApiError::NotFound(format!("interface '{detail_name}' not found")))?;
 
-/// GET `/api/network/interfaces/{name}/rcconf` — parsed rc.conf ifconfig config for an interface.
-pub async fn interface_rcconf(Path(name): Path<String>) -> ApiResult<Json<IfaceRcConfConfig>> {
-    validate_iface_name(&name)?;
-    let result = tokio::task::spawn_blocking(move || {
-        let mut cfg = parse_iface_rcconf(&name);
-        cfg.interface = name.clone();
-        cfg.is_bridge = name.starts_with("bridge");
-        cfg.is_lagg = name.starts_with("lagg");
-        cfg
+        // Populate driver_name.
+        if let Some(drv) = crate::ifutil::get_drivername(&iface.name) {
+            if drv != iface.name {
+                iface.driver_name = Some(drv);
+            }
+        }
+
+        // Parse rc.conf config (merges driver + live name keys if split).
+        let cfg = parse_merged_rcconf(&detail_name);
+
+        let iface_json = serde_json::to_value(&iface)
+            .map_err(|e| ApiError::Internal(format!("serialize: {e}")))?;
+        let cfg_json = serde_json::to_value(&cfg)
+            .map_err(|e| ApiError::Internal(format!("serialize: {e}")))?;
+
+        Ok(serde_json::json!({
+            "live": iface_json,
+            "config": cfg_json,
+        }))
     })
     .await
-    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
     Ok(Json(result))
 }
 
-/// PUT `/api/network/interfaces/{name}/rcconf` — save structured ifconfig config to rc.conf.
-pub async fn interface_rcconf_save(
+/// PUT `/api/network/interfaces/{name}` — save structured ifconfig config: apply to live system, then persist to rc.conf.
+pub async fn interface_update(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(name): Path<String>,
@@ -1049,18 +1062,37 @@ pub async fn interface_rcconf_save(
         validate_str(p)?;
     }
 
-    let primary_key = format!("ifconfig_{name}");
-    let aliases_key = format!("ifconfig_{name}_aliases");
-    let ipv6_key = format!("ifconfig_{name}_ipv6");
+    // Resolve driver name for rc.conf keys (may differ from live name if renamed).
+    let driver = resolve_driver_name(&name);
+
+    let primary_key = format!("ifconfig_{driver}");
+    let aliases_key = format!("ifconfig_{driver}_aliases");
+    let ipv6_key = format!("ifconfig_{driver}_ipv6");
 
     // Apply to live system + persist to rc.conf (all blocking subprocess work).
     let save_name = name.clone();
-    let save_cfg = cfg.clone();
+    let save_driver = driver.clone();
+    let mut save_cfg = cfg.clone();
+
+    // Ensure `name <live>` is in options when the interface is renamed,
+    // but only if options doesn't already contain a `name` directive.
+    if save_driver != save_name {
+        let tokens: Vec<&str> = save_cfg.options.split_whitespace().collect();
+        let has_name = tokens.iter().any(|t| *t == "name");
+        if !has_name {
+            save_cfg.options = if save_cfg.options.is_empty() {
+                format!("name {save_name}")
+            } else {
+                format!("name {save_name} {}", save_cfg.options)
+            };
+        }
+    }
+
     let result = tokio::task::spawn_blocking(move || -> ApiResult<IfaceRcConfConfig> {
         // 1. Apply to live system first — if this fails, don't touch rc.conf.
         apply_ifconfig(&save_name, &save_cfg).map_err(ApiError::Command)?;
 
-        // 2. Persist to rc.conf.
+        // 2. Persist to rc.conf using the driver name as key.
         let primary_val = build_primary_value(&save_cfg);
         if primary_val.is_empty() {
             crate::sysrc::delete(&primary_key);
@@ -1082,12 +1114,19 @@ pub async fn interface_rcconf_save(
             crate::sysrc::set(&ipv6_key, &ipv6_val).map_err(ApiError::Command)?;
         }
 
-        // Re-read to confirm what was stored.
-        let mut result = parse_iface_rcconf(&save_name);
-        result.interface = save_name.clone();
-        result.is_bridge = save_name.starts_with("bridge");
-        result.is_lagg = save_name.starts_with("lagg");
-        Ok(result)
+        // 3. If renamed, delete the live name's keys to consolidate into one key.
+        if save_driver != save_name {
+            for key in [
+                &format!("ifconfig_{save_name}"),
+                &format!("ifconfig_{save_name}_aliases"),
+                &format!("ifconfig_{save_name}_ipv6"),
+            ] {
+                crate::sysrc::delete(key);
+            }
+        }
+
+        // Re-read merged config.
+        Ok(parse_merged_rcconf(&save_name))
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
@@ -1096,9 +1135,9 @@ pub async fn interface_rcconf_save(
         &state,
         Some(&auth.username),
         "PUT",
-        &format!("/api/network/interfaces/{name}/rcconf"),
+        &format!("/api/network/interfaces/{name}"),
         200,
-        Some(format!("updated rc.conf ifconfig_{name}")),
+        Some(format!("updated ifconfig_{driver}")),
     );
 
     Ok(Json(result))
@@ -1344,7 +1383,7 @@ pub async fn interface_apply(
 
     let apply_name = name.clone();
     let output = tokio::task::spawn_blocking(move || {
-        let cfg = parse_iface_rcconf(&apply_name);
+        let cfg = parse_merged_rcconf(&apply_name);
         apply_ifconfig(&apply_name, &cfg).map_err(ApiError::Command)
     })
     .await
@@ -1390,17 +1429,24 @@ pub async fn interface_destroy(
             ));
         }
 
+        // Resolve driver name BEFORE destroying (get_drivername needs the interface alive).
+        let driver = resolve_driver_name(&destroy_name);
+
         // Destroy via ifconfig.
         cmd::run_sync(IFCONFIG, &[&destroy_name, "destroy"])?;
 
-        // Clean up rc.conf entries.
-        let primary_key = format!("ifconfig_{destroy_name}");
-        let aliases_key = format!("ifconfig_{destroy_name}_aliases");
-        let ipv6_key = format!("ifconfig_{destroy_name}_ipv6");
-        for key in [&primary_key, &aliases_key, &ipv6_key] {
-            crate::sysrc::delete(key);
+        // Clean up rc.conf entries — use driver name, and also live name (split config).
+        for key_name in [&driver, &destroy_name] {
+            if key_name.is_empty() { continue; }
+            for key in [
+                &format!("ifconfig_{key_name}"),
+                &format!("ifconfig_{key_name}_aliases"),
+                &format!("ifconfig_{key_name}_ipv6"),
+            ] {
+                crate::sysrc::delete(key);
+            }
         }
-        remove_cloned_interface(&destroy_name);
+        remove_cloned_interface(&driver);
         Ok(())
     })
     .await
@@ -1608,6 +1654,90 @@ fn read_ipv6_defaultrouter() -> Option<String> {
     crate::sysrc::get("ipv6_defaultrouter")
 }
 
+/// Resolve the driver name (rc.conf key name) for an interface.
+///
+/// Uses the kernel sysctl `IFDATA_DRIVERNAME` to get the original
+/// driver-assigned name, which survives user renaming. For example,
+/// `vvswitch` resolves to `bridge3`. If the driver name equals the
+/// live name (not renamed), returns the live name unchanged.
+fn resolve_driver_name(live_name: &str) -> String {
+    crate::ifutil::get_drivername(live_name).unwrap_or_else(|| live_name.to_string())
+}
+
+/// Parse rc.conf config for an interface, merging keys under both the driver
+/// name and the live name when they differ (e.g. split config:
+/// `ifconfig_bridge3="name vvswitch"` + `ifconfig_vvswitch="inet ... up"`).
+///
+/// Fields from the live name key take precedence. The `name <live>`
+/// directive is preserved in `options` so the merged config can be written
+/// back as a single key.
+fn parse_merged_rcconf(live_name: &str) -> IfaceRcConfConfig {
+    let driver = resolve_driver_name(live_name);
+    let mut cfg = parse_iface_rcconf(&driver);
+
+    if driver != live_name {
+        let live_cfg = parse_iface_rcconf(live_name);
+
+        // Live name's config fields take precedence.
+        if live_cfg.ipv4.is_some() {
+            cfg.ipv4 = live_cfg.ipv4;
+        }
+        if live_cfg.ipv4_netmask.is_some() {
+            cfg.ipv4_netmask = live_cfg.ipv4_netmask;
+        }
+        if !live_cfg.ipv4_aliases.is_empty() {
+            cfg.ipv4_aliases.extend(live_cfg.ipv4_aliases);
+        }
+        if !live_cfg.ipv6_mode.is_empty() {
+            cfg.ipv6_mode = live_cfg.ipv6_mode.clone();
+        }
+        if !live_cfg.ipv6.is_empty() {
+            cfg.ipv6 = live_cfg.ipv6;
+        }
+        if !live_cfg.bridge_members.is_empty() {
+            cfg.bridge_members = live_cfg.bridge_members;
+        }
+        if live_cfg.lagg_proto.is_some() {
+            cfg.lagg_proto = live_cfg.lagg_proto;
+        }
+        if !live_cfg.lagg_ports.is_empty() {
+            cfg.lagg_ports = live_cfg.lagg_ports;
+        }
+        if live_cfg.mtu.is_some() {
+            cfg.mtu = live_cfg.mtu;
+        }
+        if live_cfg.description.is_some() {
+            cfg.description = live_cfg.description;
+        }
+        if live_cfg.is_up {
+            cfg.is_up = true;
+        }
+        // Merge options: combine driver + live, ensure `name <live>` is present.
+        if !live_cfg.options.is_empty() {
+            if cfg.options.is_empty() {
+                cfg.options = live_cfg.options;
+            } else {
+                cfg.options = format!("{} {}", cfg.options, live_cfg.options);
+            }
+        }
+        // Ensure `name <live>` is in options, unless options already has a `name` directive.
+        let tokens: Vec<&str> = cfg.options.split_whitespace().collect();
+        let has_name = tokens.iter().any(|t| *t == "name");
+        if !has_name {
+            if cfg.options.is_empty() {
+                cfg.options = format!("name {live_name}");
+            } else {
+                cfg.options = format!("name {live_name} {}", cfg.options);
+            }
+        }
+    }
+
+    cfg.interface = live_name.to_string();
+    cfg.is_bridge = driver.starts_with("bridge");
+    cfg.is_lagg = driver.starts_with("lagg");
+    cfg
+}
+
 /// Read all `ifconfig_<name>` rc.conf entries and parse into structured config.
 fn parse_iface_rcconf(name: &str) -> IfaceRcConfConfig {
     let kv = crate::sysrc::list_all();
@@ -1728,6 +1858,7 @@ fn is_ifconfig_keyword(token: &str) -> bool {
             | "prefixlen"
             | "mtu"
             | "metric"
+            | "name"
             | "DHCP"
             | "dhcp"
             | "SYNCDHCP"

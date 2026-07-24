@@ -20,6 +20,7 @@ const error = ref('');
 const detailIface = ref(null);
 const configIfaceName = ref(null);
 const configData = ref(null);
+const configDriverName = ref(null);
 const configLoading = ref(false);
 const configSaving = ref(false);
 const configApplying = ref(false);
@@ -132,10 +133,12 @@ function canDestroy(iface) {
 
 async function showConfig(iface) {
   configIfaceName.value = iface.name;
+  configDriverName.value = iface.driver_name || null;
   configData.value = null;
   configLoading.value = true;
   try {
-    configData.value = await api.get(`/api/network/interfaces/${iface.name}/rcconf`);
+    const resp = await api.get(`/api/network/interfaces/${iface.name}`);
+    configData.value = resp.config;
   } catch (err) {
     await alert(t('common.operationFailed'), err.message || t('common.loadFailed', { msg: '' }));
     configIfaceName.value = null;
@@ -224,7 +227,7 @@ function removeLaggPort(i) {
 async function saveConfig() {
   configSaving.value = true;
   try {
-    await api.put(`/api/network/interfaces/${configIfaceName.value}/rcconf`, configData.value);
+    await api.put(`/api/network/interfaces/${configIfaceName.value}`, configData.value);
     toast.toast(t('net.configSaved'));
     configIfaceName.value = null;
     load();
@@ -361,6 +364,7 @@ onMounted(load);
           <div class="net-iface-header">
             <i :class="['fa-solid', iface.is_loopback ? 'fa-rotate' : 'fa-ethernet', 'net-iface-icon', iface.is_up ? 'up' : 'down']"></i>
             <span class="net-iface-name mono">{{ iface.name }}</span>
+            <span v-if="iface.driver_name" class="text-dim mono" style="font-size:0.85em;">({{ iface.driver_name }})</span>
             <span class="net-iface-name-spacer"></span>
             <span class="badge">{{ linkLabel(iface) }}</span>
           </div>
@@ -403,6 +407,7 @@ onMounted(load);
           <div class="net-iface-header">
             <i :class="['fa-solid', iface.is_loopback ? 'fa-rotate' : 'fa-ethernet', 'net-iface-icon', iface.is_up ? 'up' : 'down']"></i>
             <span class="net-iface-name mono">{{ iface.name }}</span>
+            <span v-if="iface.driver_name" class="text-dim mono" style="font-size:0.85em;">({{ iface.driver_name }})</span>
             <span class="net-iface-name-spacer"></span>
             <span class="badge">{{ linkLabel(iface) }}</span>
           </div>
@@ -484,7 +489,7 @@ onMounted(load);
   <!-- Detail modal -->
   <div v-if="detailIface" class="modal-overlay">
     <div class="modal" style="max-width:760px;">
-      <h3>{{ detailIface.name }} — {{ t('net.interfaceInfo') }}</h3>
+      <h3>{{ detailIface.name }}<span v-if="detailIface.driver_name" class="text-dim" style="font-size:0.8em;"> ({{ detailIface.driver_name }})</span> — {{ t('net.interfaceInfo') }}</h3>
       <div class="kv-grid">
         <div v-if="detailIface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ detailIface.description }}</span></div>
         <div class="kv"><span class="kv-key">{{ t('common.status') }}</span><span class="kv-val">{{ detailIface.is_up ? t('net.linkUp') : t('net.linkDown') }} ({{ detailIface.link_state }})</span></div>
@@ -545,7 +550,7 @@ onMounted(load);
   <!-- rc.conf config modal -->
   <div v-if="configIfaceName" class="modal-overlay">
     <div class="modal" style="max-width:680px;">
-      <h3>{{ configIfaceName }} — {{ t('net.ifaceConfig') }}</h3>
+      <h3>{{ configIfaceName }}<span v-if="configDriverName" class="text-dim" style="font-size:0.8em;"> ({{ configDriverName }})</span> — {{ t('net.ifaceConfig') }}</h3>
       <div v-if="configLoading" class="text-dim" style="padding:1rem 0;"><span class="spinner"></span> {{ t('common.loading') }}</div>
       <template v-else-if="configData">
         <!-- Interface properties -->

@@ -66,7 +66,7 @@ flags 从任意记录的 `ifa_flags` 读取（同一接口所有记录的 flags 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/network/interfaces` | 全部接口列表（含 groups/description/status/members） |
-| GET | `/api/network/interfaces/{name}` | 单接口详情（404 if not found） |
+| GET | `/api/network/interfaces/{name}` | 单接口详情（实时状态 + rc.conf 配置，返回 `{ live, config }`） |
 | GET | `/api/network/routes` | 完整路由表（IPv4 + IPv6） |
 | GET | `/api/network/gateway` | 默认网关 IPv4+IPv6（运行时值 + rc.conf 持久值） |
 | PUT | `/api/network/gateway` | 设置/清除默认网关（IPv4 + IPv6 独立控制，写 rc.conf + 应用路由） |
@@ -76,8 +76,7 @@ flags 从任意记录的 `ifa_flags` 读取（同一接口所有记录的 flags 
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/network/interfaces/{name}/rcconf` | 读取 rc.conf 中该接口的解析配置 |
-| PUT | `/api/network/interfaces/{name}/rcconf` | 保存配置：先 ifconfig 应用，成功后写 rc.conf |
+| PUT | `/api/network/interfaces/{name}` | 保存配置：先 ifconfig 应用，成功后写 rc.conf |
 | POST | `/api/network/interfaces/{name}/apply` | 手动重新应用 rc.conf 配置到运行时 |
 
 ### 接口生命周期
@@ -136,7 +135,15 @@ IfaceRcConfConfig {
 
 ### rc.conf 解析与写入
 
-**解析**（`parse_iface_rcconf`）：从 `sysrc -e -a` 输出提取 `ifconfig_<name>`、`ifconfig_<name>_aliases`、`ifconfig_<name>_ipv6` 三个键，用 `parse_ifconfig_tokens` 将值字符串解析为结构化字段。
+**接口改名处理**：FreeBSD 支持通过 `ifconfig_bridge3="name vvswitch"` 改名。改名后内核 driver name（`bridge3`）不变，可通过 `ifutil::get_drivername()`（sysctl `IFDATA_DRIVERNAME`）获取。rc.conf 中的配置可能存在两种写法：
+- **单键**：全部配置在 driver name 键下：`ifconfig_bridge3="inet ... name vvswitch up"`
+- **分键**：改名在 driver 键、配置在 live name 键：`ifconfig_bridge3="name vvswitch"` + `ifconfig_vvswitch="inet ... up"`
+
+**解析**（`parse_merged_rcconf(live_name)`）：
+1. 用 `resolve_driver_name(live_name)` 获取 driver name
+2. 解析 driver name 的三个键（primary/aliases/ipv6）
+3. 若 driver ≠ live name，额外解析 live name 的三个键，合并字段（live name 的配置优先）
+4. 确保 `name <live>` 指令始终存在于 options 中
 
 **IPv4 模式检测**：`ipv4` 为 `null` → `ipv4_mode = "none"`（不配置 IPv4）；主值包含 `DHCP` 或 `SYNCDHCP` → `ipv4_mode = "dhcp"`，前端隐藏 IP/掩码输入；否则为 `static`。
 
@@ -144,22 +151,23 @@ IfaceRcConfConfig {
 
 **写入**（`build_primary_value` / `build_ipv6_value`）：
 - IPv4 none → 主值不含 inet 字段
-- IPv4 DHCP → `ifconfig_<name>="DHCP"`（或 `SYNCDHCP`）
-- IPv6 none → `ifconfig_<name>_ipv6` 键被删除
-- IPv6 SLAAC → `ifconfig_<name>_ipv6="inet6 accept_rtadv"`
+- IPv4 DHCP → `ifconfig_<driver>="DHCP"`（或 `SYNCDHCP`）
+- IPv6 none → `ifconfig_<driver>_ipv6` 键被删除
+- IPv6 SLAAC → `ifconfig_<driver>_ipv6="inet6 accept_rtadv"`
 - IPv6 static → `build_ipv6_value("static", entries)` 拼接 `inet6 <addr> prefixlen <pl>` 条目
 - description 用单引号包裹（`description 'Hello World'`）以区分空格分隔的其他参数。
-- `options` 字段中的扩展参数原样追加到主值末尾（如 `media 1000baseTX mediaopt full-duplex`）
+- `options` 字段中的扩展参数原样追加到主值末尾（如 `media 1000baseTX mediaopt full-duplex`，改名接口含 `name vvswitch`）
+- **合并写入**：所有配置统一写入 driver name 键下，并删除 live name 的三个键，消除分键配置
 
 **配置应用**（`apply_ifconfig`）：
 1. 先用 `read_interfaces()` 读取当前运行时状态
-2. 应用非结构性属性（IP/MTU/description/options/UP）
+2. 应用非结构性属性（IP/MTU/description/options/UP），使用 live name 调用 `ifconfig`
 3. 应用 LAGG 协议和端口（跳过已有端口）
 4. 应用 bridge 成员（跳过已有成员、其他 bridge 的成员）
 5. 应用 IPv4 别名（跳过已有地址）
 6. 应用 IPv6 条目（跳过已有地址）——仅 `static` 模式应用；`slaac` 和 `none` 模式跳过
 
-**PUT 流程**：先 ifconfig 应用 → 成功后写 rc.conf。ifconfig 失败则不写 rc.conf，返回错误。
+**PUT 流程**：先 ifconfig 应用（live name）→ 成功后写 rc.conf（driver name 键）→ 删除 live name 键（合并）。ifconfig 失败则不写 rc.conf，返回错误。
 
 ### 默认网关设置
 
