@@ -223,14 +223,17 @@ function kindLabel(kind) {
 
 function ruleSummary(rule) {
   if (rule.kind === 'snat') {
-    const target = rule.dst_addr || `(${rule.interface})`;
+    const target = rule.dst_addr || rule.interface;
     return `${rule.src_addr}  →  ${target}`;
   }
   if (rule.kind === 'dnat') {
-    const target = rule.dst_addr || '?';
-    const tport = rule.dst_port ? `:${rule.dst_port}` : '';
-    const port = rule.src_port || '';
-    return `port ${port}  →  ${target}${tport}`;
+    const srcIp = rule.src_addr && rule.src_addr !== 'any'
+      ? rule.src_addr.split(',')[0].trim()
+      : null;
+    const src = srcIp ? `${srcIp}:${rule.src_port}` : (rule.src_port || '');
+    const dst = rule.dst_addr || '?';
+    const dport = rule.dst_port ? `:${rule.dst_port}` : '';
+    return `${src}  →  ${dst}${dport}`;
   }
   if (rule.kind === 'binat') {
     return `${rule.src_addr}  ↔  ${rule.dst_addr || '?'}`;
@@ -292,12 +295,12 @@ onMounted(() => {
         <thead>
           <tr>
             <th>#</th>
-            <th>{{ t('common.enabled') }}</th>
+            <th>{{ t('common.description') }}</th>
             <th>{{ t('common.type') }}</th>
             <th>{{ t('firewall.protocol') }}</th>
             <th>{{ t('firewall.interface') }}</th>
-            <th>{{ t('firewall.natFamily') }}</th>
-            <th>{{ t('common.description') }}</th>
+            <th>{{ t('firewall.natForwarding') }}</th>
+            <th>{{ t('common.enabled') }}</th>
             <th>{{ t('common.actions') }}</th>
           </tr>
         </thead>
@@ -310,17 +313,15 @@ onMounted(() => {
           </tr>
           <tr v-for="(rule, idx) in rules" :key="rule.id" :class="{ 'row-disabled': !rule.enabled }">
             <td class="mono">{{ idx + 1 }}</td>
+            <td><div class="cell-wrap">{{ rule.description || '\u2014' }}</div></td>
+            <td><span :class="['badge', rule.kind === 'snat' ? 'badge-dim' : rule.kind === 'dnat' ? 'badge-success' : 'badge-warn']">{{ kindLabel(rule.kind) }}</span></td>
+            <td>{{ protoLabel(rule.protocol) }}<span class="text-dim"> · {{ rule.family === 'ip' ? 'IPv4' : 'IPv6' }}</span></td>
+            <td class="mono">{{ rule.interface }}</td>
+            <td class="mono">{{ ruleSummary(rule) }}</td>
             <td>
               <span :class="['badge', rule.enabled ? 'badge-success' : 'badge-muted']" @click="doToggleRule(rule)" style="cursor:pointer;">
                 {{ rule.enabled ? t('common.enabled') : t('common.disabled') }}
               </span>
-            </td>
-            <td><span :class="['badge', rule.kind === 'snat' ? 'badge-dim' : rule.kind === 'dnat' ? 'badge-success' : 'badge-warn']">{{ kindLabel(rule.kind) }}</span></td>
-            <td>{{ protoLabel(rule.protocol) }}</td>
-            <td class="mono">{{ rule.interface }}</td>
-            <td>{{ rule.family === 'ip' ? 'IPv4' : 'IPv6' }}</td>
-            <td>
-              <div class="cell-wrap"><span v-if="rule.description">{{ rule.description }}</span><span v-else class="text-dim mono">{{ ruleSummary(rule) }}</span></div>
             </td>
             <td>
               <div class="btn-group">
