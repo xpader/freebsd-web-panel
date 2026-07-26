@@ -88,7 +88,7 @@ export const MENU = [
         icon: 'fa-solid fa-share-nodes',
         children: [
           { path: '/shares/smb', labelKey: 'nav.smbShares', icon: 'fa-solid fa-folder-tree' },
-          { path: '/shares/smb/users', labelKey: 'nav.smbUsers', icon: 'fa-solid fa-user-key' },
+          { path: '/shares/smb/users', labelKey: 'nav.smbUsers', icon: 'fa-solid fa-user-lock' },
           { path: '/shares/smb/settings', labelKey: 'nav.smbSettings', icon: 'fa-solid fa-gear' },
         ],
       },

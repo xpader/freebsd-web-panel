@@ -43,7 +43,7 @@ async function addUser() {
     t('smb.addUser'),
     [
       { key: 'username', label: t('common.name'), type: 'select', options: userOptions, required: true },
-      { key: 'password', label: t('common.password'), type: 'password', required: true },
+      { key: 'password', label: t('auth.password'), type: 'password', inputType: 'password', required: true, help: t('smb.passwordHint') },
     ],
     { submitLabel: t('common.create') },
   );
@@ -62,7 +62,7 @@ async function changePassword(user) {
   const result = await formModal(
     t('smb.changePassword', { name: user.username }),
     [
-      { key: 'password', label: t('common.password'), type: 'password', required: true },
+      { key: 'password', label: t('auth.password'), type: 'password', inputType: 'password', required: true, help: t('smb.passwordHint') },
     ],
     { submitLabel: t('common.save') },
   );

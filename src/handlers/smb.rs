@@ -41,6 +41,24 @@ pub struct SmbStatus {
     pub version: Option<String>,
 }
 
+/// Check if Samba is running by reading pid files and verifying the processes exist.
+fn is_samba_running() -> bool {
+    for name in ["smbd", "nmbd"] {
+        let pid_str = match std::fs::read_to_string(format!("/var/run/samba4/{name}.pid")) {
+            Ok(s) => s.trim().to_string(),
+            Err(_) => return false,
+        };
+        let pid: i32 = match pid_str.parse() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        if pid <= 0 || unsafe { libc::kill(pid, 0) } != 0 {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn check_status() -> SmbStatus {
     let installed = Path::new(SAMBA_SMBD).exists();
     let rc = crate::sysrc::read_rcconf_files();
@@ -49,8 +67,7 @@ pub fn check_status() -> SmbStatus {
         .map(|v| v == "YES")
         .unwrap_or(false);
     let initialized = Path::new(SAMBA_CONF).exists();
-    let service_running =
-        installed && cmd::status_sync(SERVICE, &[RC_NAME, "status"]);
+    let service_running = installed && is_samba_running();
     let version = if installed {
         cmd::run_sync(SAMBA_SMBD, &["--version"])
             .ok()
@@ -91,7 +108,7 @@ pub async fn init(
     let st = tokio::task::spawn_blocking(check_status)
         .await
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
-    if st.installed && st.enabled && st.initialized {
+    if st.installed && st.initialized {
         return Err(ApiError::Conflict("Samba already initialized".into()));
     }
 
@@ -867,18 +884,16 @@ pub async fn change_password(
 // ── Service control ─────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct ServiceActionReq {
-    #[serde(default)]
-    pub enable: Option<bool>,
-}
+pub struct ServiceActionReq {}
 
 /// POST /api/smb/service/{action}
 /// action: start | stop | restart | reload
+/// start also sets samba_server_enable=YES, stop also sets samba_server_enable=NO.
 pub async fn service_control(
     State(state): State<AppState>,
     user: AuthUser,
     AxumPath(action): AxumPath<String>,
-    Json(req): Json<ServiceActionReq>,
+    Json(_req): Json<ServiceActionReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     ensure_initialized()?;
     let action = action.to_lowercase();
@@ -888,18 +903,28 @@ pub async fn service_control(
     }
 
     let act = action.clone();
-    let enable = req.enable;
     let username = user.username.clone();
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        if let Some(en) = enable {
-            crate::sysrc::set(
-                "samba_server_enable",
-                if en { "YES" } else { "NO" },
-            )
-            .map_err(ApiError::Command)?;
+        let was_enabled = crate::sysrc::is_yes("samba_server_enable");
+        if act == "start" {
+            crate::sysrc::set("samba_server_enable", "YES")
+                .map_err(ApiError::Command)?;
         }
-        if act != "reload" || cmd::status_sync(SERVICE, &[RC_NAME, "status"]) {
-            cmd::run_sync(SERVICE, &[RC_NAME, &act])?;
+        if act != "reload" || is_samba_running() {
+            let svc_act = if act == "stop" && !was_enabled { "onestop" } else { &act };
+            cmd::run_sync(SERVICE, &[RC_NAME, svc_act])?;
+        }
+        if act == "stop" {
+            crate::sysrc::set("samba_server_enable", "NO")
+                .map_err(ApiError::Command)?;
+        }
+        // Verify the service reached the expected state
+        let running = is_samba_running();
+        if act == "start" && !running {
+            return Err(ApiError::Command("service did not start".into()));
+        }
+        if act == "stop" && running {
+            return Err(ApiError::Command("service did not stop".into()));
         }
         Ok(())
     })

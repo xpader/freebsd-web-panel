@@ -3,12 +3,14 @@ import { ref, reactive, nextTick, watch, onUnmounted } from 'vue';
 import { ui } from '../../stores/ui.js';
 import { useI18n } from 'vue-i18n';
 import FieldHelp from './FieldHelp.vue';
+import FilePicker from './FilePicker.vue';
 const { t } = useI18n();
 
 const firstInput = ref(null);
 const submitting = ref(false);
 const radioState = reactive({});
 const formValues = reactive({});
+const pickerField = ref(null);
 
 // Generic form-state reset when a form dialog opens.
 watch(() => ui.dialog, (d) => {
@@ -18,6 +20,11 @@ watch(() => ui.dialog, (d) => {
   for (const f of (d.fields || [])) {
     formValues[f.key] = f.value ?? '';
     if (f.type === 'radio') radioState[f.key] = f.value ?? f.options?.[0]?.value ?? '';
+    if (f.type === 'checkbox-group') {
+      for (const opt of (f.options || [])) {
+        formValues[opt.key] = opt.value ?? false;
+      }
+    }
   }
   nextTick(() => {
     if (firstInput.value) firstInput.value.focus();
@@ -207,6 +214,18 @@ function groupedFields(d) {
                   <span>{{ opt.label }}</span>
                 </label>
               </div>
+              <!-- checkbox-group (pill style, multiple) -->
+              <div v-else-if="f.type === 'checkbox-group'" class="radio-pill-group">
+                <label
+                  v-for="opt in f.options"
+                  :key="opt.key"
+                  class="radio-pill"
+                  :class="{ active: formValues[opt.key] }"
+                >
+                  <input type="checkbox" v-model="formValues[opt.key]" />
+                  <span>{{ opt.label }}</span>
+                </label>
+              </div>
               <!-- select -->
               <select v-else-if="f.type === 'select'" :id="'field-' + f.key" v-model="formValues[f.key]" :required="isFieldRequired(f)">
                 <option value="" v-if="!f.required">{{ t('common.pleaseSelect') }}</option>
@@ -220,6 +239,16 @@ function groupedFields(d) {
               <!-- textarea -->
               <textarea v-else-if="f.type === 'textarea'" :id="'field-' + f.key" v-model="formValues[f.key]"
                 :placeholder="f.placeholder || ''" :required="isFieldRequired(f)" rows="3"></textarea>
+              <!-- path picker -->
+              <div v-else-if="f.picker" class="input-with-btn">
+                <input :id="'field-' + f.key" v-model="formValues[f.key]"
+                  :type="f.inputType || 'text'"
+                  :placeholder="f.placeholder || ''"
+                  :required="isFieldRequired(f)" />
+                <button type="button" class="btn-secondary btn-sm fp-trigger" @click="pickerField = f.key">
+                  <i class="fa-solid fa-folder-open"></i>
+                </button>
+              </div>
               <!-- text input -->
               <input v-else :id="'field-' + f.key" v-model.trim="formValues[f.key]"
                 :type="f.inputType || 'text'"
@@ -237,6 +266,13 @@ function groupedFields(d) {
       </form>
     </div>
   </div>
+  <FilePicker
+    v-if="pickerField"
+    :mode="(ui.dialog.fields.find(f => f.key === pickerField)?.picker) || 'dir'"
+    :initial-path="formValues[pickerField] || '/'"
+    @select="(p) => { formValues[pickerField] = p; pickerField = null; }"
+    @close="pickerField = null"
+  />
 </template>
 
 <style scoped>

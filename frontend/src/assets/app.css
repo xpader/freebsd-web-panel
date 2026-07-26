@@ -625,6 +625,7 @@ tr.row-clickable { cursor: pointer; }
   max-width: 720px;
 }
 .modal h3 { margin-bottom: 16px; }
+.card > h3:first-child { margin-bottom: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .code-dialog-content {
   background: var(--bg-elev2);

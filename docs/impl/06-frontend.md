@@ -106,9 +106,88 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - `useToast().toast(message, type)` — 显示通知
 - `useConfirm()(title, message, options)` → `Promise<boolean | {confirmed, ...}>`
 - `useAlert()(title, message)` → `Promise<void>`
-- `useFormModal()(title, fields, submitLabel)` → `Promise<Object | null>`
+- `useFormModal()(title, fields, opts)` → `Promise<Object | null>`
+- `useCodePreview()(title, content)` → `Promise<void>`
+- `useCountdown()(title, message, expiresAt, timeoutSeconds, opts)` → `Promise<'confirm' | 'rollback'>`
 
 对话框通过 `stores/ui.js` 的响应式状态驱动 `DialogHost.vue` 组件渲染。
+
+#### 对话框类型
+
+| 类型 | 渲染 | 说明 |
+|---|---|---|
+| `toast` | ToastContainer | 右下角通知，自动消失 |
+| `confirm` | modal | 确认对话框，可选 checkbox 选项 |
+| `alert` | modal | 警告对话框，仅一个 OK 按钮 |
+| `form` | modal-wide | 表单对话框，支持多种字段类型 |
+| `code` | modal | 代码/文本预览（等宽字体） |
+| `countdown` | modal | 带倒计时进度条的确认/回滚对话框（防火墙 apply 用） |
+
+#### form 字段 schema
+
+`useFormModal()(title, fields, opts)` 的 `fields` 数组中每个字段对象支持以下属性：
+
+| 属性 | 类型 | 说明 |
+|---|---|---|
+| `key` | string | 字段标识，结果对象中的键名 |
+| `label` | string | 字段标题 |
+| `type` | string | `text`（默认）、`password`、`select`、`radio`、`checkbox`、`checkbox-group`、`textarea` |
+| `value` | any | 初始值 |
+| `inputType` | string | 当 type 为通用 input 时，设置 `<input type>`（如 `password`） |
+| `placeholder` | string | 占位提示 |
+| `required` | bool | 是否必填 |
+| `disabled` | bool | 是否禁用 |
+| `help` | string | Tooltip 文本（渲染 FieldHelp 图标） |
+| `half` | bool | 半宽字段，与相邻 `half` 字段两两并排 |
+| `row` | number/string | 将同 `row` 值的 `half` 字段强制放入同一行 |
+| `showIf` | `{key: val}` | 条件显示：当另一字段等于 `val`（或数组中任一值）时显示 |
+| `requiredIf` | `{key: val}` | 条件必填 |
+| `options` | array | `select`/`radio`：`{value, label}`；`checkbox-group`：`{key, label, value}` |
+| `picker` | `'dir'`/`'file'` | 路径选择器：渲染 `.input-with-btn` + `FilePicker` 组件 |
+
+`opts` 支持 `submitLabel`（提交按钮文字）和 `submitHandler`（异步提交函数，抛错时内联显示错误不关闭对话框）。
+
+#### 字段类型渲染细节
+
+- **`radio`** — pill 样式横排，选中高亮
+- **`checkbox`** — 带描述文字的确认选项样式
+- **`checkbox-group`** — 多个 pill 样式 checkbox 内联排列，共用 `label` 作为组标题，每个 option 的值直接写入 `formValues[opt.key]`
+- **`select`** — 下拉框
+- **`textarea`** — 多行文本
+- **`picker`** — 输入框 + 文件夹按钮，点击打开 `FilePicker` 弹窗选择路径
+- **`half` + `row` 布局** — `groupedFields()` 将连续 `half` 字段两两配对为 flex 行；同 `row` 值的字段强制同组
+
+#### 示例
+
+```js
+// 两栏布局 + 路径选择器 + pill 多选组
+const result = await formModal('创建共享', [
+  { key: 'name', label: '名称', required: true },
+  { key: 'path', label: '路径', required: true, picker: 'dir' },
+  { key: 'create_mask', label: '文件掩码', value: '0664', half: true },
+  { key: 'directory_mask', label: '目录掩码', value: '0775', half: true },
+  {
+    key: '_flags', label: '选项', type: 'checkbox-group',
+    options: [
+      { key: 'browseable', label: '可浏览', value: true },
+      { key: 'writable', label: '可写', value: false },
+    ],
+  },
+  { key: 'valid_users', label: '授权用户', help: '空格分隔的用户名' },
+]);
+
+// 异步提交 + 内联错误
+const result = await formModal('添加仓库', fields, {
+  submitLabel: '创建',
+  submitHandler: async (values) => {
+    await api.post('/api/repos', values);  // 抛错时对话框不关闭
+  },
+});
+```
+
+#### 参考页面
+
+`DialogDemoPage.vue`（路由 `/dialog-demo`，仅开发模式）提供所有字段类型和交互模式的可交互演示。
 
 ### 导航 `src/lib/menu.js` + `components/layout/`
 

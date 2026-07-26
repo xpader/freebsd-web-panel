@@ -21,7 +21,7 @@ const smbStatus = ref(null);
 const needsInit = computed(() => {
   if (!smbStatus.value) return false;
   const s = smbStatus.value;
-  return !s.installed || !s.enabled || !s.initialized;
+  return !s.installed || !s.initialized;
 });
 
 const initMessages = computed(() => {
@@ -29,7 +29,6 @@ const initMessages = computed(() => {
   const s = smbStatus.value;
   const msgs = [];
   if (!s.installed) msgs.push(t('smb.initMissingPkg'));
-  if (!s.enabled) msgs.push(t('smb.initMissingEnable'));
   if (!s.initialized) msgs.push(t('smb.initMissingConf'));
   return msgs;
 });
@@ -59,13 +58,18 @@ async function showForm(existing = null) {
     [
       { key: 'name', label: t('common.name'), value: existing?.name || '', required: true, disabled: isEdit },
       { key: 'comment', label: t('common.description'), value: existing?.comment || '' },
-      { key: 'path', label: t('smb.path'), value: existing?.path || '', placeholder: '/zroot/data/share', required: true },
-      { key: 'browseable', label: t('smb.browseable'), type: 'checkbox', value: existing?.browseable ?? true },
-      { key: 'writable', label: t('smb.writable'), type: 'checkbox', value: existing?.writable ?? false },
-      { key: 'guest_ok', label: t('smb.guestOk'), type: 'checkbox', value: existing?.guest_ok ?? false },
-      { key: 'valid_users', label: t('smb.validUsers'), value: (existing?.valid_users || []).join(' '), placeholder: 'alice bob' },
-      { key: 'create_mask', label: t('smb.createMask'), value: existing?.create_mask || '0664' },
-      { key: 'directory_mask', label: t('smb.directoryMask'), value: existing?.directory_mask || '0775' },
+      { key: 'path', label: t('smb.path'), value: existing?.path || '', placeholder: '/zroot/data/share', required: true, picker: 'dir' },
+      { key: 'create_mask', label: t('smb.createMask'), value: existing?.create_mask || '0664', half: true },
+      { key: 'directory_mask', label: t('smb.directoryMask'), value: existing?.directory_mask || '0775', half: true },
+      {
+        key: '_flags', label: t('common.options'), type: 'checkbox-group',
+        options: [
+          { key: 'browseable', label: t('smb.browseable'), value: existing?.browseable ?? true },
+          { key: 'writable', label: t('smb.writable'), value: existing?.writable ?? false },
+          { key: 'guest_ok', label: t('smb.guestOk'), value: existing?.guest_ok ?? false },
+        ],
+      },
+      { key: 'valid_users', label: t('smb.validUsers'), value: (existing?.valid_users || []).join(' '), placeholder: 'alice bob', help: t('smb.validUsersHint') },
     ],
     { submitLabel: isEdit ? t('common.save') : t('common.create') },
   );

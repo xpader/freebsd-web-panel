@@ -2,9 +2,9 @@
 
 ## 概述
 
-SMB 模块在“文件系统 → 文件共享”下提供 Samba 服务的初始化、运行状态与开机自启控制、共享目录 CRUD、Samba 用户管理和全局配置管理。
+SMB 模块在"文件系统 → 文件共享"下提供 Samba 服务的初始化、运行状态控制、共享目录 CRUD、Samba 用户管理和全局配置管理。
 
-FreeBSD base system 不提供现代 SMB 服务器。模块以 `samba416` pkg 为外部依赖，采用与 Bhyve 一致的“状态检测 → 初始化引导 → 流式后台任务”流程。面板不创建系统账户：Samba 用户必须是已有系统用户，模块只通过 `smbpasswd` 写入 Samba 密码数据库。
+FreeBSD base system 不提供现代 SMB 服务器。模块以 `samba416` pkg 为外部依赖，采用与 Bhyve 一致的"状态检测 → 初始化引导 → 流式后台任务"流程。面板不创建系统账户：Samba 用户必须是已有系统用户，模块只通过 `smbpasswd` 写入 Samba 密码数据库。
 
 ## 实现细节
 
@@ -25,10 +25,12 @@ pub struct SmbStatus {
 - `installed`：`/usr/local/sbin/smbd` 是否存在。
 - `enabled`：`rc.conf` 的 `samba_server_enable` 是否为 `YES`。
 - `initialized`：`/usr/local/etc/smb4.conf` 是否存在。
-- `service_running`：`service samba_server status` 是否成功。
+- `service_running`：读取 `/var/run/samba4/smbd.pid` 和 `nmbd.pid`，用 `kill(pid, 0)` 验证进程是否存在。不依赖 `service samba_server status`（rc.d 在 `enable=NO` 时会跳过 status 检查）。
 - `version`：解析 `smbd --version` 的版本号。
 
-前端共享列表先请求状态。只要未安装、未启用或缺少配置文件，便显示初始化引导，不请求共享列表。`SmbInitPage.vue` 调用初始化接口后，通过统一的 `/api/tasks/{id}/stream` SSE 端点显示输出。
+前端共享列表先请求状态。只要未安装或缺少配置文件（`!installed || !initialized`），便显示初始化引导，不请求共享列表。`enabled` 状态不再影响初始化判定——因为 start/stop 会同时切换 `samba_server_enable`，停止服务不应被视为"未初始化"。
+
+`SmbInitPage.vue` 调用初始化接口后，通过统一的 `/api/tasks/{id}/stream` SSE 端点显示输出。
 
 初始化后台任务 `run_init_streaming()` 依序执行：
 
@@ -37,6 +39,17 @@ pub struct SmbStatus {
 3. 生成默认 `/usr/local/etc/smb4.conf`，启动 `samba_server`。
 
 任务结果通过 `bgtask` 保存和推送，完成后写入审计日志。
+
+### 服务控制
+
+`POST /api/smb/service/{action}` 的 start 和 stop 操作与防火墙一致，同时管理 rc.conf 和运行状态：
+
+- **start**：先 `sysrc samba_server_enable=YES`，再 `service samba_server start`。
+- **stop**：先检查 `samba_server_enable` 当前值。如果为 `YES`，用 `service samba_server stop`；如果已为 `NO`（rc.d 会跳过 stop），改用 `service samba_server onestop` 强制停止。停止成功后再 `sysrc samba_server_enable=NO`。
+- **restart**：只执行 `service samba_server restart`，不改 rc.conf。
+- **reload**：如果服务正在运行，执行 `service samba_server reload`。
+
+start/stop 操作后通过 `is_samba_running()` 验证服务确实到达了目标状态，未达预期时返回错误。
 
 ### smb4.conf 管理
 
@@ -86,9 +99,13 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 | `/shares/smb/users` | `SmbUsersPage.vue` | Samba 用户和密码管理 |
 | `/shares/smb/settings` | `SmbSettingsPage.vue` | 全局配置 |
 
-`SmbStatusBar.vue` 封装 SMB 专有状态业务，并复用通用 `StatusBar.vue` 布局。它显示运行状态、Samba 版本和开机自启状态，提供启动、停止、重启和开机自启切换操作。共享列表页和设置页都复用该组件，组件操作完成后通过 `refresh` 事件要求父页面重新读取状态。
+`SmbStatusBar.vue` 封装 SMB 专有状态业务，并复用通用 `StatusBar.vue` 布局。它显示运行状态和 Samba 版本，提供启动、停止和重启操作。共享列表页和设置页都复用该组件，组件操作完成后通过 `refresh` 事件要求父页面重新读取状态。
 
-菜单定义在 `frontend/src/lib/menu.js`，位于文件系统组：SMB 共享、SMB 用户和 SMB 设置。
+共享创建/编辑弹窗使用 `formModal` 的 `half: true` 实现两栏布局，路径字段通过 `picker: 'dir'` 接入目录选择器（`FilePicker.vue`）。三个布尔选项（可浏览/可写/允许访客）使用 `checkbox-group` 类型以 pill 风格内联排列。
+
+设置页采用 `form-row`（`180px 1fr` 网格）布局，与 Jail/Bhyve 编辑页一致。
+
+菜单定义在 `frontend/src/lib/menu.js`，位于文件系统组：SMB 共享（`fa-folder-tree`）、SMB 用户（`fa-user-lock`）和 SMB 设置（`fa-gear`）。
 
 ## API
 
@@ -109,7 +126,7 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 | POST | `/api/smb/users` | 为已有系统用户设置 Samba 密码 |
 | PUT | `/api/smb/users/{name}/password` | 更新 Samba 密码 |
 | DELETE | `/api/smb/users/{name}` | 删除 Samba 用户数据库记录 |
-| POST | `/api/smb/service/{action}` | `start`、`stop`、`restart` 或 `reload` 服务；可含 `enable` 字段切换开机自启 |
+| POST | `/api/smb/service/{action}` | `start`（同时 enable）、`stop`（同时 disable）、`restart` 或 `reload` 服务 |
 
 创建共享请求示例：
 
@@ -143,8 +160,9 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 | `samba416` | 提供 `smbd`、`pdbedit`、`smbpasswd` 和 `samba_server` rc.d 脚本 |
 | `/usr/sbin/pkg` | 初始化时安装 Samba |
 | `/usr/sbin/sysrc` | 管理 `samba_server_enable` |
-| `/usr/sbin/service` | 管理 `samba_server` |
+| `/usr/sbin/service` | 管理 `samba_server`（含 `onestop` 强制停止） |
 | `bgtask.rs` | 初始化任务的后台执行与 SSE 输出 |
+| `libc` (`kill(pid, 0)`) | 检测 smbd/nmbd 进程是否存活 |
 
 ## 配置项
 
@@ -153,7 +171,8 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 | 文件或变量 | 用途 |
 |---|---|
 | `/usr/local/etc/smb4.conf` | Samba 全局和共享配置 |
-| `samba_server_enable` | Samba 开机自启开关 |
+| `samba_server_enable` | Samba 开机自启开关（start/stop 联动） |
+| `/var/run/samba4/smbd.pid`, `nmbd.pid` | 进程状态检测 |
 | `/var/db/samba4/` | Samba 密码数据库等运行数据，由 Samba 管理 |
 
 ## 已知限制 / TODO

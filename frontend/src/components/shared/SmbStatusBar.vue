@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../../lib/api.js';
 import { useToast, useAlert } from '../../composables/useDialog.js';
@@ -23,31 +23,21 @@ const items = computed(() => {
   return [
     { title: t('common.status'), value: serviceRunning.value ? t('common.running') : t('common.stopped'), type: 'badge', status: serviceRunning.value ? 'ok' : 'inactive' },
     ...(props.status.version ? [{ title: t('smb.version'), value: `Samba ${props.status.version}` }] : []),
-    { title: t('smb.autoStart'), value: props.status.enabled ? t('common.yes') : t('common.no'), type: 'badge', status: props.status.enabled ? 'ok' : 'inactive' },
   ].filter(Boolean);
 });
+
+const actionLabels = { start: 'common.start', stop: 'common.stop', restart: 'common.restart' };
 
 async function serviceAction(action) {
   pendingAction.value = action;
   try {
     await api.post(`/api/smb/service/${action}`, {});
-    toast.toast(t('smb.serviceActionDone', { action }));
+    toast.toast(t('smb.serviceActionDone', { action: t(actionLabels[action] || action) }));
     emit('refresh');
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   } finally {
     pendingAction.value = '';
-  }
-}
-
-async function toggleEnable() {
-  const enable = !props.status?.enabled;
-  try {
-    await api.post('/api/smb/service/reload', { enable });
-    toast.toast(enable ? t('smb.serviceEnabled') : t('smb.serviceDisabled'));
-    emit('refresh');
-  } catch (e) {
-    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 }
 </script>
@@ -63,10 +53,6 @@ async function toggleEnable() {
       </button>
       <button class="btn-sm btn-secondary" :disabled="pendingAction" @click="serviceAction('restart')">
         <i class="fa-solid fa-rotate-right"></i> {{ t('common.restart') }}
-      </button>
-      <button class="btn-sm" :class="status?.enabled ? 'btn-secondary' : ''" @click="toggleEnable">
-        <i :class="status?.enabled ? 'fa-regular fa-square-check' : 'fa-regular fa-square'"></i>
-        {{ t('smb.autoStart') }}
       </button>
     </template>
   </StatusBar>

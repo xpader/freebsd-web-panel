@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
 import SmbStatusBar from '../components/shared/SmbStatusBar.vue';
+import FieldHelp from '../components/ui/FieldHelp.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -72,33 +73,31 @@ onMounted(load);
 
     <div class="card">
       <h3>{{ t('smb.globalConfig') }}</h3>
-      <div class="form-grid">
-        <div class="field">
-          <label>{{ t('smb.workgroup') }}</label>
-          <input v-model="config.workgroup" />
-        </div>
-        <div class="field">
-          <label>{{ t('smb.serverString') }}</label>
-          <input v-model="config.server_string" />
-        </div>
-        <div class="field">
-          <label>{{ t('smb.minProtocol') }}</label>
-          <select v-model="config.server_min_protocol">
-            <option v-for="o in protocolOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>{{ t('smb.mapToGuest') }}</label>
-          <select v-model="config.map_to_guest">
-            <option v-for="o in guestOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>{{ t('smb.logLevel') }}</label>
-          <input type="number" v-model.number="config.log_level" min="0" max="10" />
-        </div>
+      <div class="form-row">
+        <label class="form-row-label">{{ t('smb.workgroup') }} <FieldHelp :text="t('smb.workgroupHint')" /></label>
+        <input v-model="config.workgroup" />
       </div>
-      <div class="btn-group" style="margin-top:16px;">
+      <div class="form-row">
+        <label class="form-row-label">{{ t('smb.serverString') }}</label>
+        <input v-model="config.server_string" />
+      </div>
+      <div class="form-row">
+        <label class="form-row-label">{{ t('smb.minProtocol') }}</label>
+        <select v-model="config.server_min_protocol">
+          <option v-for="o in protocolOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-row-label">{{ t('smb.mapToGuest') }} <FieldHelp :text="t('smb.mapToGuestHint')" /></label>
+        <select v-model="config.map_to_guest">
+          <option v-for="o in guestOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-row-label">{{ t('smb.logLevel') }} <FieldHelp :text="t('smb.logLevelHint')" /></label>
+        <input type="number" v-model.number="config.log_level" min="0" max="10" />
+      </div>
+      <div class="form-actions-bar">
         <button @click="saveConfig" :disabled="saving">
           <i class="fa-solid fa-floppy-disk"></i> {{ t('common.save') }}
         </button>

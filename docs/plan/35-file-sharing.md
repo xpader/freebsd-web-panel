@@ -82,7 +82,7 @@ pub struct SmbStatus {
     pub installed: bool,        // /usr/local/sbin/smbd 存在
     pub enabled: bool,          // rc.conf samba_server_enable == "YES"
     pub initialized: bool,      // /usr/local/etc/smb4.conf 存在（面板已初始化）
-    pub service_running: bool,  // service samba_server status 成功
+    pub service_running: bool,  // 读取 pid 文件 + kill(pid,0) 验证进程存在
     pub version: Option<String>, // smbd --version 解析
 }
 
@@ -91,8 +91,8 @@ pub fn check_status() -> SmbStatus {
     let rc = crate::sysrc::read_rcconf_files();
     let enabled = rc.get("samba_server_enable").map(|v| v == "YES").unwrap_or(false);
     let initialized = Path::new(SAMBA_CONF).exists();
-    // service_running: spawn `service samba_server status`，exit 0 = running
-    let service_running = crate::cmd::status_sync(SERVICE, &[RC_SERVICE_NAME, "status"]);
+    // service_running: 读取 /var/run/samba4/{smbd,nmbd}.pid + kill(pid,0)
+    let service_running = installed && is_samba_running();
     // version: smbd --version → "Version 4.16.x"
     let version = if installed {
         crate::cmd::run_sync(SAMBA_SMBD, &["--version"]).ok()
@@ -107,7 +107,7 @@ pub fn check_status() -> SmbStatus {
 **`needsInit` 判定逻辑**（前端计算，对标 Bhyve 的 `needsInit` computed）：
 
 ```
-needsInit = !installed || !enabled || !initialized
+needsInit = !installed || !initialized
 ```
 
 三个条件全部满足后才进入正常页面。所有数据查询 API（shares/users/config）在未初始化时返回 `ApiError::BadRequest("Samba not initialized")`，前端同时用 status 做双重防护。
@@ -126,7 +126,7 @@ needsInit = !installed || !enabled || !initialized
 pub async fn init(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Value>> {
     // 已初始化则拒绝
     let st = tokio::task::spawn_blocking(|| check_status()).await?;
-    if st.installed && st.enabled && st.initialized {
+    if st.installed && st.initialized {
         return Err(ApiError::Conflict("Samba already initialized"));
     }
 
@@ -434,7 +434,7 @@ cmd::run(SERVICE, &["samba_server", "reload"]).await?;
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/smb/service/{action}` | action: start / stop / restart / reload |
+| POST | `/api/smb/service/{action}` | start（同时 enable=YES）/ stop（同时 enable=NO）/ restart / reload |
 
 ## 6. 前端设计
 
@@ -485,7 +485,6 @@ const needsInit = computed(() => {
 const initMessages = computed(() => {
   const s = smbStatus.value; const msgs = [];
   if (!s.installed)   msgs.push(t('smb.initMissingPkg'));
-  if (!s.enabled)     msgs.push(t('smb.initMissingEnable'));
   if (!s.initialized) msgs.push(t('smb.initMissingConf'));
   return msgs;
 });
@@ -582,11 +581,11 @@ function finish(ok) {
 
 - 表单：workgroup、server_string、server_min_protocol（下拉：SMB2/SMB3）、map_to_guest、log_level
 - 保存按钮 → PUT config → reload 服务
-- 服务控制区：启动/停止/重启按钮 + 开机自启开关 + 服务状态指示灯
+- 服务控制区：启动/停止/重启按钮（Start 联动 enable=YES，Stop 联动 enable=NO）
 
 ### 6.5 i18n
 
-遵循项目翻译键命名规范：通用词复用 `common.*`，SMB 特有词新建 `nav.smbShares` / `nav.smbUsers` / `nav.smbSettings` 等。初始化相关键参考 Bhyve 的 `bhyve.init*` 模式：`smb.initRequired` / `smb.initMissingPkg` / `smb.initMissingEnable` / `smb.initMissingConf` / `smb.goInit` / `smb.initSuccess` / `smb.initFailed`。
+遵循项目翻译键命名规范：通用词复用 `common.*`，SMB 特有词新建 `nav.smbShares` / `nav.smbUsers` / `nav.smbSettings` 等。初始化相关键：`smb.initRequired` / `smb.initMissingPkg` / `smb.initMissingConf` / `smb.goInit` / `smb.initSuccess` / `smb.initFailed`。
 
 ## 7. smb4.conf 生成示例
 
