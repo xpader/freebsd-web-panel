@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, network, services, PF firewall, Jails, Bhyve VMs, ZFS, and more — all from a single self-contained binary with a built-in web UI.
+A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, network, services, SMB file sharing, firewalls, Jails, Bhyve VMs, ZFS, and more from a single self-contained binary with a built-in web UI.
 
 > Target platform: **FreeBSD 15.x amd64**. Runs as root.
 
@@ -21,17 +21,17 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 | **Network** | Interface details, routes, default gateway, DNS nameservers |
 | **System Accounts** | Browse FreeBSD users and groups |
 | **File Manager** | Browse, upload, download, rename, chmod, chown files |
+| **SMB File Sharing** | Initialize Samba, manage service state, shares, Samba users, and global configuration |
 | **ZFS** | Pool create/import/export/destroy, vdev add/attach/detach/replace, scrub, dataset CRUD, snapshots, rollback, clone |
 | **Jails** | Full lifecycle via native libjail FFI — **no third-party jail tools** (jail.conf parser + create/start/stop/delete, base image management) |
 | **Bhyve VMs** | Full VM lifecycle via vm-bhyve — create/start/stop/destroy, VNC console, serial console, disks, networks, ISOs, images, switches, datastores |
 | **Packages** | Search, install, remove (pkg), package details & file lists, repository management |
-| **File Manager** | Browse, upload, download, rename, chmod, chown files |
 | **Web Terminal** | WebSocket-based shell access directly in the browser |
 | **Users & Auth** | Built-in user system (Argon2id), session tokens, first-run bootstrap |
 | **Audit Log** | All write operations logged (who/when/what/result) |
 | **i18n** | Multi-language UI (English, Chinese) with runtime switching |
 
-> **Planned:** PF firewall editor.
+> SMB file sharing installs `samba416` during its guided initialization. It is an optional third-party dependency, not part of the FreeBSD base system.
 
 ## Tech Stack
 
@@ -48,6 +48,7 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 - Rust toolchain (1.74+)
 - Node.js & npm (for frontend build)
 - System tools: `sysctl`, `sysrc`, `ifconfig`, `zfs`, `zpool`, `pkg`, `service`, `vm` (vm-bhyve)
+- Optional SMB sharing: network access to install `samba416` during panel initialization
 
 ### Build
 
@@ -221,4 +222,10 @@ The server tries disk `web_root` first, then falls back to embedded assets — s
 
 ## Documentation
 
-- [Design plans](docs/plan/) — architecture and interface design for each mo
+- [Design plans](docs/plan/) — architecture and interface design for each module
+- [Implementation documents](docs/impl/) — actual implementation details, data structures, and APIs
+- [Roadmap](docs/plan/80-roadmap.md) — phased delivery plan
+
+## License
+
+[MIT](LICENSE) © 2026 Pader

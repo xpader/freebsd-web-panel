@@ -19,6 +19,7 @@
 | [22-pkg-repos.md](22-pkg-repos.md) | PKG 软件源配置管理设计（仓库 CRUD、UCL 配置、镜像模板、`pkg update` 后台任务） |
 | [18-firewall.md](18-firewall.md) | **防火墙设计（双驱动 ipfw/pf、驱动切换、结构化规则 CRUD、黑白名单模式、rc.conf 初始化）** |
 | [19-nat.md](19-nat.md) | **NAT 与端口转发设计（SNAT/DNAT、独立模型 + 嵌入式生成、复用 staging/apply/防锁死链路）** |
+| [35-file-sharing.md](35-file-sharing.md) | **SMB 文件共享设计（Samba 依赖检测、smb4.conf 解析/生成、共享 CRUD、Samba 用户管理、服务控制）** |
 
 ## 架构一图速览
 

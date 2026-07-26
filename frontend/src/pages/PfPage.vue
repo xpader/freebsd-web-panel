@@ -498,7 +498,7 @@ onUnmounted(() => clearInterval(pollTimer));
         <div class="flex" style="gap:6px;align-items:center;">
           <span class="text-dim" style="font-size:12px;">{{ t('common.status') }}</span>
           <span :class="['badge', status.enabled ? 'badge-success' : 'badge-warn']">
-            {{ status.enabled ? t('firewall.running') : t('firewall.stopped') }}
+            {{ status.enabled ? t('common.running') : t('common.stopped') }}
           </span>
         </div>
         <div class="flex" style="gap:6px;align-items:center;">

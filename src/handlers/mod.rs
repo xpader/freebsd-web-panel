@@ -13,6 +13,7 @@ pub mod network;
 pub mod pkg;
 pub mod rcconf;
 pub mod services;
+pub mod smb;
 pub mod sysctl;
 pub mod system;
 pub mod users;

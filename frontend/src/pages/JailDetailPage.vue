@@ -69,9 +69,9 @@ const tabItems = computed(() => {
 });
 
 function stateBadge(state) {
-  if (state === 'running') return { status: 'ok', text: t('jails.running') };
+  if (state === 'running') return { status: 'ok', text: t('common.running') };
   if (state === 'dying') return { status: 'warning', text: t('jails.dying') };
-  return { status: 'inactive', text: t('jails.stopped') };
+  return { status: 'inactive', text: t('common.stopped') };
 }
 
 function ipModeText(key) {

@@ -22,7 +22,7 @@ const countdown = useCountdown();
 const items = computed(() => [
   { title: t('firewall.driver'), value: props.status.driver },
   { title: t('firewall.mode'), value: props.status.mode === 'whitelist' ? t('firewall.whitelist') : t('firewall.blacklist') },
-  { title: t('common.status'), value: props.status.enabled ? t('firewall.running') : t('firewall.stopped'), type: 'badge', status: props.status.enabled ? 'ok' : 'inactive' },
+  { title: t('common.status'), value: props.status.enabled ? t('common.running') : t('common.stopped'), type: 'badge', status: props.status.enabled ? 'ok' : 'inactive' },
   { title: t('firewall.ruleCount'), value: props.status.rules_count },
   ...(props.status.pending_apply ? [{ title: t('firewall.pendingApply'), value: t('common.yes'), type: 'badge', status: 'warning' }] : []),
 ]);

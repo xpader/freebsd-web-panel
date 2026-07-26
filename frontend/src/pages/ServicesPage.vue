@@ -84,15 +84,15 @@ onMounted(load);
             <span v-else class="badge badge-dim">{{ t('common.disabled') }}</span>
           </td>
           <td>
-            <span v-if="s.running" class="badge badge-success">{{ t('svc.running') }}</span>
-            <span v-else-if="s.enabled" class="badge badge-warn">{{ t('svc.stopped') }}</span>
-            <span v-else class="badge badge-dim">{{ t('svc.stopped') }}</span>
+            <span v-if="s.running" class="badge badge-success">{{ t('common.running') }}</span>
+            <span v-else-if="s.enabled" class="badge badge-warn">{{ t('common.stopped') }}</span>
+            <span v-else class="badge badge-dim">{{ t('common.stopped') }}</span>
           </td>
           <td>
             <div class="btn-group">
-              <button class="btn-secondary btn-sm" :disabled="s.running" @click="action(s.name, 'start')">{{ t('svc.start') }}</button>
-              <button class="btn-secondary btn-sm" :disabled="!s.running" @click="action(s.name, 'stop')">{{ t('svc.stop') }}</button>
-              <button class="btn-secondary btn-sm" @click="action(s.name, 'restart')">{{ t('svc.restart') }}</button>
+              <button class="btn-secondary btn-sm" :disabled="s.running" @click="action(s.name, 'start')">{{ t('common.start') }}</button>
+              <button class="btn-secondary btn-sm" :disabled="!s.running" @click="action(s.name, 'stop')">{{ t('common.stop') }}</button>
+              <button class="btn-secondary btn-sm" @click="action(s.name, 'restart')">{{ t('common.restart') }}</button>
             </div>
           </td>
         </tr>

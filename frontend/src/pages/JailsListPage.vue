@@ -35,10 +35,10 @@ function formatIpStr(ip4, ip6) {
 }
 
 function stateBadge(state) {
-  if (state === 'running') return { cls: 'badge-success', text: t('jails.running') };
+  if (state === 'running') return { cls: 'badge-success', text: t('common.running') };
   if (state === 'starting') return { cls: 'badge-warn', text: t('jails.starting') };
   if (state === 'stopping') return { cls: 'badge-warn', text: t('jails.stopping') };
-  return { cls: 'badge-dim', text: t('jails.stopped') };
+  return { cls: 'badge-dim', text: t('common.stopped') };
 }
 
 async function load() {
@@ -144,7 +144,7 @@ onMounted(load);
   <div class="toolbar">
     <div class="filter-group">
       <button :class="['filter-btn', { active: jailTab === 'all' }]" @click="jailTab = 'all'; load()">{{ t('common.all') }}</button>
-      <button :class="['filter-btn', { active: jailTab === 'running' }]" @click="jailTab = 'running'; load()">{{ t('jails.running') }}</button>
+      <button :class="['filter-btn', { active: jailTab === 'running' }]" @click="jailTab = 'running'; load()">{{ t('common.running') }}</button>
     </div>
     <span class="text-dim">{{ t('jails.count', { n: allJails.length }) }}</span>
     <div class="flex">

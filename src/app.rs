@@ -195,6 +195,17 @@ pub fn build(state: AppState) -> Router {
         .route("/api/pkg/repos", get(handlers::pkg::list_repos).post(handlers::pkg::create_repo))
         .route("/api/pkg/repos/{name}", put(handlers::pkg::update_repo).delete(handlers::pkg::delete_repo))
         .route("/api/pkg/repos/update", post(handlers::pkg::repo_update))
+        // --- SMB (Samba file sharing) ---
+        .route("/api/smb/status", get(handlers::smb::status))
+        .route("/api/smb/init", post(handlers::smb::init))
+        .route("/api/smb/config", get(handlers::smb::get_config).put(handlers::smb::update_config))
+        .route("/api/smb/shares", get(handlers::smb::list_shares).post(handlers::smb::create_share))
+        .route("/api/smb/shares/{name}", put(handlers::smb::update_share).delete(handlers::smb::delete_share))
+        .route("/api/smb/users", get(handlers::smb::list_users).post(handlers::smb::create_user))
+        .route("/api/smb/sysusers", get(handlers::smb::list_sysusers))
+        .route("/api/smb/users/{name}", delete(handlers::smb::delete_user))
+        .route("/api/smb/users/{name}/password", put(handlers::smb::change_password))
+        .route("/api/smb/service/{action}", post(handlers::smb::service_control))
         .layer(from_fn_with_state(state.clone(), require_auth));
 
     // File upload sends raw bytes as the request body and can be large;

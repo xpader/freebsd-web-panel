@@ -104,6 +104,45 @@ pub async fn run_output(cmd: &str, args: &[&str]) -> ApiResult<Output> {
     .map_err(Into::into)
 }
 
+/// Run a command synchronously, passing data via stdin. Returns stdout on
+/// success.
+///
+/// **Context**: sync — call from inside a `spawn_blocking` closure.
+///
+/// Used for commands like `smbpasswd -a -s` that read passwords from stdin.
+/// Unlike [`run_sync`], this sets `stdin(Stdio::piped())`.
+pub fn run_sync_stdin(cmd: &str, args: &[&str], stdin_data: &[u8]) -> ApiResult<String> {
+    use std::io::Write;
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_data);
+    }
+    let output = child.wait_with_output()?;
+    output_ok(cmd, &output)
+}
+
+/// Run a command via `spawn_blocking`, returning stdout on success, with stdin.
+///
+/// **Context**: async — call directly from an `async fn` handler.
+///
+/// Async wrapper around [`run_sync_stdin`].
+#[allow(dead_code)]
+pub async fn run_stdin(cmd: &str, args: &[&str], stdin_data: Vec<u8>) -> ApiResult<String> {
+    let cmd = cmd.to_string();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        run_sync_stdin(&cmd, &arg_refs, &stdin_data)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+}
+
 // ── sync helpers (call from within spawn_blocking) ──────────────────
 
 /// Run a command synchronously, returning `Result<String, String>`.
