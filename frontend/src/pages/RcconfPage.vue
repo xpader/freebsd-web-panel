@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -82,7 +83,7 @@ onMounted(load);
     <p>{{ t('rcconf.subtitle') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="filter" class="filter-input" :placeholder="t('rcconf.filter')" />
+    <SearchInput v-model="filter" :placeholder="t('rcconf.filter')" />
     <span class="text-dim">{{ t('rcconf.count', { n: filtered.length }) }}</span>
     <div class="flex">
       <button @click="doAdd"><i class="fa-solid fa-plus"></i> {{ t('rcconf.add') }}</button>

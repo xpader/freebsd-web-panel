@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const allGroups = ref([]);
@@ -34,7 +35,7 @@ onMounted(async () => {
     <p>{{ t('accounts.groupsSubtitle') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="filter" class="filter-input" :placeholder="t('accounts.filterGroup')" />
+    <SearchInput v-model="filter" :placeholder="t('accounts.filterGroup')" />
     <span class="text-dim">{{ t('accounts.groupCount', { n: filtered.length }) }}</span>
   </div>
   <div class="card" style="padding:0;">

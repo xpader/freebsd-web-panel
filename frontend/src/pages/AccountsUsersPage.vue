@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const allUsers = ref([]);
@@ -32,7 +33,7 @@ onMounted(async () => {
     <p>{{ t('accounts.usersSubtitle') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="filter" class="filter-input" :placeholder="t('accounts.filterUser')" />
+    <SearchInput v-model="filter" :placeholder="t('accounts.filterUser')" />
     <span class="text-dim">{{ t('accounts.userCount', { n: filtered.length }) }}</span>
   </div>
   <div class="card" style="padding:0;">

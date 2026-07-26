@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useConfirm, useAlert } from '../composables/useDialog.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -196,7 +197,7 @@ onMounted(async () => {
     <p class="text-dim cron-note">{{ t('cron.backupNote') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="filter" class="filter-input" :placeholder="t('cron.filter')" />
+    <SearchInput v-model="filter" :placeholder="t('cron.filter')" />
     <span class="text-dim">{{ t('cron.count', { n: filtered.length }) }}</span>
     <div class="flex">
       <button @click="openAdd(null)"><i class="fa-solid fa-plus"></i> {{ t('cron.add') }}</button>

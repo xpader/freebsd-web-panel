@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -104,7 +105,7 @@ onMounted(load);
     <p>{{ t('sysctl.subtitle') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="search" class="filter-input" :placeholder="t('sysctl.filter')" @input="onSearch" />
+    <SearchInput v-model="search" :placeholder="t('sysctl.filter')" @update:model-value="onSearch" />
     <div class="filter-group">
       <button :class="['filter-btn', { active: modFilter === 'modified' }]" @click="setMod('modified')">{{ t('sysctl.modified') }}</button>
       <button :class="['filter-btn', { active: modFilter === 'all' }]" @click="setMod('all')">{{ t('common.all') }}</button>

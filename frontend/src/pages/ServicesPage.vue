@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -55,7 +56,7 @@ onMounted(load);
     <p>{{ t('svc.subtitle') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="filter" class="filter-input" :placeholder="t('svc.filter')" />
+    <SearchInput v-model="filter" :placeholder="t('svc.filter')" />
     <span class="text-dim">{{ t('svc.count', { n: filtered.length }) }}</span>
     <div class="flex">
       <button @click="load" :disabled="refreshing"><i :class="['fa-solid fa-rotate-right', { 'fa-spin': refreshing }]"></i> {{ t('common.refresh') }}</button>

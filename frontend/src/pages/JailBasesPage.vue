@@ -1,9 +1,10 @@
 <script setup>
-import { ref, reactive, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert, useConfirm } from '../composables/useDialog.js';
 import FilePicker from '../components/ui/FilePicker.vue';
+import TaskConsole from '../components/ui/TaskConsole.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -187,58 +188,26 @@ async function submitCreate() {
 
 // Task output modal (for download method)
 const showTask = ref(false);
-const taskOutput = ref('');
 const taskDone = ref(false);
-const taskSuccess = ref(false);
 const taskName = ref('');
-const consoleRef = ref(null);
-let taskEs = null;
+const activeTaskId = ref('');
 
 function showTaskModal(taskId, name) {
   taskName.value = name;
-  taskOutput.value = '';
   taskDone.value = false;
-  taskSuccess.value = false;
+  activeTaskId.value = taskId;
   showTask.value = true;
-
-  const token = sessionStorage.getItem('fwp_token');
-  const url = `/api/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
-  const es = new EventSource(url);
-  taskEs = es;
-
-  const finish = async (success) => {
-    es.close();
-    taskDone.value = true;
-    taskSuccess.value = success;
-    if (success) {
-      taskOutput.value += `\n[${t('common.done')}]\n`;
-      toast.toast(t('jails.baseCreated'));
-      await load();
-    } else {
-      await alert(t('common.operationFailed'), taskOutput.value.split('\n').filter(l => l).slice(-5).join('\n'));
-    }
-  };
-
-  es.onmessage = (ev) => {
-    try {
-      const data = JSON.parse(ev.data);
-      if (data.lines?.length) {
-        taskOutput.value += data.lines.join('\n') + '\n';
-        nextTick(() => { if (consoleRef.value) consoleRef.value.scrollTop = consoleRef.value.scrollHeight; });
-      }
-      if (data.status && data.status !== 'running') finish(data.status === 'done');
-    } catch {}
-  };
-  es.addEventListener('done', () => { es.close(); taskDone.value = true; });
-  es.onerror = () => {
-    es.close();
-    taskDone.value = true;
-  };
 }
 
-onUnmounted(() => {
-  if (taskEs) taskEs.close();
-});
+async function onTaskDone({ success, output }) {
+  taskDone.value = true;
+  if (success) {
+    toast.toast(t('jails.baseCreated'));
+    await load();
+  } else {
+    await alert(t('common.operationFailed'), output.split('\n').filter(l => l).slice(-5).join('\n'));
+  }
+}
 
 async function deleteBase(name) {
   if (!await confirm(t('common.delete'), t('jails.deleteBaseConfirm', { name }))) return;
@@ -497,10 +466,7 @@ onMounted(load);
         <span v-if="!taskDone" class="spinner"></span>
         {{ t('jails.baseDownloading', { name: taskName }) }}
       </h3>
-      <div
-        ref="consoleRef"
-        style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all;"
-      >{{ taskOutput }}</div>
+      <TaskConsole :task-id="activeTaskId" style="margin-bottom:12px;" @done="onTaskDone" />
       <div class="modal-actions">
         <button class="btn-secondary" :disabled="!taskDone" @click="showTask = false">{{ t('common.close') }}</button>
       </div>

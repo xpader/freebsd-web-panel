@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import TaskConsole from '../components/ui/TaskConsole.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -14,13 +15,11 @@ const initType = ref('zfs');
 const zfsDataset = ref('');
 const dirPath = ref('');
 const initializing = ref(false);
-const taskOutput = ref('');
 const taskDone = ref(false);
 const taskSuccess = ref(false);
 const error = ref('');
-const consoleRef = ref(null);
+const activeTaskId = ref('');
 const virtSupported = ref(true);
-let taskEs = null;
 
 const spec = computed(() => {
   if (initType.value === 'zfs') {
@@ -38,9 +37,7 @@ const canSubmit = computed(() => {
 
 function scrollToBottom() {
   nextTick(() => {
-    if (consoleRef.value) {
-      consoleRef.value.scrollTop = consoleRef.value.scrollHeight;
-    }
+    if (consoleRef.value) consoleRef.value.scrollTop = consoleRef.value.scrollHeight;
   });
 }
 
@@ -48,9 +45,9 @@ async function doInit() {
   if (!canSubmit.value) return;
   initializing.value = true;
   error.value = '';
-  taskOutput.value = '';
   taskDone.value = false;
   taskSuccess.value = false;
+  activeTaskId.value = '';
 
   let taskId;
   try {
@@ -63,49 +60,19 @@ async function doInit() {
     return;
   }
 
-  const token = sessionStorage.getItem('fwp_token');
-  const url = `/api/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
-  const es = new EventSource(url);
-  taskEs = es;
+  activeTaskId.value = taskId;
+}
 
-  const finish = async (success) => {
-    es.close();
-    taskDone.value = true;
-    taskSuccess.value = success;
-    initializing.value = false;
-    if (success) {
-      taskOutput.value += `\n[${t('common.done')}]\n`;
-      toast.toast(t('bhyve.initSuccess'));
-      setTimeout(() => router.push('/bhyve/vms'), 2000);
-    } else {
-      await alert(t('bhyve.initFailed'), taskOutput.value.split('\n').filter(l => l).slice(-5).join('\n'));
-    }
-  };
-
-  es.onmessage = (ev) => {
-    try {
-      const data = JSON.parse(ev.data);
-      if (data.lines && data.lines.length) {
-        taskOutput.value += data.lines.join('\n') + '\n';
-        scrollToBottom();
-      }
-      if (data.status && data.status !== 'running') {
-        finish(data.status === 'done');
-      }
-    } catch {}
-  };
-  es.addEventListener('done', () => { es.close(); taskDone.value = true; initializing.value = false; });
-  es.onerror = () => {
-    es.close();
-    api.get(`/api/tasks/${encodeURIComponent(taskId)}`).then((task) => {
-      if (task.status !== 'running') {
-        finish(task.status === 'done');
-      } else {
-        taskDone.value = true;
-        initializing.value = false;
-      }
-    }).catch(() => { taskDone.value = true; initializing.value = false; });
-  };
+async function onTaskDone({ success, output }) {
+  taskDone.value = true;
+  taskSuccess.value = success;
+  initializing.value = false;
+  if (success) {
+    toast.toast(t('bhyve.initSuccess'));
+    setTimeout(() => router.push('/bhyve/vms'), 2000);
+  } else {
+    await alert(t('bhyve.initFailed'), output.split('\n').filter(l => l).slice(-5).join('\n'));
+  }
 }
 
 onMounted(async () => {
@@ -113,10 +80,6 @@ onMounted(async () => {
     const s = await api.get('/api/bhyve/status');
     virtSupported.value = s.virt_supported;
   } catch {}
-});
-
-onUnmounted(() => {
-  if (taskEs) taskEs.close();
 });
 </script>
 
@@ -173,20 +136,17 @@ onUnmounted(() => {
       <p class="text-dim" style="font-size:12px;margin-top:4px;">{{ t('bhyve.initDirHint') }}</p>
     </div>
 
-    <div v-if="taskOutput || initializing" style="margin:16px 0;">
+    <div v-if="activeTaskId || initializing" style="margin:16px 0;">
       <div class="flex" style="align-items:center;gap:8px;margin-bottom:8px;">
         <span v-if="!taskDone" class="spinner"></span>
         <strong>{{ t('bhyve.initConsole') }}</strong>
         <span v-if="taskDone && taskSuccess" class="badge badge-success">{{ t('common.done') }}</span>
         <span v-else-if="taskDone && !taskSuccess" class="badge badge-error">{{ t('common.failed') }}</span>
       </div>
-      <div
-        ref="consoleRef"
-        style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all;"
-      >{{ taskOutput }}</div>
+      <TaskConsole :task-id="activeTaskId" @done="onTaskDone" />
     </div>
 
-    <div v-if="error && !taskOutput" class="alert-error" style="margin:16px 0;">
+    <div v-if="error && !activeTaskId" class="alert-error" style="margin:16px 0;">
       <strong>{{ t('common.operationFailed') }}</strong>: {{ error }}
     </div>
 
@@ -200,7 +160,7 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <div class="card" v-if="!taskOutput && !initializing">
+  <div class="card" v-if="!activeTaskId && !initializing">
     <h3>{{ t('bhyve.initWhatHappens') }}</h3>
     <ol style="margin:8px 0;padding-left:20px;line-height:1.8;">
       <li>{{ t('bhyve.initStep1') }}</li>

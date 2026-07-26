@@ -60,7 +60,9 @@ frontend/
     │   │   └── SideBar.vue     # 侧栏：菜单项（含可折叠子组）
     │   └── ui/
     │       ├── ToastContainer.vue  # Toast 渲染
-    │       └── DialogHost.vue       # confirm/alert/formModal 渲染
+    │       ├── DialogHost.vue       # confirm/alert/formModal 渲染
+    │       ├── SearchInput.vue     # 搜索输入框（v-model + 清除按钮）
+    │       └── TaskConsole.vue     # 后台任务输出（SSE 流式 + 自动滚动）
     └── pages/              # 各功能页面（35 个 .vue 文件）
 ```
 
@@ -209,6 +211,10 @@ const result = await formModal('添加仓库', fields, {
 - 从原项目 `web/css/app.css` 完整迁移，保持所有视觉效果不变
 - CSS 变量定义主题色；`:root { color-scheme: dark }` 声明深色主题
 - 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.main`）
+- 表格横向滚动：在 `.card` 内的 `<table>` 外包一层 `<div class="table-wrap">`，容器设置 `overflow-x: auto`，内部 `th`/`td` 默认 `white-space: nowrap`（不挤压、不换行），仅 `.cell-wrap` 列允许换行吸收空间。视口缩窄时出现横向滚动条而非挤压内容。
+- 按钮组：相邻的多个按钮包裹在 `<div class="btn-group">`（`display: flex; flex-wrap: nowrap`），防止换行且消除按钮间多余间距。
+- 搜索输入框：使用 `SearchInput.vue` 组件（`v-model` + `placeholder`），有内容时右侧显示清除按钮。底层由 `.search-input`（`position: relative`）+ `.search-clear` 定位实现。
+- 后台任务输出：使用 `TaskConsole.vue` 组件（prop: `task-id`，event: `done`），封装 SSE 连接管理、输出累积、自动滚动到底部、`[完成]` 后缀、错误回退轮询。PackagesPage、JailBasesPage、SmbInitPage、BhyveInitPage 共用。
 - Vite 将 CSS 打包到 `web/assets/*.css`
 
 ## 页面模块
@@ -234,7 +240,7 @@ const result = await formModal('添加仓库', fields, {
 | `AccountsUsers/GroupsPage.vue` | 系统用户/组 | 只读列表 + 搜索 |
 | `PfPage/BhyvePage.vue` | 占位页 | 使用 `_PlannedPage.vue` 工厂组件 |
 | `ZfsPools/PoolDetail/Datasets/SnapshotsPage.vue` | ZFS | Zpool/数据集/快照管理 |
-| `PackagesPage/PackageDetailPage.vue` | 软件包 | 列表/搜索/安装/删除/详情 |
+| `PackagesPage/PackageDetailPage.vue` | 软件包 | 列表/搜索/安装/删除/升级/清理/锁定/详情 |
 | `PkgReposPage.vue` | 软件源 | 仓库 CRUD + 预设 + `pkg update -f` SSE |
 | `JailsList/Create/Detail/BasesPage.vue` | Jail 容器 | 列表/创建/详情/基础系统 |
 

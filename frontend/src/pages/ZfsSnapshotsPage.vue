@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtBytes, fmtTime } from '../lib/format.js';
 import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
+import SearchInput from '../components/ui/SearchInput.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -102,7 +103,7 @@ onMounted(load);
     <p>{{ t('zfs.snapSubtitle') }}</p>
   </div>
   <div class="toolbar">
-    <input type="text" v-model="filter" class="search" :placeholder="t('zfs.snapFilter')" />
+    <SearchInput v-model="filter" :placeholder="t('zfs.snapFilter')" />
     <div class="flex">
       <button @click="createSnap"><i class="fa-solid fa-plus"></i> {{ t('zfs.snapCreate') }}</button>
       <button @click="load" :disabled="refreshing"><i :class="['fa-solid fa-rotate-right', { 'fa-spin': refreshing }]"></i> {{ t('common.refresh') }}</button>

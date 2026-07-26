@@ -2,7 +2,7 @@
 
 ## 概述
 
-查看系统中通过 `pkg` 安装的所有软件包，包括手动安装包（prime-list）、自动安装包（依赖），以及各个包的详细信息：描述、依赖关系（依赖于什么 / 被什么依赖）、文件列表。支持搜索远程仓库中的可用包，以及安装和删除操作。
+查看系统中通过 `pkg` 安装的所有软件包，包括手动安装包（prime-list）、自动安装包（依赖），以及各个包的详细信息：描述、依赖关系（依赖于什么 / 被什么依赖）、文件列表。支持搜索远程仓库中的可用包，以及安装、删除、升级、清理（autoremove）、锁定/解锁等维护操作。
 
 ## 设计决策
 
@@ -105,13 +105,14 @@ pkg rquery -g '%n\t%v\t%o\t%c\t%sh' '*{pattern}*'
 
 ### 前端
 
-`web/js/pages/pkg.js` — 四个功能模块：
+前端页面 `frontend/src/pages/`：
 
-1. **列表页** (`/pkg`)：filter-group 切换（全部/手动/自动）+ 本地筛选 + 表格。每行有删除按钮。工具栏的"安装"按钮打开搜索弹窗。
-2. **搜索弹窗**：输入关键词 → 350ms 防抖 → 调用 `/api/pkg/search` → 显示结果表格。已安装的包显示"已安装"标签，未安装的显示"安装"按钮。
-3. **任务输出弹窗**：安装/删除时弹出，monospace 输出区域实时滚动显示 `pkg` 的 stdout/stderr，自动跟随到底部。完成后启用关闭按钮并 toast 结果。
-4. **详情页** (`/pkg/{name}`)：三个 tab：
-   - **Info** — kv-table 展示基本信息 + 描述 + messages（底部）
+1. **列表页** (`PackagesPage.vue`, 路由 `/pkg`)：filter-group 切换（全部/手动/自动）+ 本地筛选（`SearchInput` 组件） + 表格。每行有升级、删除按钮。工具栏含清理（autoremove）、安装、刷新按钮。
+2. **搜索弹窗**：输入关键词 → 调用 `/api/pkg/search` → 显示结果表格。已安装的包显示"已安装"标签，未安装的显示"安装"按钮。
+3. **任务输出弹窗**：安装/删除/升级/清理时弹出，monospace 输出区域实时滚动显示 `pkg` 的 stdout/stderr，自动跟随到底部。完成后启用关闭按钮并 toast 结果。
+4. **任务输出弹窗**：安装/删除/升级/清理时弹出，使用 `TaskConsole.vue` 组件接收 SSE 流式输出并自动滚动到底部。完成后启用关闭按钮并 toast 结果。
+5. **详情页** (`PackageDetailPage.vue`, 路由 `/pkg/{name}`)：三个 tab：
+   - **Info** — kv-table 展示基本信息 + 描述 + messages（底部）+ 锁定/解锁按钮
    - **Dependencies** — 双栏：Depends On / Required By，点击包名可跳转
    - **Files** — 文件列表（延迟加载，切 tab 时才请求 API）
 
@@ -123,15 +124,46 @@ pkg rquery -g '%n\t%v\t%o\t%c\t%sh' '*{pattern}*'
 | GET | `/api/pkg/packages/{name}` | 包详情（含依赖 + 反向依赖 + messages） |
 | GET | `/api/pkg/packages/{name}/files` | 包文件列表 |
 | GET | `/api/pkg/search?q={pattern}` | 搜索远程仓库中的包（glob 子串匹配） |
+| POST | `/api/pkg/preview` | Dry-run 预览。body: `{"action": "install\|delete\|upgrade\|autoremove", "packages": [...]}` |
 | POST | `/api/pkg/install` | 安装包。body: `{"packages": ["vim"]}` → `{"task_id": "..."}` |
 | POST | `/api/pkg/delete` | 删除包。body: `{"packages": ["vim"], "recursive": false}` → `{"task_id": "..."}` |
-| GET | `/api/pkg/tasks/{id}` | 查询后台任务状态（轮询） |
+| POST | `/api/pkg/upgrade` | 升级指定包。body: `{"packages": ["vim"]}` → `{"task_id": "..."}` |
+| POST | `/api/pkg/autoremove` | 清理不再需要的自动安装包 → `{"task_id": "..."}` |
+| POST | `/api/pkg/lock` | 锁定包。body: `{"packages": ["vim"]}` |
+| POST | `/api/pkg/unlock` | 解锁包。body: `{"packages": ["vim"]}` |
 | GET | `/api/pkg/repos` | 列出所有仓库配置（按文件分组，合并系统+用户覆盖） |
 | POST | `/api/pkg/repos` | 添加单个仓库到指定文件 |
 | POST | `/api/pkg/repos/apply_mirror` | 批量应用镜像预设（多仓库 + 禁用官方仓库） |
 | PUT | `/api/pkg/repos/{name}` | 更新仓库（body 含 `file` 定位，支持改名） |
 | DELETE | `/api/pkg/repos/{name}?file=` | 删除仓库（仅允许用户目录） |
 | POST | `/api/pkg/repos/update` | 执行 `pkg update -f` 刷新目录索引 |
+
+## 维护操作
+
+### 预览（Dry-run）
+
+`POST /api/pkg/preview` 根据 `action` 分发到不同的 `pkg -n` 命令：
+
+| action | 命令 | 说明 |
+|--------|------|------|
+| `install` | `pkg install -n {packages}` | 预览安装 |
+| `delete` | `pkg delete -nR {packages}` | 预览删除 |
+| `upgrade` | `pkg upgrade -n {packages}` | 预览升级指定包 |
+| `autoremove` | `pkg autoremove -n` | 预览清理孤立包 |
+
+`parse_dry_run_sections()` 统一解析 `pkg` 的 dry-run 输出，从 `INSTALLED` / `UPGRADED` / `REINSTALLED` / `REMOVED` 分区中提取包名。autoremove 的输出格式不同（包名直接列在行中，无分区头），使用独立解析逻辑。
+
+### 升级 / 清理（后台任务）
+
+`POST /api/pkg/upgrade` 和 `POST /api/pkg/autoremove` 遵循与 install/delete 相同的后台任务 + SSE 模式：`bgtask::create()` → `tokio::spawn` → `run_streaming_cmd()` → `set_status()` + audit。
+
+前端流程：点击按钮 → preview 预览 → 确认弹窗展示将操作的包列表 → 执行 → SSE 实时输出弹窗。
+
+升级仅支持指定包（不支持全局升级）。列表页每行提供升级按钮，点击后预览该包的升级影响（含升级的包、新安装的依赖、连带删除的包），确认后执行。
+
+### 锁定 / 解锁
+
+`POST /api/pkg/lock` 和 `POST /api/pkg/unlock` 执行 `pkg lock -y {names}` / `pkg unlock -y {names}`，同步调用（命令本身很快），结果直接返回。详情页的锁定按钮即调用此接口。
 
 ## 仓库配置管理（软件源）
 
@@ -172,15 +204,10 @@ FreeBSD 15.x 的官方仓库从单一 `FreeBSD` 拆分为三个：
 
 ## 外部依赖
 
-- 系统命令：`/usr/sbin/pkg`（`pkg query`、`pkg info -R`、`pkg rquery`、`pkg install`、`pkg delete`）
+- 系统命令：`/usr/sbin/pkg`（`pkg query`、`pkg info -R`、`pkg rquery`、`pkg install`、`pkg delete`、`pkg upgrade`、`pkg autoremove`、`pkg lock`、`pkg unlock`）
 - Rust crate：`tokio::process`（异步子进程 + 行读取）、`parking_lot`（任务存储 mutex）、`serde_json`（反序列化 raw manifest）
 
 ## 已知限制 / TODO
 
-- **无 `pkg upgrade`**：不支持批量升级已安装的包。
-- **无 `pkg autoremove`**：不支持清理不再被需要的自动安装包。
-- **无 `pkg lock` / `unlock`**：不支持锁定/解锁包。
-- **无更新检查**：不显示 `pkg version` 的可用更新信息。
-- **无 audit**：不集成 `pkg audit` 安全漏洞检查。
 - **文件列表无分页**：对于文件数极多的包（如 python），一次性返回全部文件。
 - **任务无持久化**：服务重启后后台任务状态丢失（仅在内存中）。

@@ -174,8 +174,19 @@ pub struct DeleteRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct PreviewRequest {
-    /// "install" or "delete".
+    /// "install", "delete", "upgrade", or "autoremove".
     pub action: String,
+    #[serde(default)]
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpgradeRequest {
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PkgNames {
     pub packages: Vec<String>,
 }
 
@@ -396,24 +407,67 @@ pub async fn search(Query(q): Query<SearchQuery>) -> ApiResult<Json<Vec<SearchRe
 pub struct PreviewResult {
     pub install: Vec<String>,
     pub delete: Vec<String>,
+    #[serde(default)]
+    pub upgrade: Vec<String>,
 }
 
 /// `POST /api/pkg/preview`
-/// Runs `pkg install -n` or `pkg delete -nR` in dry-run mode to determine
-/// which packages will be affected. Returns the package names to be installed
-/// or removed.
+/// Runs `pkg install -n`, `pkg delete -nR`, `pkg upgrade -n`, or
+/// `pkg autoremove -n` in dry-run mode to determine which packages will be
+/// affected.
 pub async fn preview(Json(req): Json<PreviewRequest>) -> ApiResult<Json<PreviewResult>> {
-    validate_names(&req.packages)?;
-
-    let mut full_args: Vec<&str> = vec![&req.action, "-n"];
-    if req.action == "delete" {
-        full_args.push("-R");
+    match req.action.as_str() {
+        "autoremove" => {
+            let output = cmd::run_output(PKG, &["autoremove", "-n"]).await?;
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let mut delete = Vec::new();
+            for line in combined.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty()
+                    || trimmed.starts_with("Checking")
+                    || trimmed.contains("packages to be autoremoved")
+                    || trimmed.contains("Nothing to do")
+                {
+                    continue;
+                }
+                delete.push(trimmed.to_string());
+            }
+            Ok(Json(PreviewResult {
+                install: vec![],
+                delete,
+                upgrade: vec![],
+            }))
+        }
+        "upgrade" => {
+            let mut args = vec!["upgrade", "-n"];
+            if !req.packages.is_empty() {
+                validate_names(&req.packages)?;
+                args.extend(req.packages.iter().map(|s| s.as_str()));
+            }
+            let output = cmd::run_output(PKG, &args).await?;
+            Ok(Json(parse_dry_run_sections(&output)))
+        }
+        "install" | "delete" => {
+            validate_names(&req.packages)?;
+            let mut full_args: Vec<&str> = vec![&req.action, "-n"];
+            if req.action == "delete" {
+                full_args.push("-R");
+            }
+            full_args.extend(req.packages.iter().map(|s| s.as_str()));
+            let output = cmd::run_output(PKG, &full_args).await?;
+            Ok(Json(parse_dry_run_sections(&output)))
+        }
+        _ => Err(ApiError::BadRequest("unknown action".into())),
     }
-    full_args.extend(req.packages.iter().map(|s| s.as_str()));
-    let output = cmd::run_output(PKG, &full_args).await?;
+}
 
-    // dry-run may exit non-zero (e.g. "already installed"); parse stdout/stderr
-    // regardless.
+/// Parse dry-run output from `pkg install -n` / `pkg delete -n` / `pkg upgrade -n`.
+/// Extracts package names from INSTALLED / UPGRADED / REINSTALLED / REMOVED sections.
+fn parse_dry_run_sections(output: &std::process::Output) -> PreviewResult {
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
@@ -422,12 +476,19 @@ pub async fn preview(Json(req): Json<PreviewRequest>) -> ApiResult<Json<PreviewR
 
     let mut install = Vec::new();
     let mut delete = Vec::new();
+    let mut upgrade = Vec::new();
     let mut section: Option<&str> = None;
 
     for line in combined.lines() {
         let trimmed = line.trim();
         if trimmed.contains("New packages to be INSTALLED") {
             section = Some("install");
+            continue;
+        }
+        if trimmed.contains("Installed packages to be UPGRADED")
+            || trimmed.contains("Installed packages to be REINSTALLED")
+        {
+            section = Some("upgrade");
             continue;
         }
         if trimmed.contains("Installed packages to be REMOVED") {
@@ -440,20 +501,25 @@ pub async fn preview(Json(req): Json<PreviewRequest>) -> ApiResult<Json<PreviewR
         }
         if let Some(s) = section {
             // Lines like: "\tvim: 9.2.0277 [FreeBSD-ports]"
+            // or upgrade: "\tvim: 9.2.0277 -> 9.2.0280 [FreeBSD-ports]"
             if let Some(name) = trimmed.split(':').next() {
                 let name = name.trim();
                 if !name.is_empty() && !name.starts_with("Number") {
-                    if s == "install" {
-                        install.push(name.to_string());
-                    } else {
-                        delete.push(name.to_string());
+                    match s {
+                        "install" => install.push(name.to_string()),
+                        "delete" => delete.push(name.to_string()),
+                        _ => upgrade.push(name.to_string()),
                     }
                 }
             }
         }
     }
 
-    Ok(Json(PreviewResult { install, delete }))
+    PreviewResult {
+        install,
+        delete,
+        upgrade,
+    }
 }
 
 // ---- Handlers: install / delete (background tasks) ----
@@ -542,6 +608,120 @@ pub async fn delete(
     });
 
     Ok(Json(serde_json::json!({ "task_id": id })))
+}
+
+/// `POST /api/pkg/upgrade`
+pub async fn upgrade(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<UpgradeRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_names(&req.packages)?;
+
+    let pkgs_str = req.packages.join(", ");
+    let label = format!("pkg upgrade {pkgs_str}");
+    let id = bgtask::create("pkg-upgrade", &label);
+
+    let pkgs = req.packages.clone();
+    let tid = id.clone();
+    let username = user.username.clone();
+    tokio::spawn(async move {
+        let mut args = vec!["upgrade", "-y"];
+        let pkg_refs: Vec<&str> = pkgs.iter().map(|s| s.as_str()).collect();
+        args.extend(&pkg_refs);
+        let exit = bgtask::run_streaming_cmd(&tid, PKG, &args).await;
+        let ok = exit == 0;
+        bgtask::set_status(
+            &tid,
+            if ok { bgtask::TaskStatus::Done } else { bgtask::TaskStatus::Failed },
+            Some(exit),
+        );
+        audit::record(
+            &state,
+            Some(&username),
+            "POST",
+            "/api/pkg/upgrade",
+            if ok { 200 } else { 500 },
+            Some(format!("pkg upgrade {pkgs_str}: {}", if ok { "ok" } else { "failed" })),
+        );
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": id })))
+}
+
+/// `POST /api/pkg/autoremove`
+pub async fn autoremove(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    let id = bgtask::create("pkg-autoremove", "pkg autoremove");
+
+    let tid = id.clone();
+    let username = user.username.clone();
+    tokio::spawn(async move {
+        let args = vec!["autoremove", "-y"];
+        let exit = bgtask::run_streaming_cmd(&tid, PKG, &args).await;
+        let ok = exit == 0;
+        bgtask::set_status(
+            &tid,
+            if ok { bgtask::TaskStatus::Done } else { bgtask::TaskStatus::Failed },
+            Some(exit),
+        );
+        audit::record(
+            &state,
+            Some(&username),
+            "POST",
+            "/api/pkg/autoremove",
+            if ok { 200 } else { 500 },
+            Some(format!("pkg autoremove: {}", if ok { "ok" } else { "failed" })),
+        );
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": id })))
+}
+
+/// `POST /api/pkg/lock`
+pub async fn lock(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<PkgNames>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_names(&req.packages)?;
+    let names = req.packages.join(", ");
+    let mut args = vec!["lock", "-y"];
+    args.extend(req.packages.iter().map(|s| s.as_str()));
+    cmd::run(PKG, &args).await?;
+    audit::record(
+        &state,
+        Some(&user.username),
+        "POST",
+        "/api/pkg/lock",
+        200,
+        Some(format!("pkg lock {names}")),
+    );
+    Ok(Json(serde_json::json!({})))
+}
+
+/// `POST /api/pkg/unlock`
+pub async fn unlock(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<PkgNames>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_names(&req.packages)?;
+    let names = req.packages.join(", ");
+    let mut args = vec!["unlock", "-y"];
+    args.extend(req.packages.iter().map(|s| s.as_str()));
+    cmd::run(PKG, &args).await?;
+    audit::record(
+        &state,
+        Some(&user.username),
+        "POST",
+        "/api/pkg/unlock",
+        200,
+        Some(format!("pkg unlock {names}")),
+    );
+    Ok(Json(serde_json::json!({})))
 }
 
 /// `GET /api/pkg/tasks/{id}` — poll task status (fallback for SSE errors).

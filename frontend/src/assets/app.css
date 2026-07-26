@@ -391,10 +391,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; transition: background-color 0.12s ease; vertical-align: middle; }
+.table-wrap { overflow-x: auto; }
+.table-wrap > table { width: 100%; }
+.table-wrap th, .table-wrap td { white-space: nowrap; }
+.table-wrap .cell-wrap { white-space: normal; }
 /* Prevent badge/button inner text from wrapping, but allow multiple buttons to wrap */
 .badge { white-space: nowrap; }
 td button { white-space: nowrap; }
-.btn-group { display: flex; flex-wrap: wrap; gap: 4px; }
+.btn-group { display: flex; flex-wrap: nowrap; gap: 4px; }
 .fm-table td, .fm-table th { white-space: nowrap; }
 .fm-table .fm-name-cell { white-space: normal; }
 th { color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -607,6 +611,14 @@ tr.row-clickable { cursor: pointer; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
 .toolbar .search { max-width: 260px; }
 .toolbar .filter-input { width: auto; max-width: 260px; }
+.search-input { position: relative; display: inline-block; }
+.search-input .filter-input { padding-right: 28px; }
+.search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; padding: 2px 4px;
+  color: var(--text-dim); font-size: 13px; line-height: 1;
+}
+.search-clear:hover { color: var(--text); }
 
 /* ---- Modal ---- */
 .modal-overlay {

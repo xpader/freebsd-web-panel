@@ -4,15 +4,29 @@ import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtBytes, fmtDate } from '../lib/format.js';
+import { useToast, useAlert } from '../composables/useDialog.js';
 import BackButton from '../components/ui/BackButton.vue';
 
 const { t } = useI18n();
 const route = useRoute();
+const toast = useToast();
+const alert = useAlert();
 const name = route.params.name;
 const info = ref(null);
 const error = ref('');
 const activeTab = ref('info');
 const files = ref(null);
+
+async function toggleLock() {
+  const action = info.value.locked ? 'unlock' : 'lock';
+  try {
+    await api.post(`/api/pkg/${action}`, { packages: [name] });
+    info.value.locked = !info.value.locked;
+    toast.toast(action === 'lock' ? t('pkg.lockOk') : t('pkg.unlockOk'));
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  }
+}
 
 async function loadFiles() {
   try {
@@ -66,6 +80,10 @@ onMounted(async () => {
           <span v-else class="badge badge-success">{{ t('pkg.manual') }}</span>
           <span v-if="info.locked" class="badge badge-warn">{{ t('pkg.locked') }}</span>
           <span v-if="info.vital" class="badge badge-success">{{ t('pkg.vital') }}</span>
+          <button class="btn-secondary btn-sm" @click="toggleLock" style="margin-left:8px;">
+            <i :class="info.locked ? 'fa-solid fa-lock-open' : 'fa-solid fa-lock'"></i>
+            {{ info.locked ? t('pkg.unlockBtn') : t('pkg.lockBtn') }}
+          </button>
         </div>
       </div>
       <p v-if="info.comment" style="margin-bottom:16px; font-size:15px; color:var(--text-dim);">{{ info.comment }}</p>

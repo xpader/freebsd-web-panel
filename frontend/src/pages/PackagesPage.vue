@@ -1,15 +1,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { fmtBytes } from '../lib/format.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import SearchInput from '../components/ui/SearchInput.vue';
+import TaskConsole from '../components/ui/TaskConsole.vue';
 
 const { t } = useI18n();
-const router = useRouter();
 const toast = useToast();
 const alert = useAlert();
+const previewing = ref(null);
 
 const pkgFilter = ref('all');
 const allPackages = ref([]);
@@ -29,7 +29,6 @@ const filtered = computed(() => {
 async function load() {
   if (!allPackages.value.length) loading.value = true;
   refreshing.value = true;
-  search.value = '';
   try {
     allPackages.value = await api.get(`/api/pkg/packages?filter=${pkgFilter.value}`);
   } catch (err) {
@@ -136,67 +135,114 @@ function confirmDialogCustom(title, message) {
   return ui.showDialog({ type: 'confirm', title, message });
 }
 
+async function doUpgrade(name) {
+  previewing.value = { action: 'upgrade', name };
+  let preview;
+  try {
+    preview = await api.post('/api/pkg/preview', { action: 'upgrade', packages: [name] });
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    previewing.value = null;
+    return;
+  }
+  previewing.value = null;
+  if (!preview.upgrade.length && !preview.install.length && !preview.delete.length) {
+    toast.toast(t('pkg.noUpgrades'));
+    return;
+  }
+  let msg = '';
+  if (preview.upgrade.length) {
+    msg = t('pkg.willUpgrade', { n: preview.upgrade.length }) + '\n' + preview.upgrade.join('\n');
+  }
+  if (preview.install.length) {
+    msg += '\n' + t('pkg.willInstallDeps', { n: preview.install.length }) + '\n' + preview.install.join('\n');
+  }
+  if (preview.delete.length) {
+    msg += '\n' + t('pkg.willDeleteDeps', { n: preview.delete.length }) + '\n' + preview.delete.join('\n');
+  }
+  if (!await confirmDialogCustom(t('pkg.upgradeConfirmTitle'), msg)) return;
+
+  let taskId;
+  try {
+    const res = await api.post('/api/pkg/upgrade', { packages: [name] });
+    taskId = res.task_id;
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    return;
+  }
+  showTaskModal('upgrade', [name], taskId);
+}
+
+async function doAutoremove() {
+  previewing.value = { action: 'autoremove' };
+  let preview;
+  try {
+    preview = await api.post('/api/pkg/preview', { action: 'autoremove' });
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    previewing.value = null;
+    return;
+  }
+  previewing.value = null;
+  if (!preview.delete.length) {
+    toast.toast(t('pkg.noAutoremove'));
+    return;
+  }
+  let msg = t('pkg.willAutoremove', { n: preview.delete.length }) + '\n' + preview.delete.join('\n');
+  if (!await confirmDialogCustom(t('pkg.autoremoveConfirmTitle'), msg)) return;
+
+  let taskId;
+  try {
+    const res = await api.post('/api/pkg/autoremove');
+    taskId = res.task_id;
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+    return;
+  }
+  showTaskModal('autoremove', [], taskId);
+}
+
 // Task output modal
 const showTask = ref(false);
 const taskAction = ref('');
 const taskPackages = ref('');
-const taskOutput = ref('');
 const taskDone = ref(false);
-const taskSuccess = ref(false);
-let taskEs = null;
+const activeTaskId = ref('');
+
+const taskTitle = computed(() => {
+  const titles = {
+    install: t('pkg.installing'),
+    delete: t('pkg.deleting'),
+    upgrade: t('pkg.upgrading'),
+    autoremove: t('pkg.autoremoving'),
+  };
+  return titles[taskAction.value] || taskAction.value;
+});
 
 function showTaskModal(action, packages, taskId) {
   taskAction.value = action;
   taskPackages.value = packages.join(', ');
-  taskOutput.value = '';
   taskDone.value = false;
-  taskSuccess.value = false;
+  activeTaskId.value = taskId;
   showTask.value = true;
+}
 
-  const token = sessionStorage.getItem('fwp_token');
-  const url = `/api/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
-  const es = new EventSource(url);
-  taskEs = es;
-
-  const finish = async (success) => {
-    es.close();
-    taskDone.value = true;
-    taskSuccess.value = success;
-    const nameStr = packages.join(', ');
-    const doneLabel = success
-      ? t(action === 'install' ? 'pkg.installDone' : 'pkg.deleteDone', { name: nameStr })
-      : t(action === 'install' ? 'pkg.installFailed' : 'pkg.deleteFailed', { name: nameStr });
-    if (success) {
-      taskOutput.value += `\n[${t('common.done')}]\n`;
-      toast.toast(doneLabel);
-    } else {
-      await alert(doneLabel, doneLabel);
-    }
-    load();
+async function onTaskDone({ success }) {
+  taskDone.value = true;
+  const labels = {
+    install: { ok: 'pkg.installDone', fail: 'pkg.installFailed' },
+    delete: { ok: 'pkg.deleteDone', fail: 'pkg.deleteFailed' },
+    upgrade: { ok: 'pkg.upgradeDone', fail: 'pkg.upgradeFailed' },
+    autoremove: { ok: 'pkg.autoremoveDone', fail: 'pkg.autoremoveFailed' },
   };
-
-  es.onmessage = (ev) => {
-    try {
-      const data = JSON.parse(ev.data);
-      if (data.lines && data.lines.length) {
-        taskOutput.value += data.lines.join('\n') + '\n';
-      }
-      if (data.status && data.status !== 'running') {
-        finish(data.status === 'done');
-      }
-    } catch {}
-  };
-  es.addEventListener('done', () => { es.close(); taskDone.value = true; });
-  es.onerror = () => {
-    es.close();
-    api.get(`/api/tasks/${encodeURIComponent(taskId)}`).then((task) => {
-      if (task.status !== 'running') {
-        finish(task.status === 'done');
-      } else {
-        taskDone.value = true;
-      }
-    }).catch(() => { taskDone.value = true; });
-  };
+  const l = labels[taskAction.value] || labels.install;
+  const doneLabel = t(success ? l.ok : l.fail, { name: taskPackages.value });
+  if (success) {
+    toast.toast(doneLabel);
+  } else {
+    await alert(doneLabel, doneLabel);
+  }
+  load();
 }
 
 onMounted(load);
@@ -212,18 +258,20 @@ onMounted(load);
       <button :class="['filter-btn', { active: pkgFilter === 'all' }]" @click="setFilter('all')">{{ t('common.all') }}</button>
       <button :class="['filter-btn', { active: pkgFilter === 'manual' }]" @click="setFilter('manual')">{{ t('pkg.manual') }}</button>
     </div>
-    <input type="text" v-model="search" class="filter-input" :placeholder="t('pkg.filterPh')" />
+    <SearchInput v-model="search" :placeholder="t('pkg.filterPh')" />
     <span class="text-dim">{{ t('pkg.count', { n: filtered.length }) }}</span>
     <div class="flex">
+      <button @click="doAutoremove" :disabled="!!previewing"><span v-if="previewing?.action === 'autoremove'" class="spinner"></span><i v-else class="fa-solid fa-broom"></i> {{ previewing?.action === 'autoremove' ? t('pkg.checking') : t('pkg.autoremoveBtn') }}</button>
       <button @click="showInstall = true"><i class="fa-solid fa-download"></i> {{ t('pkg.installBtn') }}</button>
       <button @click="load" :disabled="refreshing"><i :class="['fa-solid fa-rotate-right', { 'fa-spin': refreshing }]"></i> {{ t('common.refresh') }}</button>
     </div>
   </div>
   <div class="card" style="padding:0;">
+    <div class="table-wrap">
     <table>
       <thead><tr>
         <th>{{ t('common.name') }}</th><th>{{ t('pkg.version') }}</th><th>{{ t('common.description') }}</th>
-        <th>{{ t('common.size') }}</th><th>{{ t('common.status') }}</th><th>{{ t('common.actions') }}</th>
+        <th>{{ t('common.size') }}</th><th>{{ t('common.status') }}</th><th style="width:1%; white-space:nowrap;">{{ t('common.actions') }}</th>
       </tr></thead>
       <tbody>
         <tr v-if="error"><td colspan="6" class="empty">{{ t('common.loadFailed', { msg: error }) }}</td></tr>
@@ -238,10 +286,16 @@ onMounted(load);
             <span v-if="p.automatic" class="badge badge-dim">{{ t('pkg.automatic') }}</span>
             <span v-else class="badge badge-success">{{ t('pkg.manual') }}</span>
           </td>
-          <td><button class="btn-secondary btn-sm" @click="doDelete(p.name)">{{ t('common.delete') }}</button></td>
+          <td>
+            <div class="btn-group">
+              <button class="btn-secondary btn-sm" :disabled="!!previewing" @click="doUpgrade(p.name)"><span v-if="previewing?.action === 'upgrade' && previewing?.name === p.name" class="spinner"></span>{{ previewing?.action === 'upgrade' && previewing?.name === p.name ? t('pkg.checking') : t('pkg.upgradeBtn') }}</button>
+              <button class="btn-secondary btn-sm" :disabled="!!previewing" @click="doDelete(p.name)">{{ t('common.delete') }}</button>
+            </div>
+          </td>
         </tr>
       </tbody>
     </table>
+    </div>
   </div>
 
   <!-- Install search modal -->
@@ -284,9 +338,9 @@ onMounted(load);
     <div class="modal" style="max-width:680px;">
       <h3>
         <span v-if="!taskDone" class="spinner"></span>
-        {{ taskAction === 'install' ? t('pkg.installing') : t('pkg.deleting') }} {{ taskPackages }}
+        {{ taskTitle }} {{ taskPackages }}
       </h3>
-      <div style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all;">{{ taskOutput }}</div>
+      <TaskConsole :task-id="activeTaskId" style="margin-bottom:12px;" @done="onTaskDone" />
       <div class="modal-actions">
         <button class="btn-secondary" :disabled="!taskDone" @click="showTask = false">{{ t('common.close') }}</button>
       </div>
