@@ -193,6 +193,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/pkg/packages/{name}/files", get(handlers::pkg::package_files))
         // --- pkg repos (repository management) ---
         .route("/api/pkg/repos", get(handlers::pkg::list_repos).post(handlers::pkg::create_repo))
+        .route("/api/pkg/repos/apply_mirror", post(handlers::pkg::apply_mirror))
         .route("/api/pkg/repos/{name}", put(handlers::pkg::update_repo).delete(handlers::pkg::delete_repo))
         .route("/api/pkg/repos/update", post(handlers::pkg::repo_update))
         // --- SMB (Samba file sharing) ---

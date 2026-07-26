@@ -1175,14 +1175,29 @@ pub async fn update_repo(
         .to_uppercase();
     validate_signature_type(&st)?;
 
+    // The new name (may differ from the path name if renaming).
+    let new_name = req.name.as_deref().unwrap_or(&name).trim().to_string();
+    if new_name != name {
+        validate_repo_name(&new_name)?;
+    }
+
     let target_path = resolve_target_file(&req.file, &name)?;
 
     // Read existing repos from target file.
     let mut repos = parse_repo_file(&target_path);
 
-    // Find and replace the repo, or append if not found.
+    // Check for name conflict (another repo already has the new name).
+    if new_name != name
+        && repos.iter().any(|r| r.name == new_name)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "repository '{}' already exists in this file",
+            new_name
+        )));
+    }
+
     let new_config = RepoConfig {
-        name: name.clone(),
+        name: new_name.clone(),
         url: req.url,
         enabled: req.enabled,
         mirror_type: mt,
@@ -1208,10 +1223,10 @@ pub async fn update_repo(
         "PUT",
         "/api/pkg/repos",
         200,
-        Some(format!("Updated pkg repo '{}'", name)),
+        Some(format!("Updated pkg repo '{}' → '{}'", name, new_name)),
     );
 
-    Ok(Json(serde_json::json!({ "name": name })))
+    Ok(Json(serde_json::json!({ "name": new_name })))
 }
 
 /// `DELETE /api/pkg/repos/{name}?file=<path>` — remove a repo from a file.
@@ -1264,8 +1279,110 @@ pub async fn delete_repo(
 // ---- Request types for update/delete ----
 
 #[derive(Debug, Deserialize)]
+pub struct ApplyMirrorInput {
+    pub filename: String,
+    pub repos: Vec<RepoInput>,
+    #[serde(default)]
+    pub disables: Vec<String>,
+}
+
+/// `POST /api/pkg/repos/apply_mirror` — batch-apply a mirror preset.
+///
+/// Writes multiple mirror repos to `{filename}` in the user dir, then creates
+/// `enabled: no` override entries in `FreeBSD.conf` for each repo in `disables`.
+/// This is needed because FreeBSD 15.x has multiple official repos
+/// (FreeBSD-ports, FreeBSD-ports-kmods, FreeBSD-base) that must all be
+/// mirrored and disabled together.
+pub async fn apply_mirror(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<ApplyMirrorInput>,
+) -> ApiResult<Json<serde_json::Value>> {
+    validate_filename(&req.filename)?;
+
+    for repo in &req.repos {
+        validate_repo_name(&repo.name)?;
+        validate_url(&repo.url)?;
+        let mt = repo.mirror_type.as_deref().unwrap_or("NONE").to_uppercase();
+        validate_mirror_type(&mt)?;
+        let st = repo
+            .signature_type
+            .as_deref()
+            .unwrap_or("NONE")
+            .to_uppercase();
+        validate_signature_type(&st)?;
+    }
+    for name in &req.disables {
+        validate_repo_name(name)?;
+    }
+
+    fs::create_dir_all(USER_REPO_DIR)?;
+
+    // 1. Write mirror repos to the target file (upsert each by name).
+    let target_path = format!("{}/{}", USER_REPO_DIR, req.filename);
+    let mut repos = parse_repo_file(&target_path);
+    for repo_input in &req.repos {
+        let new_config = input_to_config(repo_input);
+        if let Some(existing) = repos.iter_mut().find(|r| r.name == new_config.name) {
+            *existing = new_config;
+        } else {
+            repos.push(new_config);
+        }
+    }
+    write_override_file(&target_path, &repos)?;
+
+    // 2. Disable official repos in FreeBSD.conf override.
+    if !req.disables.is_empty() {
+        let freebsd_override = format!("{}/FreeBSD.conf", USER_REPO_DIR);
+        let mut fb_repos = parse_repo_file(&freebsd_override);
+        let sys_repos = parse_repo_file(&format!("{}/FreeBSD.conf", SYSTEM_REPO_DIR));
+        let sys_map: HashMap<&str, &RepoConfig> = sys_repos
+            .iter()
+            .map(|r| (r.name.as_str(), r))
+            .collect();
+
+        for name in &req.disables {
+            if let Some(&sys_repo) = sys_map.get(name.as_str()) {
+                let mut disabled = sys_repo.clone();
+                disabled.enabled = false;
+                disabled.is_system_origin = false;
+                if let Some(existing) = fb_repos.iter_mut().find(|r| &r.name == name) {
+                    *existing = disabled;
+                } else {
+                    fb_repos.push(disabled);
+                }
+            }
+        }
+        write_override_file(&freebsd_override, &fb_repos)?;
+    }
+
+    let repo_names: Vec<&str> = req.repos.iter().map(|r| r.name.as_str()).collect();
+    audit::record(
+        &state,
+        Some(&user.username),
+        "POST",
+        "/api/pkg/repos/apply_mirror",
+        200,
+        Some(format!(
+            "Applied mirror preset to {} (repos: {}{})",
+            req.filename,
+            repo_names.join(", "),
+            if req.disables.is_empty() {
+                String::new()
+            } else {
+                format!(", disabled: {}", req.disables.join(", "))
+            }
+        )),
+    );
+
+    Ok(Json(serde_json::json!({})))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateRepoRequest {
     pub file: String,
+    #[serde(default)]
+    pub name: Option<String>,
     pub url: String,
     #[serde(default)]
     pub enabled: bool,

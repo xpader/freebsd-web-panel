@@ -10,10 +10,33 @@ const alert = useAlert();
 const confirm = useConfirm();
 
 const PRESETS = [
-  { key: 'repoPresetOfficialLatest', name: 'FreeBSD-ports', filename: 'FreeBSD.conf', url: 'pkg+https://pkg.freebsd.org/${ABI}/latest', mirror_type: 'srv', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg' },
-  { key: 'repoPresetOfficialQuarterly', name: 'FreeBSD-ports', filename: 'FreeBSD.conf', url: 'pkg+https://pkg.freebsd.org/${ABI}/quarterly', mirror_type: 'srv', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg' },
-  { key: 'repoPresetUstc', name: 'ustc', filename: 'ustc.conf', url: 'https://mirrors.ustc.edu.cn/freebsd-pkg/${ABI}/quarterly', mirror_type: 'none', signature_type: 'none' },
-  { key: 'repoPresetTuna', name: 'tuna', filename: 'tuna.conf', url: 'https://mirrors.tuna.tsinghua.edu.cn/freebsd-pkg/${ABI}/quarterly', mirror_type: 'none', signature_type: 'none' },
+  {
+    key: 'repoPresetOfficialLatest',
+    filename: 'FreeBSD.conf',
+    repos: [
+      { name: 'FreeBSD-ports', url: 'pkg+https://pkg.freebsd.org/${ABI}/latest', mirror_type: 'srv', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg', enabled: true },
+      { name: 'FreeBSD-ports-kmods', url: 'pkg+https://pkg.freebsd.org/${ABI}/kmods_latest_${VERSION_MINOR}', mirror_type: 'srv', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg', enabled: true },
+    ],
+    disables: [],
+  },
+  {
+    key: 'repoPresetOfficialQuarterly',
+    filename: 'FreeBSD.conf',
+    repos: [
+      { name: 'FreeBSD-ports', url: 'pkg+https://pkg.freebsd.org/${ABI}/quarterly', mirror_type: 'srv', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg', enabled: true },
+      { name: 'FreeBSD-ports-kmods', url: 'pkg+https://pkg.freebsd.org/${ABI}/kmods_quarterly_${VERSION_MINOR}', mirror_type: 'srv', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg', enabled: true },
+    ],
+    disables: [],
+  },
+  {
+    key: 'repoPresetUstc',
+    filename: 'ustc.conf',
+    repos: [
+      { name: 'ustc-ports', url: 'https://mirrors.ustc.edu.cn/freebsd-pkg/${ABI}/quarterly', mirror_type: 'none', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg', enabled: true },
+      { name: 'ustc-ports-kmods', url: 'https://mirrors.ustc.edu.cn/freebsd-pkg/${ABI}/kmods_quarterly_${VERSION_MINOR}', mirror_type: 'none', signature_type: 'fingerprints', fingerprints: '/usr/share/keys/pkg', enabled: true },
+    ],
+    disables: ['FreeBSD-ports', 'FreeBSD-ports-kmods'],
+  },
 ];
 
 const repoFiles = ref([]);
@@ -68,15 +91,28 @@ function openEdit(file, repo) {
   showRepoModal.value = true;
 }
 
-function applyPreset(idx) {
+async function applyPreset(idx) {
   const p = PRESETS[idx];
-  form.value.name = p.name;
-  form.value.url = p.url;
-  form.value.mirror_type = (p.mirror_type || 'none').toUpperCase();
-  form.value.signature_type = (p.signature_type || 'none').toUpperCase();
-  form.value.fingerprints = p.fingerprints || '';
-  form.value.fileSelect = '';
-  form.value.filename = p.filename;
+  showRepoModal.value = false;
+
+  const repoNames = p.repos.map(r => r.name).join(', ');
+  let msg = t('pkg.repoPresetConfirmRepos', { repos: repoNames });
+  if (p.disables.length) {
+    msg += '\n' + t('pkg.repoPresetConfirmDisables', { repos: p.disables.join(', ') });
+  }
+
+  if (!await confirm(t('pkg.repoPresetConfirmTitle'), msg)) return;
+  try {
+    await api.post('/api/pkg/repos/apply_mirror', {
+      filename: p.filename,
+      repos: p.repos,
+      disables: p.disables,
+    });
+    toast.toast(t('pkg.repoPresetApplied'));
+    await load();
+  } catch (e) {
+    await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
+  }
 }
 
 async function saveRepo() {
@@ -97,7 +133,7 @@ async function saveRepo() {
   }
   try {
     if (editingRepo.value) {
-      await api.put(`/api/pkg/repos/${encodeURIComponent(repoBody.name)}`, {
+      await api.put(`/api/pkg/repos/${encodeURIComponent(editingRepo.value.repo.name)}`, {
         file: editingRepo.value.file.path, ...repoBody,
       });
       toast.toast(t('pkg.repoUpdateOk', { name: repoBody.name }));
@@ -261,6 +297,7 @@ onMounted(load);
 
       <div v-if="!editingRepo" style="margin-bottom:16px;">
         <div class="card-title" style="font-size:13px;">{{ t('pkg.repoPresetTitle') }}</div>
+        <div class="text-dim" style="font-size:12px; margin-top:2px;">{{ t('pkg.repoPresetHint') }}</div>
         <div class="flex" style="flex-wrap:wrap; gap:6px; margin-top:6px;">
           <button v-for="(p, i) in PRESETS" :key="i" class="btn-secondary btn-sm" @click="applyPreset(i)">{{ t('pkg.' + p.key) }}</button>
         </div>

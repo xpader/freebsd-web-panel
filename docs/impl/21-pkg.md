@@ -126,6 +126,49 @@ pkg rquery -g '%n\t%v\t%o\t%c\t%sh' '*{pattern}*'
 | POST | `/api/pkg/install` | 安装包。body: `{"packages": ["vim"]}` → `{"task_id": "..."}` |
 | POST | `/api/pkg/delete` | 删除包。body: `{"packages": ["vim"], "recursive": false}` → `{"task_id": "..."}` |
 | GET | `/api/pkg/tasks/{id}` | 查询后台任务状态（轮询） |
+| GET | `/api/pkg/repos` | 列出所有仓库配置（按文件分组，合并系统+用户覆盖） |
+| POST | `/api/pkg/repos` | 添加单个仓库到指定文件 |
+| POST | `/api/pkg/repos/apply_mirror` | 批量应用镜像预设（多仓库 + 禁用官方仓库） |
+| PUT | `/api/pkg/repos/{name}` | 更新仓库（body 含 `file` 定位，支持改名） |
+| DELETE | `/api/pkg/repos/{name}?file=` | 删除仓库（仅允许用户目录） |
+| POST | `/api/pkg/repos/update` | 执行 `pkg update -f` 刷新目录索引 |
+
+## 仓库配置管理（软件源）
+
+### 架构
+
+FreeBSD 的 pkg 仓库配置分两层：
+
+- **系统配置**：`/etc/pkg/FreeBSD.conf`（随基本系统更新，不可修改）
+- **用户覆盖**：`/usr/local/etc/pkg/repos/*.conf`（优先级更高）
+
+面板读取两层配置后**合并展示**：系统仓库显示为"系统来源"，用户覆盖显示为"自定义"。写入时只写用户目录，通过最小化 diff 覆盖系统配置（仅输出与系统原值不同的字段）。
+
+### FreeBSD 15.x 多仓库结构
+
+FreeBSD 15.x 的官方仓库从单一 `FreeBSD` 拆分为三个：
+
+| 仓库 | 内容 | URL 模式 |
+|------|------|----------|
+| `FreeBSD-ports` | 第三方软件（ports） | `${ABI}/quarterly` 或 `latest` |
+| `FreeBSD-ports-kmods` | 内核模块 | `${ABI}/kmods_quarterly_${VERSION_MINOR}` |
+| `FreeBSD-base` | 基本系统（pkgbase 启用时） | `${ABI}/base_release_${VERSION_MINOR}` |
+
+切换到镜像源时，需要同时为 ports 和 kmods 创建镜像仓库，**并禁用对应的官方仓库**。单条仓库添加无法覆盖此场景。
+
+### 镜像预设（apply_mirror）
+
+`POST /api/pkg/repos/apply_mirror` 实现一键镜像切换：
+
+1. 将多个镜像仓库写入指定文件（如 `ustc.conf`），按名称 upsert
+2. 对 `disables` 列表中的每个官方仓库，在 `FreeBSD.conf` 覆盖文件中创建 `enabled: no` 条目
+3. 使用 `write_override_file()` 的 diff 渲染器，输出最小覆盖
+
+前端预设按钮（USTC 镜像、官方 latest/quarterly）调用此端点，通过确认弹窗展示将要创建和禁用的仓库列表，确认后批量应用。
+
+### 编辑改名
+
+`PUT /api/pkg/repos/{old_name}` 支持通过 body 中的 `name` 字段改名：路径中的 `old_name` 用于查找原条目，body 中的 `name` 作为新名称。改名时额外校验新名称合法性和重名冲突。
 
 ## 外部依赖
 
