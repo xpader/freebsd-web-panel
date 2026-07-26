@@ -73,7 +73,7 @@ Vue Router hash 模式（`createWebHashHistory`）。路由表使用嵌套结构
 认证守卫（`router.beforeEach`）：
 - 认证页（`meta.auth = false`）：已登录 → 重定向到 `/dashboard`
 - 受保护页：无 token 时惰性查询 `GET /api/users/bootstrap`——首启重定向 `/setup`，否则 `/login`
-- token 存 `sessionStorage`，401 响应自动清除并重定向
+- token 存 `sessionStorage`，401 由 `api.js` 统一处理（forever-pending 模式，详见 `01-auth.md`）
 
 ### API 客户端 `src/lib/api.js`
 
@@ -82,8 +82,10 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 ```
 
 - 自动附加 `Authorization: Bearer <token>`
-- 401 → 清除 token + 路由重定向到 `/login`
-- `authFetch(url, opts)` — 带 token 的原始 fetch（用于文件上传/下载）
+- 401 处理（非登录页）：登出 + 跳转 `/login` + 弹"登录已失效"框 + `return new Promise(() => {})`（forever-pending，页面的 catch 不会执行，无需各处判断 401）
+- 401 处理（登录页）：正常 throw，LoginPage 显示密码错误
+- 429 区分：`err.data.error === 'account_locked'` / `'ip_banned'`，LoginPage 分别显示不同提示
+- `authFetch(url, opts)` — 带 token 的原始 fetch（用于文件上传/下载），401 同样走 forever-pending
 
 ### 状态管理
 

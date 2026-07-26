@@ -24,21 +24,20 @@ export function isLoggedIn() {
 // Guards against multiple concurrent 401s triggering duplicate dialogs.
 let sessionExpiredHandling = false;
 
-function handleSessionExpired() {
+async function handleSessionExpired() {
   if (sessionExpiredHandling) return;
   sessionExpiredHandling = true;
-  clearToken();
+  useAuthStore().logout();
+  if (router.currentRoute.value.path !== '/login') {
+    await router.replace('/login');
+  }
   const t = i18n.global.t.bind(i18n.global);
-  ui.showDialog({
+  await ui.showDialog({
     type: 'alert',
     title: t('auth.sessionExpiredTitle'),
     message: t('auth.sessionExpiredMsg'),
-  }).then(() => {
-    sessionExpiredHandling = false;
-    if (router.currentRoute.value.path !== '/login') {
-      router.push('/login');
-    }
   });
+  sessionExpiredHandling = false;
 }
 
 async function request(method, path, body) {
@@ -54,14 +53,15 @@ async function request(method, path, body) {
   const data = text ? JSON.parse(text) : null;
 
   if (res.status === 401) {
-    if (router.currentRoute.value.path !== '/login') {
-      handleSessionExpired();
+    // On the login page, 401 = wrong credentials — throw so LoginPage can show the error.
+    if (router.currentRoute.value.path === '/login') {
+      const msg = data?.message || 'unauthenticated';
+      throw { status: 401, message: msg, data };
     }
-    // On the login page, prefer the backend message (e.g. "invalid credentials").
-    const msg = (router.currentRoute.value.path === '/login' && data?.message)
-      ? data.message
-      : 'unauthenticated';
-    throw { status: 401, message: msg, data };
+    // Everywhere else: trigger global session-expired flow, then stall forever
+    // so the caller's catch never fires (the page is being torn down anyway).
+    handleSessionExpired();
+    return new Promise(() => {});
   }
 
   if (!res.ok) {
@@ -87,6 +87,7 @@ export async function authFetch(url, opts = {}) {
   const res = await fetch(url, { ...opts, headers });
   if (res.status === 401 && router.currentRoute.value.path !== '/login') {
     handleSessionExpired();
+    return new Promise(() => {});
   }
   return res;
 }

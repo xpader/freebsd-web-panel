@@ -189,7 +189,6 @@ function checkAllDone() {
 async function downloadFile(path) {
   try {
     const res = await authFetch(`/api/files/download?path=${encodeURIComponent(path)}`);
-    if (res.status === 401) return;
     if (!res.ok) throw { message: `Download failed (${res.status})` };
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
