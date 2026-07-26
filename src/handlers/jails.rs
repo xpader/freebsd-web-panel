@@ -13,6 +13,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::audit;
+use crate::auth::AuthUser;
+use crate::bgtask;
 use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::jail;
@@ -674,7 +677,7 @@ pub struct BaseSystemInfo {
     pub base: BaseSystem,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BaseImportBody {
     pub name: String,
     /// "import" | "from-txz" | "download". Default: "import".
@@ -905,11 +908,19 @@ pub struct MirrorInfo {
 }
 
 /// Register a new base system — supports three creation methods.
+/// For "download" method, returns { task_id } and runs in background via bgtask.
 pub async fn base_import(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(body): Json<BaseImportBody>,
-) -> ApiResult<(StatusCode, Json<BaseSystem>)> {
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     validate_jail_name(&body.name)?;
+
+    let method = if body.method.is_empty() { "import" } else { body.method.as_str() }.to_string();
+
+    if method == "download" {
+        return create_base_download(state, user, body).await;
+    }
 
     let body_name = body.name.clone();
     let state_for_blocking = state.clone();
@@ -926,12 +937,6 @@ pub async fn base_import(
         let base = match method.as_str() {
             "import" => create_base_import(&state_for_blocking, &body)?,
             "from-txz" => create_base_from_txz(&state_for_blocking, &body, None)?,
-            "download" => {
-                let txz_path = download_base_txz(&body)?;
-                let result = create_base_from_txz(&state_for_blocking, &body, Some(&txz_path));
-                let _ = fs::remove_file(&txz_path);
-                result?
-            }
             other => {
                 return Err(ApiError::BadRequest(format!(
                     "unknown creation method: \"{other}\""
@@ -946,7 +951,7 @@ pub async fn base_import(
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
-    crate::audit::record(
+    audit::record(
         &state,
         None,
         "POST",
@@ -955,7 +960,130 @@ pub async fn base_import(
         Some(format!("created base system {} ({}, {})", body_name, method, base.type_)),
     );
 
-    Ok((StatusCode::CREATED, Json(base)))
+    Ok((StatusCode::CREATED, Json(serde_json::to_value(&base).unwrap_or_default())))
+}
+
+/// Download method: runs fetch + extract as a background task with streaming output.
+async fn create_base_download(
+    state: AppState,
+    user: AuthUser,
+    body: BaseImportBody,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let url = body.download_url.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("download_url is required for download method".into())
+    })?;
+    validate_url(url)?;
+
+    // Pre-check: name must not already exist.
+    {
+        let st = state.clone();
+        let name = body.name.clone();
+        tokio::task::spawn_blocking(move || -> ApiResult<()> {
+            let bases = read_bases(&st);
+            if bases.iter().any(|b| b.name == name) {
+                return Err(ApiError::Conflict(format!(
+                    "base system \"{}\" already exists",
+                    name
+                )));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+    }
+
+    let label = format!("download base system {}", body.name);
+    let id = bgtask::create("jail-base-download", &label);
+
+    let st = state.clone();
+    let username = user.username.clone();
+    let body_name = body.name.clone();
+    let task_id_clone = id.clone();
+    tokio::spawn(async move {
+        let ok = run_base_download(&task_id_clone, &st, body).await;
+        audit::record(
+            &st,
+            Some(&username),
+            "POST",
+            "/api/jails/bases",
+            if ok { 201 } else { 500 },
+            Some(format!(
+                "download base system {body_name}: {}",
+                if ok { "ok" } else { "failed" }
+            )),
+        );
+    });
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "task_id": id }))))
+}
+
+/// Background download + extract + register flow.
+async fn run_base_download(task_id: &str, state: &AppState, body: BaseImportBody) -> bool {
+    macro_rules! fail {
+        ($msg:expr) => {{
+            let m: String = $msg.into();
+            bgtask::push_line(task_id, &m);
+            bgtask::set_status(task_id, bgtask::TaskStatus::Failed, None);
+            return false;
+        }};
+    }
+
+    let url = body.download_url.as_deref().unwrap_or("");
+
+    // Step 1: Download base.txz
+    bgtask::push_line(task_id, &format!("=== Downloading base.txz from {url} ==="));
+    let tmp_dir = std::env::temp_dir();
+    let tmp_file = tmp_dir.join("fwp-base-download.txz");
+    let tmp_path = tmp_file.to_string_lossy().into_owned();
+
+    // Spawn fetch via bgtask — runs in a PTY so the progress bar is captured.
+    let exit = bgtask::run_streaming_cmd(task_id, FETCH, &["-o", &tmp_path, url]).await;
+    if exit != 0 {
+        let _ = std::fs::remove_file(&tmp_path);
+        fail!(format!("Download failed (exit code {exit})"));
+    }
+
+    // Verify file size.
+    let metadata = match std::fs::metadata(&tmp_path) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            fail!(format!("Cannot stat downloaded file: {e}"));
+        }
+    };
+    if metadata.len() < 1024 {
+        let _ = std::fs::remove_file(&tmp_path);
+        fail!(format!("Downloaded file is too small ({:.0} bytes), may be an error page", metadata.len()));
+    }
+    bgtask::push_line(task_id, &format!("Download complete ({} bytes).", metadata.len()));
+
+    // Step 2: Extract and register (blocking — ZFS/tar ops).
+    bgtask::push_line(task_id, "=== Extracting and registering base system ===");
+    let st = state.clone();
+    let txz_path = tmp_path.clone();
+    let body_clone = body.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<BaseSystem, String> {
+        let base = create_base_from_txz(&st, &body_clone, Some(&txz_path))
+            .map_err(|e| e.to_string())?;
+        let mut bases = read_bases(&st);
+        bases.push(base.clone());
+        write_bases(&st, &bases).map_err(|e| e.to_string())?;
+        Ok(base)
+    })
+    .await;
+
+    // Clean up temp file regardless.
+    let _ = std::fs::remove_file(&tmp_path);
+
+    match result {
+        Ok(Ok(base)) => {
+            bgtask::push_line(task_id, &format!("Base system \"{}\" created successfully (type: {}).", base.name, base.type_));
+            bgtask::set_status(task_id, bgtask::TaskStatus::Done, Some(0));
+            true
+        }
+        Ok(Err(e)) => fail!(e),
+        Err(e) => fail!(format!("Task panicked: {e}")),
+    }
 }
 
 /// "import" method: register an existing directory or ZFS dataset.
@@ -1336,40 +1464,6 @@ fn build_sharedfs_template(sharedfs_dir: &str, template_dir: &str) -> ApiResult<
     }
 
     Ok(())
-}
-
-/// Download base.txz from a user-provided URL.
-/// Returns the path to the downloaded temp file.
-fn download_base_txz(body: &BaseImportBody) -> ApiResult<String> {
-    let url = body.download_url.as_deref().ok_or_else(|| {
-        ApiError::BadRequest("download_url is required for download method".into())
-    })?;
-    validate_url(url)?;
-
-    // Download to a temp file.
-    let tmp_dir = std::env::temp_dir();
-    let tmp_file = tmp_dir.join("fwp-base-download.txz");
-    let tmp_path = tmp_file.to_string_lossy().into_owned();
-
-    tracing::info!("downloading base.txz from {url} to {tmp_path}");
-
-    let fetch_url = url.to_string();
-    if let Err(e) = cmd::run_sync(FETCH, &["-o", &tmp_path, &fetch_url]) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(e);
-    }
-
-    // Verify the file was downloaded and is non-empty.
-    let metadata = fs::metadata(&tmp_path)?;
-    if metadata.len() < 1024 {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(ApiError::BadRequest(format!(
-            "downloaded file is too small ({:.0} bytes), may be an error page",
-            metadata.len()
-        )));
-    }
-
-    Ok(tmp_path)
 }
 
 /// Validate a ZFS snapshot name (the short part after @).
