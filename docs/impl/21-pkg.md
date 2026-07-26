@@ -87,20 +87,15 @@ pkg rquery -g '%n\t%v\t%o\t%c\t%sh' '*{pattern}*'
 
 #### 5. 安装 / 删除 `install` / `delete`
 
-安装和删除是长时间操作（下载、解包），采用**后台任务 + 前端轮询**模式：
+安装和删除是长时间操作（下载、解包），采用**通用后台任务（`bgtask` 模块）+ SSE 流式输出**模式：
 
-1. `POST /api/pkg/install` 或 `/api/pkg/delete` → 创建 `PkgTask`，`tokio::spawn` 后台执行
-2. 后台任务用 `tokio::process::Command` spawn `pkg install -y {packages}` 或 `pkg delete -y [-R] {packages}`
-3. stdout 和 stderr 各起一个 tokio task 逐行读取，推入共享 `TASKS` map
-4. 前端 `GET /api/pkg/tasks/{id}` 每 500ms 轮询，获取累积输出 + 状态
-5. 子进程退出后设置 `TaskStatus::Done`（exit 0）或 `Failed`
-6. 操作完成自动记录审计日志
+1. `POST /api/pkg/install` 或 `/api/pkg/delete` → `bgtask::create()` 创建任务，`tokio::spawn` 后台执行
+2. 后台任务调用 `bgtask::run_streaming_cmd()` spawn `pkg install -y {packages}` 或 `pkg delete -y [-R] {packages}`，stdout/stderr 逐行推入共享任务存储
+3. 前端通过统一 SSE 端点 `GET /api/tasks/{id}/stream` 实时接收增量输出 + 状态
+4. 子进程退出后设置 `TaskStatus::Done`（exit 0）或 `Failed`
+5. 操作完成自动记录审计日志
 
-```rust
-static TASKS: LazyLock<Mutex<HashMap<String, PkgTask>>>  // 全局任务存储
-```
-
-任务在创建/查询时自动 GC：超过 10 分钟的任务自动清除。
+`bgtask` 模块（`src/bgtask.rs`）提供通用的后台任务存储、`run_streaming_cmd()` 辅助函数和统一 SSE handler，pkg install/delete、pkg update、bhyve init 等长任务共用同一套基础设施。任务 10 分钟后自动 GC。详见 `docs/impl/30-bgtask.md`。
 
 ### 输入验证
 

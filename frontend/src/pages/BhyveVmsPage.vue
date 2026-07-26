@@ -21,7 +21,12 @@ const bhyveStatus = ref(null);
 const needsInit = computed(() => {
   if (!bhyveStatus.value) return false;
   const s = bhyveStatus.value;
-  return !s.installed || !s.enabled || !s.initialized;
+  return s.virt_supported && (!s.installed || !s.enabled || !s.initialized);
+});
+
+const virtUnsupported = computed(() => {
+  if (!bhyveStatus.value) return false;
+  return !bhyveStatus.value.virt_supported;
 });
 
 const initMessages = computed(() => {
@@ -116,8 +121,15 @@ onMounted(async () => {
     <p>{{ t('bhyve.subtitle') }}</p>
   </div>
 
+  <!-- Hardware virtualization not supported -->
+  <div v-if="virtUnsupported" class="card" style="border:1px solid var(--danger);padding:24px;text-align:center;">
+    <i class="fa-solid fa-circle-xmark" style="font-size:32px;color:var(--danger);"></i>
+    <h3 style="margin:12px 0 8px;color:var(--danger);">{{ t('bhyve.initVirtUnsupported') }}</h3>
+    <p class="text-dim" style="max-width:480px;margin:0 auto;">{{ t('bhyve.initVirtUnsupportedDesc') }}</p>
+  </div>
+
   <!-- Not initialized banner -->
-  <div v-if="needsInit" class="card" style="border:1px solid var(--warning);padding:24px;text-align:center;">
+  <div v-else-if="needsInit" class="card" style="border:1px solid var(--warning);padding:24px;text-align:center;">
     <i class="fa-solid fa-triangle-exclamation" style="font-size:32px;color:var(--warning);"></i>
     <h3 style="margin:12px 0 8px;">{{ t('bhyve.initRequired') }}</h3>
     <p class="text-dim" style="margin-bottom:8px;">{{ t('bhyve.initRequiredDesc') }}</p>

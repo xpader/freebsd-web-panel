@@ -154,15 +154,15 @@ function showTaskModal(action, packages, taskId) {
   showTask.value = true;
 
   const token = sessionStorage.getItem('fwp_token');
-  const url = `/api/pkg/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
+  const url = `/api/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
   const es = new EventSource(url);
   taskEs = es;
 
-  const finish = async (success, pkgNames) => {
+  const finish = async (success) => {
     es.close();
     taskDone.value = true;
     taskSuccess.value = success;
-    const nameStr = pkgNames || packages.join(', ');
+    const nameStr = packages.join(', ');
     const doneLabel = success
       ? t(action === 'install' ? 'pkg.installDone' : 'pkg.deleteDone', { name: nameStr })
       : t(action === 'install' ? 'pkg.installFailed' : 'pkg.deleteFailed', { name: nameStr });
@@ -182,17 +182,16 @@ function showTaskModal(action, packages, taskId) {
         taskOutput.value += data.lines.join('\n') + '\n';
       }
       if (data.status && data.status !== 'running') {
-        const pkgNames = Array.isArray(data.packages) ? data.packages.join(', ') : (data.packages || '');
-        finish(data.status === 'done', pkgNames);
+        finish(data.status === 'done');
       }
     } catch {}
   };
   es.addEventListener('done', () => { es.close(); taskDone.value = true; });
   es.onerror = () => {
     es.close();
-    api.get(`/api/pkg/tasks/${encodeURIComponent(taskId)}`).then((task) => {
+    api.get(`/api/tasks/${encodeURIComponent(taskId)}`).then((task) => {
       if (task.status !== 'running') {
-        finish(task.status === 'done', task.packages.join(', '));
+        finish(task.status === 'done');
       } else {
         taskDone.value = true;
       }

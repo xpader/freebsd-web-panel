@@ -36,6 +36,7 @@
 | [27-firewall.md](27-firewall.md) | 防火墙管理：双驱动（ipfw/pf）选择与切换、结构化规则 CRUD、黑白名单模式、ICMP 类型/端口转换 | `firewall_gen.rs`, `handlers/firewall.rs`, `frontend/src/pages/PfPage.vue` |
 | [28-nat.md](28-nat.md) | NAT 与端口转发：SNAT/DNAT 独立模型、嵌入式生成（PF `nat on`/`rdr on`、ipfw `nat N config`）、复用 staging/apply/防锁死链路 | `firewall_gen.rs`, `handlers/firewall.rs`, `frontend/src/pages/FirewallNatPage.vue` |
 | [29-mail.md](29-mail.md) | 系统邮件 (mbox)：列出/阅读/删除/标记已读未读 `/var/mail/$USER` 邮件 | `handlers/mail.rs`, `frontend/src/pages/MailPage.vue` |
+| [30-bgtask.md](30-bgtask.md) | 通用后台任务：长运行操作（pkg 安装/删除/更新、bhyve 初始化）的后台执行 + SSE 流式输出 | `bgtask.rs`, `handlers/pkg.rs`, `handlers/bhyve.rs` |
 
 ## 文档规范
 

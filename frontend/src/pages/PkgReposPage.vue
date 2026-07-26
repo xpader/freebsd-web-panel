@@ -166,7 +166,7 @@ async function refreshCatalog() {
   showRefresh.value = true;
 
   const token = sessionStorage.getItem('fwp_token');
-  const url = `/api/pkg/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
+  const url = `/api/tasks/${encodeURIComponent(taskId)}/stream?token=${encodeURIComponent(token)}`;
   const es = new EventSource(url);
 
   const finish = async (success) => {
@@ -187,7 +187,7 @@ async function refreshCatalog() {
   es.addEventListener('done', () => { es.close(); refreshDone.value = true; });
   es.onerror = () => {
     es.close();
-    api.get(`/api/pkg/tasks/${encodeURIComponent(taskId)}`).then((task) => {
+    api.get(`/api/tasks/${encodeURIComponent(taskId)}`).then((task) => {
       if (task.status !== 'running') finish(task.status === 'done');
       else refreshDone.value = true;
     }).catch(() => { refreshDone.value = true; });

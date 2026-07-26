@@ -8,7 +8,6 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 
 const VM: &str = "/usr/local/sbin/vm";
-const PKG: &str = "/usr/sbin/pkg";
 const ZFS: &str = "/sbin/zfs";
 
 // ── Command helpers ───────────────────────────────────────────────
@@ -1550,6 +1549,8 @@ pub fn list_disk_resources(name: &str) -> Result<DiskResources, String> {
 /// is needed before the VM management UI can be used.
 #[derive(Debug, Clone, Serialize)]
 pub struct BhyveStatus {
+    /// Hardware virtualization supported (vmm module loads successfully).
+    pub virt_supported: bool,
     /// `vm-bhyve` package installed (`/usr/local/sbin/vm` exists).
     pub installed: bool,
     /// `vm_enable="YES"` in rc.conf.
@@ -1562,8 +1563,33 @@ pub struct BhyveStatus {
     pub resolved_path: Option<String>,
 }
 
+/// Check whether the CPU supports hardware virtualization (Intel VT-x or AMD-V).
+/// Uses CPUID directly — no kernel module involvement.
+fn check_virt_support() -> bool {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        use std::arch::x86_64::__cpuid;
+        // CPUID leaf 1, ECX bit 5 = VMX (Intel VT-x)
+        let feat = __cpuid(1);
+        if feat.ecx & (1 << 5) != 0 {
+            return true;
+        }
+        // CPUID leaf 0x80000001, ECX bit 2 = SVM (AMD-V)
+        let ext = __cpuid(0x80000001);
+        if ext.ecx & (1 << 2) != 0 {
+            return true;
+        }
+        false
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        false
+    }
+}
+
 /// Check whether vm-bhyve is installed, enabled, and initialized.
 pub fn check_status() -> BhyveStatus {
+    let virt_supported = check_virt_support();
     let installed = std::path::Path::new(VM).exists();
     let rc = crate::sysrc::read_rcconf_files();
     let vm_enable = rc.get("vm_enable").cloned();
@@ -1576,81 +1602,13 @@ pub fn check_status() -> BhyveStatus {
         .unwrap_or(false);
 
     BhyveStatus {
+        virt_supported,
         installed,
         enabled,
         vm_dir,
         initialized,
         resolved_path,
     }
-}
-
-/// Perform full vm-bhyve initialization:
-/// 1. Install packages (vm-bhyve, bhyve-firmware, grub2-bhyve)
-/// 2. Set `vm_enable="YES"` and `vm_dir` in rc.conf
-/// 3. Prepare storage (create ZFS dataset or directory)
-/// 4. Run `vm init` (loads kernel modules, creates subdirectories)
-/// 5. Copy example templates into `.templates/`
-///
-/// `spec` is the vm_dir value: `/path/to/dir` or `zfs:pool/dataset`.
-/// Returns step descriptions for progress display.
-pub fn init_bhyve(spec: &str) -> Result<Vec<String>, String> {
-    let mut steps = Vec::new();
-
-    // 1. Install packages
-    crate::cmd::run_sync_str(PKG, &["install", "-y", "vm-bhyve", "bhyve-firmware", "grub2-bhyve"])
-        .map_err(|e| if e.is_empty() { "package installation failed".to_string() } else { e })?;
-    steps.push("Installed packages: vm-bhyve, bhyve-firmware, grub2-bhyve".into());
-
-    // 2. Configure rc.conf
-    crate::sysrc::set_multi(&[
-        ("vm_enable", "YES"),
-        ("vm_dir", spec),
-    ])?;
-    steps.push(format!("rc.conf configured: vm_enable=YES, vm_dir={spec}"));
-
-    // 3. Prepare storage
-    if let Some(dataset) = spec.strip_prefix("zfs:") {
-        if !crate::cmd::run_sync_str(ZFS, &["list", "-H", "-o", "name", dataset]).is_ok() {
-            crate::cmd::run_sync_str(ZFS, &["create", dataset])
-                .map_err(|e| if e.is_empty() { format!("zfs create {dataset} failed") } else { e })?;
-            steps.push(format!("ZFS dataset created: {dataset}"));
-        } else {
-            steps.push(format!("ZFS dataset already exists: {dataset}"));
-        }
-    } else {
-        std::fs::create_dir_all(spec)
-            .map_err(|e| format!("mkdir -p {spec} failed: {e}"))?;
-        steps.push(format!("Directory ready: {spec}"));
-    }
-
-    // 4. Run vm init (loads kernel modules, creates .config/.templates/.iso/.img)
-    crate::cmd::run_sync_str(VM, &["init"])
-        .map_err(|e| if e.is_empty() { "vm init failed".to_string() } else { format!("vm init failed: {e}") })?;
-    steps.push("vm init completed (kernel modules loaded, directories created)".into());
-
-    // 5. Copy example templates into .templates/
-    let resolved = resolve_vm_dir(spec)
-        .ok_or_else(|| "cannot resolve vm_dir filesystem path after init".to_string())?;
-    let templates_dir = std::path::Path::new(&resolved).join(".templates");
-    let examples_dir = "/usr/local/share/examples/vm-bhyve";
-
-    if std::path::Path::new(examples_dir).exists() {
-        let mut count = 0;
-        for entry in std::fs::read_dir(examples_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
-                let dest = templates_dir.join(entry.file_name());
-                std::fs::copy(entry.path(), &dest)
-                    .map_err(|e| format!("copy template failed: {e}"))?;
-                count += 1;
-            }
-        }
-        steps.push(format!("Copied {count} template files to {resolved}/.templates/"));
-    } else {
-        steps.push("Warning: example templates directory not found".into());
-    }
-
-    Ok(steps)
 }
 
 // ── sysrc / zfs helpers ────────────────────────────────────────────
@@ -1672,7 +1630,7 @@ pub fn set_vm_auto_start(name: &str, enabled: bool) -> Result<(), String> {
 /// Resolve a vm_dir spec to a filesystem path.
 /// For `zfs:pool/dataset`, queries the ZFS mountpoint.
 /// For plain paths, returns as-is.
-fn resolve_vm_dir(vm_dir: &str) -> Option<String> {
+pub fn resolve_vm_dir(vm_dir: &str) -> Option<String> {
     if let Some(dataset) = vm_dir.strip_prefix("zfs:") {
         let mp = crate::cmd::run_sync_str(ZFS, &["get", "-H", "-o", "value", "mountpoint", dataset]).ok()?;
         let mp = mp.trim().to_string();

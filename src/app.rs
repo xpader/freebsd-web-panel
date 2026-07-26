@@ -26,9 +26,10 @@ pub fn build(state: AppState) -> Router {
         // VNC WebSocket proxy — public for the same reason as term/ws (browsers
         // can't set Authorization on WS handshake). Token via ?token= query.
         .route("/api/bhyve/vms/{name}/vnc", get(crate::terminal::vnc_ws_handler))
-        // SSE stream for pkg tasks — EventSource cannot set Authorization
-        // headers, so token is validated via query param inside the handler.
-        .route("/api/pkg/tasks/{id}/stream", get(handlers::pkg::task_stream));
+        // Unified SSE stream for background tasks (pkg install/delete,
+        // bhyve init, etc.). EventSource cannot set Authorization headers,
+        // so token is validated via query param inside the handler.
+        .route("/api/tasks/{id}/stream", get(crate::bgtask::stream_handler));
 
     // Authenticated routes.
     let api = Router::new()
@@ -187,6 +188,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/pkg/install", post(handlers::pkg::install))
         .route("/api/pkg/delete", post(handlers::pkg::delete))
         .route("/api/pkg/tasks/{id}", get(handlers::pkg::task_status))
+        .route("/api/tasks/{id}", get(handlers::pkg::task_status))
         .route("/api/pkg/packages/{name}", get(handlers::pkg::package_detail))
         .route("/api/pkg/packages/{name}/files", get(handlers::pkg::package_files))
         // --- pkg repos (repository management) ---

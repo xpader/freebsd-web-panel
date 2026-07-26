@@ -7,9 +7,129 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 
+use crate::audit;
+use crate::auth::AuthUser;
+use crate::bgtask;
 use crate::bhyve;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+
+const PKG: &str = "/usr/sbin/pkg";
+const VM: &str = "/usr/local/sbin/vm";
+const ZFS: &str = "/sbin/zfs";
+
+/// Background initialization: runs all init steps, streaming output to the task store.
+async fn run_init_streaming(task_id: &str, spec: &str) -> bool {
+    macro_rules! fail {
+        ($msg:expr) => {{
+            let m: String = $msg.into();
+            bgtask::push_line(task_id, &m);
+            bgtask::set_status(task_id, bgtask::TaskStatus::Failed, None);
+            return false;
+        }};
+    }
+
+    // Step 1: Install packages
+    bgtask::push_line(task_id, "=== [1/5] Installing packages: vm-bhyve, bhyve-firmware, grub2-bhyve ===");
+    let exit = bgtask::run_streaming_cmd(
+        task_id,
+        PKG,
+        &["install", "-y", "vm-bhyve", "bhyve-firmware", "grub2-bhyve"],
+    )
+    .await;
+    if exit != 0 {
+        fail!(format!("Package installation failed (exit code {exit})"));
+    }
+    bgtask::push_line(task_id, "Packages installed successfully.");
+
+    // Step 2: Configure rc.conf
+    bgtask::push_line(task_id, "=== [2/5] Configuring rc.conf ===");
+    let spec_rc = spec.to_string();
+    let rc_result = tokio::task::spawn_blocking(move || {
+        crate::sysrc::set_multi(&[("vm_enable", "YES"), ("vm_dir", &spec_rc)])
+    })
+    .await;
+    match rc_result {
+        Ok(Ok(())) => {
+            bgtask::push_line(task_id, &format!("rc.conf configured: vm_enable=YES, vm_dir={spec}"));
+        }
+        Ok(Err(e)) => fail!(format!("sysrc failed: {e}")),
+        Err(e) => fail!(format!("sysrc task panicked: {e}")),
+    }
+
+    // Step 3: Prepare storage
+    bgtask::push_line(task_id, "=== [3/5] Preparing storage ===");
+    if let Some(dataset) = spec.strip_prefix("zfs:") {
+        let ds = dataset.to_string();
+        let zfs_result = tokio::task::spawn_blocking(move || {
+            let exists = crate::cmd::run_sync_str(ZFS, &["list", "-H", "-o", "name", &ds]).is_ok();
+            if exists {
+                Ok(format!("ZFS dataset already exists: {ds}"))
+            } else {
+                crate::cmd::run_sync_str(ZFS, &["create", &ds])
+                    .map(|_| format!("ZFS dataset created: {ds}"))
+            }
+        })
+        .await;
+        match zfs_result {
+            Ok(Ok(msg)) => bgtask::push_line(task_id, &msg),
+            Ok(Err(e)) => fail!(format!("ZFS create failed: {}", if e.is_empty() { "unknown error" } else { &e })),
+            Err(e) => fail!(format!("Storage task panicked: {e}")),
+        }
+    } else {
+        let dir = spec.to_string();
+        let mkdir_result = tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&dir).map(|_| format!("Directory ready: {dir}"))
+        })
+        .await;
+        match mkdir_result {
+            Ok(Ok(msg)) => bgtask::push_line(task_id, &msg),
+            Ok(Err(e)) => fail!(format!("mkdir failed: {e}")),
+            Err(e) => fail!(format!("Storage task panicked: {e}")),
+        }
+    }
+
+    // Step 4: Run vm init
+    bgtask::push_line(task_id, "=== [4/5] Running vm init (loading kernel modules, creating directories) ===");
+    let exit = bgtask::run_streaming_cmd(task_id, VM, &["init"]).await;
+    if exit != 0 {
+        fail!(format!("vm init failed (exit code {exit})"));
+    }
+    bgtask::push_line(task_id, "vm init completed.");
+
+    // Step 5: Copy example templates
+    bgtask::push_line(task_id, "=== [5/5] Copying example templates ===");
+    let spec_copy = spec.to_string();
+    let tpl_result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let resolved = bhyve::resolve_vm_dir(&spec_copy)
+            .ok_or_else(|| "cannot resolve vm_dir path".to_string())?;
+        let templates_dir = std::path::Path::new(&resolved).join(".templates");
+        let examples_dir = "/usr/local/share/examples/vm-bhyve";
+        if !std::path::Path::new(examples_dir).exists() {
+            return Ok("Warning: example templates directory not found".to_string());
+        }
+        let mut count = 0;
+        for entry in std::fs::read_dir(examples_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                let dest = templates_dir.join(entry.file_name());
+                std::fs::copy(entry.path(), &dest).map_err(|e| e.to_string())?;
+                count += 1;
+            }
+        }
+        Ok(format!("Copied {count} template files to {resolved}/.templates/"))
+    })
+    .await;
+    match tpl_result {
+        Ok(Ok(msg)) => bgtask::push_line(task_id, &msg),
+        Ok(Err(e)) => fail!(format!("Template copy failed: {e}")),
+        Err(e) => fail!(format!("Template task panicked: {e}")),
+    }
+
+    bgtask::push_line(task_id, "=== Initialization complete ===");
+    bgtask::set_status(task_id, bgtask::TaskStatus::Done, Some(0));
+    true
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
@@ -799,8 +919,9 @@ pub async fn status() -> ApiResult<Json<bhyve::BhyveStatus>> {
     Ok(Json(s))
 }
 
-/// POST /api/bhyve/init — initialize vm-bhyve.
+/// POST /api/bhyve/init — initialize vm-bhyve (background task with streaming output).
 /// Body: { "spec": "zfs:zroot/vm" } or { "spec": "/home/vm" }
+/// Returns { "task_id": "..." } immediately; stream output via SSE.
 #[derive(Debug, Deserialize)]
 pub struct InitBody {
     pub spec: String,
@@ -808,26 +929,45 @@ pub struct InitBody {
 
 pub async fn init(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(body): Json<InitBody>,
-) -> ApiResult<Json<Vec<String>>> {
+) -> ApiResult<Json<serde_json::Value>> {
     validate_init_spec(&body.spec)?;
 
-    let spec = body.spec.clone();
-    let steps = tokio::task::spawn_blocking(move || bhyve::init_bhyve(&spec))
+    // Reject if hardware virtualization is not available.
+    let status = tokio::task::spawn_blocking(bhyve::check_status)
         .await
-        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
-        .map_err(ApiError::Command)?;
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
+    if !status.virt_supported {
+        return Err(ApiError::BadRequest(
+            "hardware virtualization is not available on this system".into(),
+        ));
+    }
 
-    crate::audit::record(
-        &state,
-        None,
-        "POST",
-        "/api/bhyve/init",
-        200,
-        Some(format!("vm-bhyve initialized (vm_dir={})", body.spec)),
-    );
+    let label = format!("vm-bhyve init (vm_dir={})", body.spec);
+    let id = bgtask::create("bhyve-init", &label);
 
-    Ok(Json(steps))
+    let spec = body.spec.clone();
+    let tid = id.clone();
+    let username = user.username.clone();
+    let st = state.clone();
+    tokio::spawn(async move {
+        let ok = run_init_streaming(&tid, &spec).await;
+        audit::record(
+            &st,
+            Some(&username),
+            "POST",
+            "/api/bhyve/init",
+            if ok { 200 } else { 500 },
+            Some(format!(
+                "vm-bhyve init (vm_dir={}): {}",
+                spec,
+                if ok { "ok" } else { "failed" }
+            )),
+        );
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": id })))
 }
 
 /// GET /api/bhyve/datastores — list datastores.

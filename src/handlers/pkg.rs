@@ -17,23 +17,16 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::LazyLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response};
 use axum::Json;
-use futures_util::stream::{self, StreamExt};
-use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::audit;
-use crate::auth::{validate_token, AuthUser};
+use crate::auth::AuthUser;
+use crate::bgtask;
 use crate::cmd;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
@@ -47,6 +40,8 @@ static RE_SEARCH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_+.{}@*?-]+$").unwrap());
 
 // ---- Public data models ----
+
+const MAX_SEARCH_RESULTS: usize = 100;
 
 #[derive(Debug, Serialize)]
 pub struct PackageSummary {
@@ -153,81 +148,7 @@ struct RawMessage {
     r#type: String,
 }
 
-// ---- Background task infrastructure ----
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskStatus {
-    Running,
-    Done,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PkgTask {
-    pub id: String,
-    pub action: String,
-    pub packages: Vec<String>,
-    pub status: TaskStatus,
-    pub exit_code: Option<i32>,
-    pub lines: Vec<String>,
-    pub created_at: i64,
-}
-
-static TASKS: LazyLock<Mutex<HashMap<String, PkgTask>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-const MAX_SEARCH_RESULTS: usize = 100;
-const TASK_TTL_SECS: i64 = 600;
-
-fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-fn gen_id() -> String {
-    use std::fmt::Write;
-    let ts = now_ts();
-    let pid = std::process::id();
-    let mut buf = [0u8; 8];
-    // Simple entropy from SystemTime nanos.
-    if let Ok(nanos) = SystemTime::now().duration_since(UNIX_EPOCH) {
-        let n = nanos.subsec_nanos() as u64;
-        buf.copy_from_slice(&n.to_le_bytes());
-    }
-    let mut s = String::new();
-    let _ = write!(&mut s, "{ts:x}{pid:x}");
-    for b in &buf {
-        let _ = write!(&mut s, "{b:02x}");
-    }
-    s
-}
-
-fn push_line(task_id: &str, line: &str) {
-    let mut tasks = TASKS.lock();
-    if let Some(task) = tasks.get_mut(task_id) {
-        task.lines.push(line.to_string());
-    }
-}
-
-fn set_status(task_id: &str, status: TaskStatus, exit_code: Option<i32>) {
-    let mut tasks = TASKS.lock();
-    if let Some(task) = tasks.get_mut(task_id) {
-        task.status = status;
-        task.exit_code = exit_code;
-    }
-}
-
-/// Remove tasks older than TASK_TTL_SECS.
-fn gc_tasks() {
-    let cutoff = now_ts() - TASK_TTL_SECS;
-    let mut tasks = TASKS.lock();
-    tasks.retain(|_, t| t.created_at > cutoff);
-}
-
-// ---- Query params ----
+// ---- Public data models ----
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
@@ -535,7 +456,7 @@ pub async fn preview(Json(req): Json<PreviewRequest>) -> ApiResult<Json<PreviewR
     Ok(Json(PreviewResult { install, delete }))
 }
 
-// ---- Handlers: install / delete ----
+// ---- Handlers: install / delete (background tasks) ----
 
 /// `POST /api/pkg/install`
 pub async fn install(
@@ -545,42 +466,31 @@ pub async fn install(
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_names(&req.packages)?;
 
-    gc_tasks();
-
-    let id = gen_id();
-    let task = PkgTask {
-        id: id.clone(),
-        action: "install".to_string(),
-        packages: req.packages.clone(),
-        status: TaskStatus::Running,
-        exit_code: None,
-        lines: Vec::new(),
-        created_at: now_ts(),
-    };
-    TASKS.lock().insert(id.clone(), task);
+    let pkgs_str = req.packages.join(", ");
+    let label = format!("pkg install {pkgs_str}");
+    let id = bgtask::create("pkg-install", &label);
 
     let pkgs = req.packages.clone();
     let tid = id.clone();
     let username = user.username.clone();
     tokio::spawn(async move {
-        run_pkg_background(&tid, "install", &pkgs, false).await;
-        let (status, _exit_code) = {
-            let tasks = TASKS.lock();
-            let t = tasks.get(&tid);
-            (t.map(|t| t.status.clone()), t.and_then(|t| t.exit_code))
-        };
-        let ok = status == Some(TaskStatus::Done);
+        let mut args = vec!["install", "-y"];
+        let pkg_refs: Vec<&str> = pkgs.iter().map(|s| s.as_str()).collect();
+        args.extend(&pkg_refs);
+        let exit = bgtask::run_streaming_cmd(&tid, PKG, &args).await;
+        let ok = exit == 0;
+        bgtask::set_status(
+            &tid,
+            if ok { bgtask::TaskStatus::Done } else { bgtask::TaskStatus::Failed },
+            Some(exit),
+        );
         audit::record(
             &state,
             Some(&username),
             "POST",
             "/api/pkg/install",
             if ok { 200 } else { 500 },
-            Some(format!(
-                "pkg install {}: {}",
-                pkgs.join(", "),
-                if ok { "ok" } else { "failed" }
-            )),
+            Some(format!("pkg install {pkgs_str}: {}", if ok { "ok" } else { "failed" })),
         );
     });
 
@@ -595,166 +505,49 @@ pub async fn delete(
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_names(&req.packages)?;
 
-    gc_tasks();
-
-    let id = gen_id();
-    let task = PkgTask {
-        id: id.clone(),
-        action: "delete".to_string(),
-        packages: req.packages.clone(),
-        status: TaskStatus::Running,
-        exit_code: None,
-        lines: Vec::new(),
-        created_at: now_ts(),
+    let pkgs_str = req.packages.join(", ");
+    let label = if req.recursive {
+        format!("pkg delete -R {pkgs_str}")
+    } else {
+        format!("pkg delete {pkgs_str}")
     };
-    TASKS.lock().insert(id.clone(), task);
+    let id = bgtask::create("pkg-delete", &label);
 
     let pkgs = req.packages.clone();
     let recursive = req.recursive;
     let tid = id.clone();
     let username = user.username.clone();
     tokio::spawn(async move {
-        run_pkg_background(&tid, "delete", &pkgs, recursive).await;
-        let (status, _exit_code) = {
-            let tasks = TASKS.lock();
-            let t = tasks.get(&tid);
-            (t.map(|t| t.status.clone()), t.and_then(|t| t.exit_code))
-        };
-        let ok = status == Some(TaskStatus::Done);
+        let mut args = vec!["delete", "-y"];
+        if recursive {
+            args.push("-R");
+        }
+        let pkg_refs: Vec<&str> = pkgs.iter().map(|s| s.as_str()).collect();
+        args.extend(&pkg_refs);
+        let exit = bgtask::run_streaming_cmd(&tid, PKG, &args).await;
+        let ok = exit == 0;
+        bgtask::set_status(
+            &tid,
+            if ok { bgtask::TaskStatus::Done } else { bgtask::TaskStatus::Failed },
+            Some(exit),
+        );
         audit::record(
             &state,
             Some(&username),
             "POST",
             "/api/pkg/delete",
             if ok { 200 } else { 500 },
-            Some(format!(
-                "pkg delete {}: {}",
-                pkgs.join(", "),
-                if ok { "ok" } else { "failed" }
-            )),
+            Some(format!("pkg delete {pkgs_str}: {}", if ok { "ok" } else { "failed" })),
         );
     });
 
     Ok(Json(serde_json::json!({ "task_id": id })))
 }
 
-/// `GET /api/pkg/tasks/{id}`
-pub async fn task_status(AxumPath(id): AxumPath<String>) -> ApiResult<Json<PkgTask>> {
-    let tasks = TASKS.lock();
-    let task = tasks
-        .get(&id)
-        .ok_or_else(|| ApiError::NotFound("task not found".into()))?;
-    Ok(Json(task.clone()))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct StreamParams {
-    token: String,
-}
-
-/// `GET /api/pkg/tasks/{id}/stream` — SSE stream of task output.
-/// Public route (token validated via query param, like WebSocket terminal).
-pub async fn task_stream(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-    Query(params): Query<StreamParams>,
-) -> Response {
-    if validate_token(&state, &params.token).await.is_err() {
-        return ApiError::NotAuthenticated.into_response();
-    }
-
-    let stream = stream::unfold(0usize, move |last_len| {
-        let id = id.clone();
-        async move {
-            let task = {
-                let tasks = TASKS.lock();
-                tasks.get(&id).cloned()
-            };
-            let task = match task {
-                None => return None,
-                Some(t) => t,
-            };
-
-            let new_lines = &task.lines[last_len..];
-            let new_len = task.lines.len();
-            let is_done = task.status != TaskStatus::Running;
-
-            let data = serde_json::json!({
-                "status": task.status,
-                "lines": new_lines,
-                "exit_code": task.exit_code,
-                "packages": task.packages,
-            });
-            let event = Event::default().data(data.to_string());
-
-            if is_done {
-                Some((event, new_len))
-            } else {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                Some((event, new_len))
-            }
-        }
-    })
-    .chain(stream::once(async {
-        // Signal completion so the browser EventSource gets a clean close.
-        Event::default().event("done").data("[\"done\"]")
-    }))
-    .map(Ok::<_, Infallible>);
-
-    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
-}
-
-/// Run `pkg install -y` or `pkg delete -y` in the background, streaming
-/// stdout/stderr line by line into the shared task store.
-async fn run_pkg_background(task_id: &str, action: &str, packages: &[String], recursive: bool) {
-    let mut cmd = tokio::process::Command::new(PKG);
-    cmd.arg(action).arg("-y");
-    if action == "delete" && recursive {
-        cmd.arg("-R");
-    }
-    for p in packages {
-        cmd.arg(p);
-    }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            push_line(task_id, &format!("Failed to spawn pkg: {e}"));
-            set_status(task_id, TaskStatus::Failed, Some(-1));
-            return;
-        }
-    };
-
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    let tid_out = task_id.to_string();
-    let stdout_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            push_line(&tid_out, &line);
-        }
-    });
-
-    let tid_err = task_id.to_string();
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            push_line(&tid_err, &line);
-        }
-    });
-
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
-
-    let exit_code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
-    let status = if exit_code == 0 {
-        TaskStatus::Done
-    } else {
-        TaskStatus::Failed
-    };
-    set_status(task_id, status, Some(exit_code));
+/// `GET /api/pkg/tasks/{id}` — poll task status (fallback for SSE errors).
+pub async fn task_status(AxumPath(id): AxumPath<String>) -> ApiResult<Json<bgtask::BgTask>> {
+    let task = bgtask::get(&id).ok_or_else(|| ApiError::NotFound("task not found".into()))?;
+    Ok(Json(task))
 }
 
 // ================================================================
@@ -1522,30 +1315,18 @@ pub async fn repo_update(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<serde_json::Value>> {
-    gc_tasks();
-
-    let id = gen_id();
-    let task = PkgTask {
-        id: id.clone(),
-        action: "update".to_string(),
-        packages: vec![],
-        status: TaskStatus::Running,
-        exit_code: None,
-        lines: vec![],
-        created_at: now_ts(),
-    };
-    TASKS.lock().insert(id.clone(), task);
+    let id = bgtask::create("pkg-update", "pkg update -f");
 
     let tid = id.clone();
     let username = user.username.clone();
     tokio::spawn(async move {
-        run_update_background(&tid).await;
-        let (status, _exit_code) = {
-            let tasks = TASKS.lock();
-            let t = tasks.get(&tid);
-            (t.map(|t| t.status.clone()), t.and_then(|t| t.exit_code))
-        };
-        let ok = status == Some(TaskStatus::Done);
+        let exit = bgtask::run_streaming_cmd(&tid, PKG, &["update", "-f"]).await;
+        let ok = exit == 0;
+        bgtask::set_status(
+            &tid,
+            if ok { bgtask::TaskStatus::Done } else { bgtask::TaskStatus::Failed },
+            Some(exit),
+        );
         audit::record(
             &state,
             Some(&username),
@@ -1557,50 +1338,4 @@ pub async fn repo_update(
     });
 
     Ok(Json(serde_json::json!({ "task_id": id })))
-}
-
-/// Run `pkg update -f` in the background.
-async fn run_update_background(task_id: &str) {
-    let mut cmd = tokio::process::Command::new(PKG);
-    cmd.arg("update").arg("-f");
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            push_line(task_id, &format!("Failed to spawn pkg: {e}"));
-            set_status(task_id, TaskStatus::Failed, Some(-1));
-            return;
-        }
-    };
-
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    let tid_out = task_id.to_string();
-    let stdout_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            push_line(&tid_out, &line);
-        }
-    });
-
-    let tid_err = task_id.to_string();
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            push_line(&tid_err, &line);
-        }
-    });
-
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
-
-    let exit_code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
-    let status = if exit_code == 0 {
-        TaskStatus::Done
-    } else {
-        TaskStatus::Failed
-    };
-    set_status(task_id, status, Some(exit_code));
 }

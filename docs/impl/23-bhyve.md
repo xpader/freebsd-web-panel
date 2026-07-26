@@ -151,7 +151,8 @@ spec 格式（由前端构造）：
 
 #### 检测逻辑（`bhyve::check_status()`）
 
-返回 `BhyveStatus { installed, enabled, vm_dir, initialized, resolved_path }`：
+返回 `BhyveStatus { virt_supported, installed, enabled, vm_dir, initialized, resolved_path }`：
+- `virt_supported` — 硬件虚拟化检测：先 `kldstat -q -n vmm` 检查 vmm 是否已加载，未加载则尝试 `kldload vmm`。CPU 不支持 VT-x/AMD-V 时加载失败，返回 false。
 - `installed` — `/usr/local/sbin/vm` 文件是否存在
 - `enabled` — `sysrc::read_rcconf_files().get("vm_enable")` 是否为 `YES`
 - `vm_dir` — `sysrc::read_rcconf_files().get("vm_dir")` 的值（如 `zfs:zroot/vm` 或 `/home/vm`）
@@ -160,21 +161,25 @@ spec 格式（由前端构造）：
 
 `resolve_vm_dir()` 辅助函数：`zfs:pool/dataset` → 查询 ZFS mountpoint；纯路径直接返回。
 
-#### 初始化流程（`bhyve::init_bhyve(spec)`）
+#### 初始化流程（后台任务 + SSE 流式输出）
 
-1. `pkg install -y vm-bhyve bhyve-firmware grub2-bhyve`
-2. `sysrc::set_multi` 一次性设置 `vm_enable=YES` + `vm_dir=<spec>`（1 次 sysrc 调用）
-3. 准备存储：ZFS 类型则 `zfs create <dataset>`（若不存在）；目录类型则 `mkdir -p <path>`
-4. `vm init` — 加载内核模块（nmdm/if_bridge/if_tuntap），创建 `.config`/`.templates`/`.iso`/`.img`/`null.iso`
-5. 复制 `/usr/local/share/examples/vm-bhyve/*` 到 `<resolved_path>/.templates/`
+初始化采用与 pkg 安装相同的后台任务 + SSE 流式输出模式，用户可以实时看到 `pkg install`、`vm init` 等命令的完整控制台输出。
 
-返回步骤描述列表供前端展示进度。
+`POST /api/bhyve/init` 立即返回 `{ task_id }`，后台 `tokio::spawn` 运行 `run_init_streaming()`，通过通用 `bgtask` 模块创建任务：
+
+1. `=== [1/5] Installing packages ===` — `bgtask::run_streaming_cmd()` spawn `pkg install -y vm-bhyve bhyve-firmware grub2-bhyve`，stdout/stderr 逐行推入任务存储
+2. `=== [2/5] Configuring rc.conf ===` — `sysrc::set_multi` 设置 `vm_enable=YES` + `vm_dir=<spec>`
+3. `=== [3/5] Preparing storage ===` — ZFS 类型则 `zfs create`（若不存在）；目录类型则 `mkdir -p`
+4. `=== [4/5] Running vm init ===` — `bgtask::run_streaming_cmd()` spawn `vm init`，流式输出
+5. `=== [5/5] Copying example templates ===` — 复制 `/usr/local/share/examples/vm-bhyve/*` 到 `.templates/`
+
+输出通过统一 SSE 端点 `GET /api/tasks/{id}/stream`（公开路由，token 经 query 参数验证）推送，每 500ms 推送增量行 + 任务状态。详见 `docs/impl/30-bgtask.md`。
 
 #### 前端交互
 
 - 进入 `/bhyve/vms` 时先调用 `GET /api/bhyve/status`
 - 若未初始化，显示警告卡片（列出缺失项）+ 初始化按钮，跳转到 `/bhyve/init`
-- `BhyveInitPage` 提供存储类型选择（ZFS/目录）+ 对应输入项，提交后显示步骤进度
+- `BhyveInitPage` 提供存储类型选择（ZFS/目录）+ 对应输入项，提交后通过 SSE 实时显示控制台输出（与 pkg 安装窗口相同的 monospace 流式输出区），包括每个步骤的标题行和命令的逐行输出
 - 初始化完成后自动跳转回 VM 列表
 
 ### 串口控制台
