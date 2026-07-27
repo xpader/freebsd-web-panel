@@ -51,7 +51,7 @@ async function serviceAction(action) {
       <button class="btn-sm btn-secondary" :disabled="pendingAction || !serviceRunning" @click="serviceAction('stop')">
         <i class="fa-solid fa-stop"></i> {{ t('common.stop') }}
       </button>
-      <button class="btn-sm btn-secondary" :disabled="pendingAction" @click="serviceAction('restart')">
+      <button class="btn-sm btn-secondary" :disabled="!!pendingAction || !serviceRunning" @click="serviceAction('restart')">
         <i class="fa-solid fa-rotate-right"></i> {{ t('common.restart') }}
       </button>
     </template>
