@@ -65,7 +65,7 @@
   --modal-busy-bg: rgba(244, 246, 249, 0.6);
   --github-icon-filter: none;
   --hover-bg: rgba(67, 77, 92, 0.06);
-  --term-bg: #fafbfc;
+  --term-bg: #eff1f5;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -144,7 +144,7 @@ a:hover { color: var(--accent-hover); }
   left: 8px;
   right: 8px;
   height: 3px;
-  border-radius: 3px;
+  border-radius: 3px 3px 0 0;
   background: var(--accent);
 }
 .topnav-tab .icon { font-size: 14px; opacity: 0.85; }

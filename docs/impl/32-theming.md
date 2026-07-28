@@ -98,7 +98,7 @@ document.documentElement.dataset.theme = dark ? 'dark' : 'light';
 
 ### 终端主题适配 `src/lib/term-theme.js`
 
-xterm.js 终端配色通过 `termTheme(effective)` 返回对应主题的完整配色对象（含 16 色 ANSI 调色板）。三个终端页面（ShellPage / JailTerminalPage / BhyveConsolePage）初始化时读取当前主题，并通过 `watch(themeEff, ...)` 在切换时实时更新 `term.options.theme`。终端容器背景由 `--term-bg` CSS 变量控制（深色 `#0b0e14`、浅色 `#fafbfc`）。
+xterm.js 终端配色通过 `termTheme(effective)` 返回对应主题的完整配色对象（含 16 色 ANSI 调色板）。三个终端页面（ShellPage / JailTerminalPage / BhyveConsolePage）初始化时读取当前主题，并通过 `watch(themeEff, ...)` 在切换时实时更新 `term.options.theme`。终端容器背景由 `--term-bg` CSS 变量控制（深色 `#0b0e14`、浅色 Catppuccin Latte `#eff1f5`）。
 
 ## 涉及源码
 

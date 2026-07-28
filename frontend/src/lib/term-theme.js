@@ -1,4 +1,8 @@
 // Terminal color themes — switched by panel theme (dark/light).
+//
+// Dark: custom dark palette matching the panel's dark theme.
+// Light: Catppuccin Latte — a calm, modern pastel theme on cool gray-blue.
+//        Designed for good TUI readability with distinct ANSI 16 colors.
 
 const DARK = {
   background: '#0b0e14',
@@ -24,28 +28,30 @@ const DARK = {
   brightWhite: '#ffffff',
 };
 
+// Catppuccin Latte — cool gray-blue background, high-contrast ANSI accents.
+// All 16 colors chosen for clear distinction on light surfaces.
 const LIGHT = {
-  background: '#fafbfc',
-  foreground: '#24292f',
-  cursor: '#24292f',
-  cursorAccent: '#fafbfc',
-  selectionBackground: '#4d99f055',
-  black: '#24292f',
-  red: '#cf222e',
-  green: '#1a7f37',
-  yellow: '#9a6700',
-  blue: '#0969da',
-  magenta: '#8250df',
-  cyan: '#1b7c83',
-  white: '#6e7781',
-  brightBlack: '#5c6573',
-  brightRed: '#a40e26',
-  brightGreen: '#2da44e',
-  brightYellow: '#bf8700',
-  brightBlue: '#218bff',
-  brightMagenta: '#a475f4',
-  brightCyan: '#3192aa',
-  brightWhite: '#1c2024',
+  background: '#eff1f5',
+  foreground: '#4c4f69',
+  cursor: '#4c4f69',
+  cursorAccent: '#eff1f5',
+  selectionBackground: '#dce0e8',
+  black: '#5c5f77',
+  red: '#d20f39',
+  green: '#40a02b',
+  yellow: '#df8e1d',
+  blue: '#1e66f5',
+  magenta: '#ea76cb',
+  cyan: '#179299',
+  white: '#acb0be',
+  brightBlack: '#6c6f85',
+  brightRed: '#d20f39',
+  brightGreen: '#40a02b',
+  brightYellow: '#df8e1d',
+  brightBlue: '#1e66f5',
+  brightMagenta: '#ea76cb',
+  brightCyan: '#179299',
+  brightWhite: '#bcc0cc',
 };
 
 export function termTheme(effective) {
