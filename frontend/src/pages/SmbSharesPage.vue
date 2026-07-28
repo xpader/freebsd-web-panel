@@ -67,8 +67,10 @@ async function showForm(existing = null) {
           { key: 'browseable', label: t('smb.browseable'), value: existing?.browseable ?? true },
           { key: 'writable', label: t('smb.writable'), value: existing?.writable ?? false },
           { key: 'guest_ok', label: t('smb.guestOk'), value: existing?.guest_ok ?? false },
+          { key: 'time_machine', label: 'Time Machine', value: existing?.time_machine ?? false, help: t('smb.timeMachineHint') },
         ],
       },
+      { key: 'time_machine_max_size', label: t('smb.tmMaxSize'), value: existing?.time_machine_max_size || '', placeholder: '1T', help: t('smb.tmMaxSizeHint') },
       { key: 'valid_users', label: t('smb.validUsers'), value: (existing?.valid_users || []).join(' '), placeholder: 'alice bob', help: t('smb.validUsersHint') },
     ],
     { submitLabel: isEdit ? t('common.save') : t('common.create') },
@@ -85,6 +87,8 @@ async function showForm(existing = null) {
     valid_users: (result.valid_users || '').trim().split(/\s+/).filter(Boolean),
     create_mask: result.create_mask || '0664',
     directory_mask: result.directory_mask || '0775',
+    time_machine: !!result.time_machine,
+    time_machine_max_size: result.time_machine_max_size || '',
   };
 
   try {
@@ -155,18 +159,20 @@ onMounted(async () => {
           <th>{{ t('common.description') }}</th>
           <th>{{ t('smb.writable') }}</th>
           <th>{{ t('smb.guestOk') }}</th>
+          <th>Time Machine</th>
           <th>{{ t('common.actions') }}</th>
         </tr></thead>
         <tbody>
-          <tr v-if="error"><td colspan="6" class="empty">{{ t('common.loadFailed', { msg: error }) }}</td></tr>
-          <tr v-else-if="loading"><td colspan="6" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</td></tr>
-          <tr v-else-if="!shares.length"><td colspan="6" class="empty">{{ t('smb.noShares') }}</td></tr>
+          <tr v-if="error"><td colspan="7" class="empty">{{ t('common.loadFailed', { msg: error }) }}</td></tr>
+          <tr v-else-if="loading"><td colspan="7" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</td></tr>
+          <tr v-else-if="!shares.length"><td colspan="7" class="empty">{{ t('smb.noShares') }}</td></tr>
           <tr v-for="share in shares" :key="share.name">
             <td class="mono"><strong>{{ share.name }}</strong></td>
             <td class="mono">{{ share.path }}</td>
             <td>{{ share.comment || '—' }}</td>
             <td><span :class="['badge', share.writable ? 'badge-success' : 'badge-dim']">{{ share.writable ? t('common.yes') : t('common.no') }}</span></td>
             <td><span :class="['badge', share.guest_ok ? 'badge-warn' : 'badge-dim']">{{ share.guest_ok ? t('common.yes') : t('common.no') }}</span></td>
+            <td><span :class="['badge', share.time_machine ? 'badge-success' : 'badge-dim']">{{ share.time_machine ? t('common.yes') : t('common.no') }}</span></td>
             <td>
               <div class="btn-group">
                 <button class="btn-secondary btn-sm" @click="showForm(share)"><i class="fa-solid fa-pen"></i></button>

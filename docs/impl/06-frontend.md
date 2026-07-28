@@ -145,7 +145,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 | `row` | number/string | 将同 `row` 值的 `half` 字段强制放入同一行 |
 | `showIf` | `{key: val}` | 条件显示：当另一字段等于 `val`（或数组中任一值）时显示 |
 | `requiredIf` | `{key: val}` | 条件必填 |
-| `options` | array | `select`/`radio`：`{value, label}`；`checkbox-group`：`{key, label, value}` |
+| `options` | array | `select`/`radio`：`{value, label}`；`checkbox-group`：`{key, label, value, help?}` |
 | `picker` | `'dir'`/`'file'` | 路径选择器：渲染 `.input-with-btn` + `FilePicker` 组件 |
 
 `opts` 支持 `submitLabel`（提交按钮文字）和 `submitHandler`（异步提交函数，抛错时内联显示错误不关闭对话框）。
@@ -154,7 +154,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 - **`radio`** — pill 样式横排，选中高亮
 - **`checkbox`** — 带描述文字的确认选项样式
-- **`checkbox-group`** — 多个 pill 样式 checkbox 内联排列，共用 `label` 作为组标题，每个 option 的值直接写入 `formValues[opt.key]`
+- **`checkbox-group`** — 多个 pill 样式 checkbox 内联排列，共用 `label` 作为组标题，每个 option 的值直接写入 `formValues[opt.key]`。每个 option 可选 `help` 属性，渲染为 pill 内的 FieldHelp 工具提示
 - **`select`** — 下拉框
 - **`textarea`** — 多行文本
 - **`picker`** — 输入框 + 文件夹按钮，点击打开 `FilePicker` 弹窗选择路径
@@ -174,6 +174,7 @@ const result = await formModal('创建共享', [
     options: [
       { key: 'browseable', label: '可浏览', value: true },
       { key: 'writable', label: '可写', value: false },
+      { key: 'time_machine', label: 'Time Machine', value: false, help: '作为 macOS Time Machine 备份目标' },
     ],
   },
   { key: 'valid_users', label: '授权用户', help: '空格分隔的用户名' },

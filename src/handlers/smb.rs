@@ -219,6 +219,10 @@ pub struct GlobalConfig {
     pub load_printers: String,
     #[serde(default = "default_log_level")]
     pub log_level: u8,
+    /// macOS compatibility: when true, loads fruit + streams_xattr VFS modules
+    /// and enables AAPL protocol negotiation, metadata streaming, and encoding.
+    #[serde(default)]
+    pub fruit_enabled: bool,
 }
 
 fn default_workgroup() -> String { "WORKGROUP".into() }
@@ -243,6 +247,7 @@ impl Default for GlobalConfig {
             dns_proxy: default_dns_proxy(),
             load_printers: default_load_printers(),
             log_level: default_log_level(),
+            fruit_enabled: false,
         }
     }
 }
@@ -265,6 +270,13 @@ pub struct SmbShare {
     pub create_mask: String,
     #[serde(default = "default_directory_mask")]
     pub directory_mask: String,
+    /// Expose this share as a macOS Time Machine backup target.
+    #[serde(default)]
+    pub time_machine: bool,
+    /// Optional capacity quota for the Time Machine share (e.g. "1T", "500G").
+    /// Empty string means no limit.
+    #[serde(default)]
+    pub time_machine_max_size: String,
 }
 
 fn default_true() -> bool { true }
@@ -351,6 +363,12 @@ fn apply_global(
     if let Some(v) = props.get("log level") {
         if let Ok(n) = v.parse::<u8>() { global.log_level = n; }
     }
+    // Detect macOS compatibility: vfs objects containing "fruit" or fruit:aapl = yes
+    if let Some(v) = props.get("vfs objects") {
+        if v.split_whitespace().any(|o| o.eq_ignore_ascii_case("fruit")) {
+            global.fruit_enabled = true;
+        }
+    }
 }
 
 fn props_to_share(name: &str, props: &HashMap<String, String>) -> SmbShare {
@@ -373,6 +391,14 @@ fn props_to_share(name: &str, props: &HashMap<String, String>) -> SmbShare {
             .get("directory mask")
             .cloned()
             .unwrap_or_else(default_directory_mask),
+        time_machine: props
+            .get("fruit:time machine")
+            .map(|v| v.eq_ignore_ascii_case("yes") || v == "true" || v == "1")
+            .unwrap_or(false),
+        time_machine_max_size: props
+            .get("fruit:time machine max size")
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 
@@ -402,7 +428,14 @@ fn generate_conf(config: &SmbConfig) -> String {
     let _ = writeln!(out, "    log level = {}", g.log_level);
     out.push_str("    logging = file\n");
     out.push_str("    log file = /var/log/samba4/log.%m\n");
-    out.push_str("    max log size = 50\n\n");
+    out.push_str("    max log size = 50\n");
+    if g.fruit_enabled {
+        out.push_str("    vfs objects = fruit streams_xattr\n");
+        out.push_str("    fruit:aapl = yes\n");
+        out.push_str("    fruit:metadata = stream\n");
+        out.push_str("    fruit:encoding = native\n");
+    }
+    out.push('\n');
 
     for share in &config.shares {
         out.push_str(&format!("[{}]\n", share.name));
@@ -416,6 +449,21 @@ fn generate_conf(config: &SmbConfig) -> String {
         }
         let _ = writeln!(out, "    create mask = {}", share.create_mask);
         let _ = writeln!(out, "    directory mask = {}", share.directory_mask);
+        if share.time_machine {
+            // Time Machine requires the fruit VFS module; load it at share level
+            // if the global macOS compatibility toggle hasn't already.
+            if !config.global.fruit_enabled {
+                out.push_str("    vfs objects = fruit streams_xattr\n");
+            }
+            out.push_str("    fruit:time machine = yes\n");
+            if !share.time_machine_max_size.trim().is_empty() {
+                let _ = writeln!(
+                    out,
+                    "    fruit:time machine max size = {}",
+                    share.time_machine_max_size.trim()
+                );
+            }
+        }
         out.push('\n');
     }
 
@@ -574,6 +622,10 @@ pub struct CreateShareReq {
     pub create_mask: String,
     #[serde(default = "default_directory_mask")]
     pub directory_mask: String,
+    #[serde(default)]
+    pub time_machine: bool,
+    #[serde(default)]
+    pub time_machine_max_size: String,
 }
 
 /// POST /api/smb/shares
@@ -604,6 +656,8 @@ pub async fn create_share(
                 valid_users: req.valid_users,
                 create_mask: req.create_mask,
                 directory_mask: req.directory_mask,
+                time_machine: req.time_machine,
+                time_machine_max_size: req.time_machine_max_size,
             });
         })?;
         cmd::run_sync(SERVICE, &[RC_NAME, "reload"])?;
@@ -652,6 +706,8 @@ pub async fn update_share(
                 share.valid_users = req.valid_users;
                 share.create_mask = req.create_mask;
                 share.directory_mask = req.directory_mask;
+                share.time_machine = req.time_machine;
+                share.time_machine_max_size = req.time_machine_max_size;
             }
         })?;
         cmd::run_sync(SERVICE, &[RC_NAME, "reload"])?;

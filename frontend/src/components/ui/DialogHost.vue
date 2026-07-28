@@ -224,6 +224,7 @@ function groupedFields(d) {
                 >
                   <input type="checkbox" v-model="formValues[opt.key]" />
                   <span>{{ opt.label }}</span>
+                  <FieldHelp v-if="opt.help" :text="opt.help" />
                 </label>
               </div>
               <!-- select -->

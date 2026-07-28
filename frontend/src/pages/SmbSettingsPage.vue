@@ -97,6 +97,10 @@ onMounted(load);
         <label class="form-row-label">{{ t('smb.logLevel') }} <FieldHelp :text="t('smb.logLevelHint')" /></label>
         <input type="number" v-model.number="config.log_level" min="0" max="10" />
       </div>
+      <div class="form-row">
+        <label class="form-row-label">{{ t('smb.macosCompat') }}</label>
+        <div><label class="checkbox-label"><input type="checkbox" v-model="config.fruit_enabled" /><span class="param-desc-inline">{{ t('smb.macosCompatHint') }}</span></label></div>
+      </div>
       <div class="form-actions-bar">
         <button @click="saveConfig" :disabled="saving">
           <i class="fa-solid fa-floppy-disk"></i> {{ t('common.save') }}

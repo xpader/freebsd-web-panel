@@ -641,6 +641,11 @@ export const en = {
     initStep3: 'Generate default smb4.conf and start the service',
     initSuccess: 'Samba initialized successfully',
     initFailed: 'Samba initialization failed',
+    macosCompat: 'macOS Compatibility',
+    macosCompatHint: 'Enable macOS compatibility optimizations for better mount stability and performance.',
+    timeMachineHint: 'Expose this share as a macOS Time Machine backup target. Requires macOS compatibility enabled in global settings for full functionality.',
+    tmMaxSize: 'Time Machine Max Size',
+    tmMaxSizeHint: 'Capacity quota for this Time Machine share (e.g. 1T, 500G). Leave empty for no limit. Only used when Time Machine is enabled.',
   },
   topbar: {
     settings: 'Settings',
@@ -2267,6 +2272,11 @@ export const zh = {
     initStep3: '生成默认 smb4.conf 并启动服务',
     initSuccess: 'Samba 初始化成功',
     initFailed: 'Samba 初始化失败',
+    macosCompat: 'macOS 兼容性',
+    macosCompatHint: '启用 macOS 兼容性优化，提升 macOS 挂载的稳定性和性能。',
+    timeMachineHint: '将此共享作为 macOS Time Machine 备份目标。需在全局设置中启用 macOS 兼容性以获得完整功能。',
+    tmMaxSize: 'Time Machine 容量上限',
+    tmMaxSizeHint: '此 Time Machine 共享的容量配额（如 1T、500G）。留空则不限制。仅在启用 Time Machine 时生效。',
   },
   topbar: {
     settings: '设置',

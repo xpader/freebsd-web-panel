@@ -72,7 +72,11 @@ start/stop 操作后通过 `is_samba_running()` 验证服务确实到达了目�
     log level = 1
 ```
 
-每个共享管理 `name`、`comment`、`path`、`browseable`、`writable`、`guest ok`、`valid users`、`create mask` 和 `directory mask`。
+每个共享管理 `name`、`comment`、`path`、`browseable`、`writable`、`guest ok`、`valid users`、`create mask`、`directory mask`、`time_machine` 和 `time_machine_max_size`。
+
+**macOS 兼容性**：设置页的全局开关 `fruit_enabled` 启用后，`generate_conf()` 在 `[global]` 段写入 `vfs objects = fruit streams_xattr`、`fruit:aapl = yes`、`fruit:metadata = stream`、`fruit:encoding = native`，所有共享自动获得 AAPL 协议支持和扩展属性流（消除 `._` 文件、提升 Finder 性能）。`parse_conf()` 通过检测 `[global]` 的 `vfs objects` 是否含 `fruit` 来回填该开关。
+
+**Time Machine**：共享级 `time_machine` 布尔字段启用后，`generate_conf()` 在对应共享段写入 `fruit:time machine = yes`；若全局未启用 macOS 兼容性，则同时在该共享段写入 `vfs objects = fruit streams_xattr`。可选的 `time_machine_max_size`（如 `1T`、`500G`）写入 `fruit:time machine max size`，为 Time Machine 备份设置容量上限。
 
 共享名称只允许 `[a-zA-Z0-9_.$-]`，最长 64 个字符。共享路径必须是绝对路径且不能含 NUL。所有命令调用均使用参数数组，不拼接 shell。
 
@@ -101,9 +105,9 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 
 `SmbStatusBar.vue` 封装 SMB 专有状态业务，并复用通用 `StatusBar.vue` 布局。它显示运行状态和 Samba 版本，提供启动、停止和重启操作。共享列表页和设置页都复用该组件，组件操作完成后通过 `refresh` 事件要求父页面重新读取状态。
 
-共享创建/编辑弹窗使用 `formModal` 的 `half: true` 实现两栏布局，路径字段通过 `picker: 'dir'` 接入目录选择器（`FilePicker.vue`）。三个布尔选项（可浏览/可写/允许访客）使用 `checkbox-group` 类型以 pill 风格内联排列。
+共享创建/编辑弹窗使用 `formModal` 的 `half: true` 实现两栏布局，路径字段通过 `picker: 'dir'` 接入目录选择器（`FilePicker.vue`）。四个布尔选项（可浏览/可写/允许访客/Time Machine）使用 `checkbox-group` 类型以 pill 风格内联排列，其中 Time Machine pill 带有 FieldHelp 工具提示说明用途。Time Machine 容量上限为独立的文本字段，带 FieldHelp 提示。
 
-设置页采用 `form-row`（`180px 1fr` 网格）布局，与 Jail/Bhyve 编辑页一致。
+设置页采用 `form-row`（`180px 1fr` 网格）布局，与 Jail/Bhyve 编辑页一致。除工作组、服务器描述、最小协议、访客映射和日志级别外，还提供 macOS 兼容性复选框（对应 `fruit_enabled`），使用 `checkbox-label` + `param-desc-inline` 内联描述样式。
 
 菜单定义在 `frontend/src/lib/menu.js`，位于文件系统组：SMB 共享（`fa-folder-tree`）、SMB 用户（`fa-user-lock`）和 SMB 设置（`fa-gear`）。
 
@@ -140,7 +144,9 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
   "guest_ok": false,
   "valid_users": ["alice", "bob"],
   "create_mask": "0664",
-  "directory_mask": "0775"
+  "directory_mask": "0775",
+  "time_machine": false,
+  "time_machine_max_size": ""
 }
 ```
 
