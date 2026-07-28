@@ -38,6 +38,7 @@
 | [29-mail.md](29-mail.md) | 系统邮件 (mbox)：列出/阅读/删除/标记已读未读 `/var/mail/$USER` 邮件 | `handlers/mail.rs`, `frontend/src/pages/MailPage.vue` |
 | [30-bgtask.md](30-bgtask.md) | 通用后台任务：长运行操作（pkg 安装/删除/更新、bhyve 初始化）的后台执行 + SSE 流式输出 | `bgtask.rs`, `handlers/pkg.rs`, `handlers/bhyve.rs` |
 | [31-smb.md](31-smb.md) | SMB 文件共享：Samba 初始化、服务状态与控制、共享 CRUD、Samba 用户和全局配置管理 | `handlers/smb.rs`, `cmd.rs`, `frontend/src/pages/Smb*.vue`, `frontend/src/components/shared/SmbStatusBar.vue` |
+| [32-theming.md](32-theming.md) | 主题系统：深色/浅色/跟随系统三模式切换、CSS 变量体系、anti-FOUC、Chart.js 主题适配 | `frontend/src/assets/app.css`, `frontend/src/stores/theme.js`, `frontend/src/components/layout/TopBar.vue`, `frontend/src/lib/chart.js` |
 
 ## 文档规范
 

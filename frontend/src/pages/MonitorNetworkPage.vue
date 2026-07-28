@@ -1,8 +1,9 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { Chart, baseOptions, dataIsEmpty, isNotNoiseIface, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
+import { Chart, baseOptions, dataIsEmpty, isNotNoiseIface, gridColor, tickColor, labelColor } from '../lib/chart.js';
+import { effective as themeEff } from '../stores/theme.js';
 import { formatBytesTick, formatRateTick, fmtBytes, fmtRate, fmtTooltipTime } from '../lib/format.js';
 
 const { t } = useI18n();
@@ -69,13 +70,13 @@ function ifaceOptions(aggregated) {
       x: {
         type: 'time',
         time: { displayFormats: { minute: 'HH:mm', hour: 'MM/dd HH:mm', day: 'MM/dd' } },
-        ticks: { color: TICK_COLOR, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
-        grid: { color: GRID_COLOR },
+        ticks: { color: tickColor(), maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+        grid: { color: gridColor() },
       },
-      y: { min: 0, ticks: { color: TICK_COLOR, callback: tickCb }, grid: { color: GRID_COLOR } },
+      y: { min: 0, ticks: { color: tickColor(), callback: tickCb }, grid: { color: gridColor() } },
     },
     plugins: {
-      legend: { labels: { color: LABEL_COLOR, font: { size: 12 } } },
+      legend: { labels: { color: labelColor(), font: { size: 12 } } },
       tooltip: {
         callbacks: {
           title: (items) => fmtTooltipTime(items[0].parsed.x),
@@ -214,6 +215,8 @@ onMounted(async () => {
 onUnmounted(() => {
   Object.values(charts).forEach((c) => c.destroy());
 });
+
+watch(themeEff, () => { drawAllRate(); drawAllTraffic(); });
 </script>
 
 <template>

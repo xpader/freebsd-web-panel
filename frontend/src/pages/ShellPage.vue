@@ -1,10 +1,12 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { termTheme } from '../lib/term-theme.js';
+import { effective as themeEff } from '../stores/theme.js';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -37,12 +39,7 @@ function startSession() {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
     fontSize: 13,
     scrollback: 5000,
-    theme: {
-      background: '#0b0e14',
-      foreground: '#d6dbe5',
-      cursor: '#d6dbe5',
-      selectionBackground: '#264f78aa',
-    },
+    theme: termTheme(themeEff.value),
   });
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -129,6 +126,8 @@ onMounted(() => {
 onUnmounted(() => {
   cleanup();
 });
+
+watch(themeEff, (val) => { if (term) term.options.theme = termTheme(val); });
 </script>
 
 <template>

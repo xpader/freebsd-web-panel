@@ -576,8 +576,8 @@ onMounted(load);
       </div>
       <div class="modal-actions">
         <div class="btn-group">
-          <button v-if="canConfigure(detailIface)" class="btn-secondary btn-sm" @click="showConfig(detailIface)">{{ t('common.config') }}</button>
-          <button v-if="canDestroy(detailIface)" class="btn-danger btn-sm" @click="destroyIface(detailIface)"><i class="fa-solid fa-trash"></i> {{ t('net.destroy') }}</button>
+          <button v-if="canConfigure(detailIface)" class="btn-secondary" @click="showConfig(detailIface)">{{ t('common.config') }}</button>
+          <button v-if="canDestroy(detailIface)" class="btn-danger" @click="destroyIface(detailIface)"><i class="fa-solid fa-trash"></i> {{ t('net.destroy') }}</button>
           <button class="btn-secondary" @click="detailIface = null">{{ t('common.close') }}</button>
         </div>
       </div>

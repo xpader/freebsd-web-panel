@@ -1,8 +1,9 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { Chart, baseOptions, dataIsEmpty } from '../lib/chart.js';
+import { effective as themeEff } from '../stores/theme.js';
 
 const { t } = useI18n();
 const ranges = [
@@ -106,6 +107,8 @@ onMounted(async () => {
 onUnmounted(() => {
   Object.values(charts).forEach((c) => c.destroy());
 });
+
+watch(themeEff, () => { if (usageCanvas) drawAll(); });
 </script>
 
 <template>

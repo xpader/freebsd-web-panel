@@ -1,8 +1,9 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { Chart, palette, baseOptions, dataIsEmpty, GRID_COLOR, TICK_COLOR, LABEL_COLOR } from '../lib/chart.js';
+import { Chart, palette, baseOptions, dataIsEmpty } from '../lib/chart.js';
+import { effective as themeEff } from '../stores/theme.js';
 import { fmtTooltipTime } from '../lib/format.js';
 
 const { t } = useI18n();
@@ -123,6 +124,8 @@ onMounted(async () => {
 onUnmounted(() => {
   Object.values(charts).forEach((c) => c.destroy());
 });
+
+watch(themeEff, () => { if (cpuCanvas) drawAll(); });
 </script>
 
 <template>

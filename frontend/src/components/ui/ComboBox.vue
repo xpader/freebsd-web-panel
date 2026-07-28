@@ -64,13 +64,13 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside));
   margin: 2px 0 0; padding: 4px 0; list-style: none;
   background: var(--bg-elev2); border: 1px solid var(--border);
   border-radius: 4px; max-height: 200px; overflow-y: auto;
-  box-shadow: 0 4px 12px rgba(0,0,0,.3);
+  box-shadow: 0 4px 12px var(--shadow);
 }
 .combobox-dropdown li {
   padding: 6px 12px; cursor: pointer; font-size: 13px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.combobox-dropdown li:hover { background: rgba(255,255,255,.06); }
+.combobox-dropdown li:hover { background: var(--hover-bg); }
 .combobox-dropdown li.current { color: var(--accent); font-weight: 600; }
 .combobox-dropdown li.current::before {
   content: '\f00c'; font-family: 'Font Awesome 6 Free'; font-weight: 900;

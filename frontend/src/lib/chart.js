@@ -28,16 +28,22 @@ export function dataIsEmpty(datasets) {
   return datasets.every((d) => !d.data || d.data.length === 0);
 }
 
-export const GRID_COLOR = '#2a2f3a';
-export const TICK_COLOR = '#8b94a5';
-export const LABEL_COLOR = '#e4e7eb';
+export function gridColor() {
+  return getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#2a2f3a';
+}
+export function tickColor() {
+  return getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim() || '#8b94a5';
+}
+export function labelColor() {
+  return getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e4e7eb';
+}
 
 export function timeScale() {
   return {
     type: 'time',
     time: { displayFormats: { minute: 'HH:mm', hour: 'MM/dd HH:mm', day: 'MM/dd' } },
-    ticks: { color: TICK_COLOR, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
-    grid: { color: GRID_COLOR },
+    ticks: { color: tickColor(), maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+    grid: { color: gridColor() },
   };
 }
 
@@ -45,8 +51,8 @@ export function yScale(opts = {}) {
   return {
     min: 0,
     max: opts.yMax || undefined,
-    ticks: { color: TICK_COLOR, callback: opts.tickCb || ((v) => v + (opts.yUnit || '')) },
-    grid: { color: GRID_COLOR },
+    ticks: { color: tickColor(), callback: opts.tickCb || ((v) => v + (opts.yUnit || '')) },
+    grid: { color: gridColor() },
   };
 }
 
@@ -55,7 +61,7 @@ export function chartPlugins(opts) {
     : opts.byteRateFormat ? fmtRateRaw
     : (v) => v.toFixed(1) + (opts.yUnit || '');
   return {
-    legend: { labels: { color: LABEL_COLOR, font: { size: 12 } } },
+    legend: { labels: { color: labelColor(), font: { size: 12 } } },
     tooltip: {
       callbacks: {
         title: (items) => fmtTooltipTimeRaw(items[0].parsed.x),

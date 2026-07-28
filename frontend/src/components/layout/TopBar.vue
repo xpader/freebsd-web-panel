@@ -1,10 +1,11 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { MENU, SETTINGS } from '../../lib/menu.js';
 import { LANGUAGES, setLang, currentLangMeta, getLang } from '../../i18n/index.js';
 import { useAuthStore } from '../../stores/auth.js';
+import { preference as themePref, setTheme } from '../../stores/theme.js';
 import { api } from '../../lib/api.js';
 
 const { t } = useI18n();
@@ -18,11 +19,22 @@ defineProps({
 const langOpen = ref(false);
 const settingsOpen = ref(false);
 const userOpen = ref(false);
+const themeOpen = ref(false);
 const curLang = ref(currentLangMeta());
+
+const themeOptions = [
+  { val: 'auto', icon: 'fa-solid fa-circle-half-stroke', labelKey: 'topbar.themeSystem' },
+  { val: 'light', icon: 'fa-solid fa-sun', labelKey: 'topbar.themeLight' },
+  { val: 'dark', icon: 'fa-solid fa-moon', labelKey: 'topbar.themeDark' },
+];
+const themeIcon = computed(() =>
+  themeOptions.find((o) => o.val === themePref.value)?.icon || 'fa-solid fa-circle-half-stroke',
+);
 
 function toggleLang() { langOpen.value = !langOpen.value; }
 function toggleSettings() { settingsOpen.value = !settingsOpen.value; }
 function toggleUser() { userOpen.value = !userOpen.value; }
+function toggleTheme() { themeOpen.value = !themeOpen.value; }
 
 function switchLang(code) {
   langOpen.value = false;
@@ -39,6 +51,7 @@ async function doLogout() {
 
 function closeOnClick(e) {
   if (!e.target.closest('#lang-menu')) langOpen.value = false;
+  if (!e.target.closest('#theme-menu')) themeOpen.value = false;
   if (!e.target.closest('#settings-menu')) settingsOpen.value = false;
   if (!e.target.closest('#user-menu')) userOpen.value = false;
 }
@@ -49,7 +62,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="topbar-brand">FreeBSD Web Panel</div>
+  <a class="brand" href="#/dashboard">
+    <span class="brand-mark"><i class="fa-solid fa-bolt"></i></span>
+    <span class="brand-text">fwp</span>
+  </a>
   <nav class="topnav">
     <a
       v-for="g in MENU"
@@ -75,6 +91,24 @@ onMounted(() => {
           @click.prevent="switchLang(l.code)"
         >
           <img :src="l.flag" class="flag-img" :alt="l.label">{{ l.label }}
+        </a>
+      </div>
+    </div>
+
+    <!-- Theme switcher -->
+    <div :class="['settings-menu', { open: themeOpen }]" id="theme-menu">
+      <button class="theme-btn" @click.stop="toggleTheme" :title="t('topbar.theme')">
+        <i :class="themeIcon"></i>
+      </button>
+      <div :class="['settings-dropdown', { open: themeOpen }]">
+        <a
+          v-for="opt in themeOptions"
+          :key="opt.val"
+          href="#"
+          :class="['theme-item', { active: opt.val === themePref }]"
+          @click.prevent="setTheme(opt.val); themeOpen = false"
+        >
+          <span class="icon"><i :class="opt.icon"></i></span>{{ t(opt.labelKey) }}
         </a>
       </div>
     </div>

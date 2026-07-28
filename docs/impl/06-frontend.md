@@ -2,7 +2,7 @@
 
 ## 概述
 
-Vue 3 SPA（Composition API + `<script setup>`），使用 Vite 构建。深色主题 CSS 保持不变（从原项目迁移）。Vite 构建输出到 `web/`，由后端 `rust-embed` 内嵌为单二进制资源。
+Vue 3 SPA（Composition API + `<script setup>`），使用 Vite 构建。支持深色/浅色/跟随系统三种主题模式（详见 [32-theming.md](32-theming.md)）。Vite 构建输出到 `web/`，由后端 `rust-embed` 内嵌为单二进制资源。
 
 ## 构建流程
 
@@ -50,13 +50,14 @@ frontend/
     ├── router/index.js     # Vue Router 路由表 + 认证守卫
     ├── stores/
     │   ├── auth.js         # token、用户信息、首启状态
-    │   └── ui.js           # Toast 队列 + 命令式对话框队列
+    │   ├── ui.js           # Toast 队列 + 命令式对话框队列
+    │   └── theme.js        # 主题偏好（auto/light/dark）+ 系统媒体查询监听
     ├── composables/
     │   └── useDialog.js    # useToast/useConfirm/useAlert/useFormModal
     ├── components/
     │   ├── layout/
     │   │   ├── AppLayout.vue   # 骨架：topbar + sidebar + router-view
-    │   │   ├── TopBar.vue      # 顶栏：品牌 + 导航 + 语言 + 设置 + 用户
+    │   │   ├── TopBar.vue      # 顶栏：logo 标识 + 导航 + 语言 + 主题 + 设置 + 用户
     │   │   └── SideBar.vue     # 侧栏：菜单项（含可折叠子组）
     │   └── ui/
     │       ├── ToastContainer.vue  # Toast 渲染
@@ -196,7 +197,7 @@ const result = await formModal('添加仓库', fields, {
 `MENU` 常量定义 6 个顶级组（概览/配置/网络/文件系统/虚拟化/监控），每组含 `items`（侧栏菜单项），菜单项可选 `children`（可折叠子组）。`groupOfPath(path)` 计算路径所属组。
 
 - `AppLayout.vue` — 骨架：topbar + sidebar + `<router-view />`
-- `TopBar.vue` — 品牌名 + 导航标签 + 语言切换（国旗）+ 设置下拉 + 用户下拉
+- `TopBar.vue` — logo 标识（闪电方块 + fwp）+ 导航标签 + 语言切换（国旗）+ 主题切换（太阳/月亮图标）+ 设置下拉 + 用户下拉
 - `SideBar.vue` — 当前组子菜单，支持可折叠子组
 
 ### 国际化 `src/i18n/`
@@ -208,8 +209,9 @@ const result = await formModal('添加仓库', fields, {
 
 ### CSS `src/assets/app.css`
 
-- 从原项目 `web/css/app.css` 完整迁移，保持所有视觉效果不变
-- CSS 变量定义主题色；`:root { color-scheme: dark }` 声明深色主题
+- 支持深色（默认）与浅色两套 CSS 变量主题，通过 `:root[data-theme="light"]` 覆盖 `:root` 默认变量实现切换（详见 [32-theming.md](32-theming.md)）
+- 品牌标识：渐变方块 logo（闪电图标）+ “fwp” 缩写文字，点击跳转仪表盘
+- 所有 hover 态统一使用 `--hover-bg` 变量；选中态使用 `--accent-glow` 半透明辉光
 - 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.main`）
 - 表格横向滚动：在 `.card` 内的 `<table>` 外包一层 `<div class="table-wrap">`，容器设置 `overflow-x: auto`，内部 `th`/`td` 默认 `white-space: nowrap`（不挤压、不换行），仅 `.cell-wrap` 列允许换行吸收空间。视口缩窄时出现横向滚动条而非挤压内容。
 - 按钮组：相邻的多个按钮包裹在 `<div class="btn-group">`（`display: flex; flex-wrap: nowrap`），防止换行且消除按钮间多余间距。

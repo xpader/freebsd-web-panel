@@ -648,6 +648,10 @@ export const en = {
     auditLog: 'Audit Log',
     logout: 'Logout',
     language: 'Language',
+    theme: 'Theme',
+    themeSystem: 'Follow System',
+    themeLight: 'Light',
+    themeDark: 'Dark',
   },
   auth: {
     loginSubtitle: 'Please sign in to manage the system',
@@ -2270,6 +2274,10 @@ export const zh = {
     auditLog: '审计日志',
     logout: '退出登录',
     language: '语言',
+    theme: '主题',
+    themeSystem: '跟随系统',
+    themeLight: '浅色',
+    themeDark: '深色',
   },
   auth: {
     loginSubtitle: '请登录以管理系统',

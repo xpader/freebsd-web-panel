@@ -60,7 +60,7 @@ const emit = defineEmits(['rowclick', 'rowdblclick']);
 .ft-row {
   display: flex; align-items: center; gap: 2px; cursor: default;
 }
-.ft-row:hover { background: var(--bg-elev2); }
+.ft-row:hover { background: var(--hover-bg); }
 .ft-selectable { cursor: pointer; }
 .ft-arrow {
   width: 14px; text-align: center; color: var(--text-dim);
