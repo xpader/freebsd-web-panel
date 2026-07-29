@@ -78,7 +78,7 @@ onMounted(async () => {
         <div>
           <span v-if="info.automatic" class="badge badge-dim">{{ t('pkg.automatic') }}</span>
           <span v-else class="badge badge-success">{{ t('pkg.manual') }}</span>
-          <span v-if="info.locked" class="badge badge-warn">{{ t('pkg.locked') }}</span>
+          <span v-if="info.locked" class="badge badge-warn">{{ t('common.locked') }}</span>
           <span v-if="info.vital" class="badge badge-success">{{ t('pkg.vital') }}</span>
           <button class="btn-secondary btn-sm" @click="toggleLock" style="margin-left:8px;">
             <i :class="info.locked ? 'fa-solid fa-lock-open' : 'fa-solid fa-lock'"></i>

@@ -195,7 +195,7 @@ function groupedFields(d) {
         <template v-for="(group, gi) in groupedFields(ui.dialog)" :key="gi">
           <div :class="group.length > 1 ? 'form-row-half' : ''">
             <div v-for="f in group" :key="f.key" class="field" v-show="isFieldVisible(f)">
-              <label :for="f.type === 'checkbox' ? null : ('field-' + f.key)">
+              <label v-if="f.label" :for="f.type === 'checkbox' ? null : ('field-' + f.key)">
                 {{ f.label }}
                 <span v-if="f.help" class="field-help-inline">
                   <FieldHelp :text="f.help" />
@@ -228,7 +228,7 @@ function groupedFields(d) {
                 </label>
               </div>
               <!-- select -->
-              <select v-else-if="f.type === 'select'" :id="'field-' + f.key" v-model="formValues[f.key]" :required="isFieldRequired(f)">
+              <select v-else-if="f.type === 'select'" :id="'field-' + f.key" v-model="formValues[f.key]" :required="isFieldRequired(f)" :disabled="f.disabled">
                 <option value="" v-if="!f.required">{{ t('common.pleaseSelect') }}</option>
                 <option v-for="opt in f.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
@@ -245,7 +245,7 @@ function groupedFields(d) {
                 <input :id="'field-' + f.key" v-model="formValues[f.key]"
                   :type="f.inputType || 'text'"
                   :placeholder="f.placeholder || ''"
-                  :required="isFieldRequired(f)" />
+                  :required="isFieldRequired(f)" :disabled="f.disabled" />
                 <button type="button" class="btn-secondary btn-sm fp-trigger" @click="pickerField = f.key">
                   <i class="fa-solid fa-folder-open"></i>
                 </button>
@@ -254,7 +254,7 @@ function groupedFields(d) {
               <input v-else :id="'field-' + f.key" v-model.trim="formValues[f.key]"
                 :type="f.inputType || 'text'"
                 :placeholder="f.placeholder || ''"
-                :required="isFieldRequired(f)" />
+                :required="isFieldRequired(f)" :disabled="f.disabled" />
               <small v-if="f.hint" class="field-hint">{{ f.hint }}</small>
             </div>
           </div>

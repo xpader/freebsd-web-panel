@@ -43,8 +43,11 @@ pub fn build(state: AppState) -> Router {
         .route("/api/users/{id}", delete(handlers::users::delete_user))
         .route("/api/audit", get(handlers::audit::list))
         // --- System accounts (FreeBSD users & groups) ---
-        .route("/api/accounts/users", get(handlers::accounts::list_users))
-        .route("/api/accounts/groups", get(handlers::accounts::list_groups))
+        .route("/api/accounts/users", get(handlers::accounts::list_users).post(handlers::accounts::create_user))
+        .route("/api/accounts/users/{name}", put(handlers::accounts::update_user).delete(handlers::accounts::delete_user))
+        .route("/api/accounts/groups", get(handlers::accounts::list_groups).post(handlers::accounts::create_group))
+        .route("/api/accounts/groups/{name}", put(handlers::accounts::update_group).delete(handlers::accounts::delete_group))
+        .route("/api/accounts/shells", get(handlers::accounts::list_shells))
         // --- sysctl ---
         .route("/api/sysctl", get(handlers::sysctl::list))
         .route("/api/sysctl/{name}", put(handlers::sysctl::set).delete(handlers::sysctl::reset))

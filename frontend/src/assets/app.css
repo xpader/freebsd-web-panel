@@ -622,7 +622,7 @@ tr.row-clickable { cursor: pointer; }
 /* ---- Badges ---- */
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 5px;
   border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
@@ -631,7 +631,7 @@ tr.row-clickable { cursor: pointer; }
 .badge-danger { background: var(--danger-glow); color: var(--danger); }
 .badge-warn { background: var(--warn-glow); color: var(--warn); }
 .badge-dim { background: var(--bg-elev2); color: var(--text-dim); }
-.kv-val .badge + .badge { margin-left: 6px; }
+.badge + .badge { margin-left: 3px; }
 
 /* ---- Field help tooltip ---- */
 .field-help {
