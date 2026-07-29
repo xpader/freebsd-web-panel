@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtBytes, fmtRate, fmtUptime } from '../lib/format.js';
+import ProgressBar from '../components/ui/ProgressBar.vue';
 
 const { t } = useI18n();
 const info = ref(null);
@@ -97,7 +98,7 @@ onUnmounted(() => {
           <span v-if="m.cpu_freq_mhz" class="text-dim mono" style="font-size:11px;float:right;">{{ m.cpu_freq_mhz }} MHz</span>
         </div>
         <div class="big-pct">{{ m.cpu_usage.toFixed(1) }}%</div>
-        <div class="bar-wrap"><div class="bar bar-cpu" :style="{ width: Math.min(100, m.cpu_usage) + '%' }"></div></div>
+        <ProgressBar :pct="m.cpu_usage" variant="cpu" />
         <div class="core-bars" style="margin-top:12px;">
           <div class="core-bar core-header">
             <span class="core-label">{{ t('common.core') }}</span>
@@ -106,7 +107,7 @@ onUnmounted(() => {
           </div>
           <div v-for="(pct, i) in m.cpu_usage_per_core" :key="i" class="core-bar">
             <span class="core-label">{{ i }}</span>
-            <div class="bar-wrap sm"><div class="bar bar-cpu" :style="{ width: pct + '%' }"></div></div>
+            <ProgressBar :pct="pct" variant="cpu" size="sm" />
             <template v-if="m.temperatures && m.temperatures.length">
               <span class="core-temp">
                 <span v-if="tempMap()[i] != null" :class="['badge', tempClass(tempMap()[i])]" style="min-width:48px;text-align:center;">{{ tempMap()[i].toFixed(1) }}°C</span>
@@ -121,7 +122,7 @@ onUnmounted(() => {
       <div class="card">
         <div class="card-title"><i class="fa-solid fa-memory"></i> {{ t('dash.memoryUsage') }}</div>
         <div class="big-pct">{{ m.memory.usage.toFixed(1) }}%</div>
-        <div class="bar-wrap"><div class="bar bar-mem" :style="{ width: Math.min(100, m.memory.usage) + '%' }"></div></div>
+        <ProgressBar :pct="m.memory.usage" variant="mem" />
         <div class="mem-breakdown">
           <div class="mem-stacked">
             <div
@@ -144,7 +145,7 @@ onUnmounted(() => {
       <div class="card">
         <div class="card-title"><i class="fa-solid fa-hard-drive"></i> {{ t('dash.swapUsage') }}</div>
         <div class="big-pct">{{ m.swap.usage.toFixed(1) }}%</div>
-        <div class="bar-wrap"><div class="bar bar-swap" :style="{ width: Math.min(100, m.swap.usage) + '%' }"></div></div>
+        <ProgressBar :pct="m.swap.usage" variant="swap" />
         <div class="metric-detail">{{ fmtBytes(m.swap.used) }} / {{ fmtBytes(m.swap.total) }}</div>
       </div>
     </div>

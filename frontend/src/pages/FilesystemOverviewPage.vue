@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { api } from '../lib/api.js';
 import { fmtBytes } from '../lib/format.js';
+import ProgressBar from '../components/ui/ProgressBar.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -14,9 +15,6 @@ function goToPool(name) {
 const data = ref(null);
 const error = ref('');
 
-function barClass(pct) {
-  return pct > 80 ? 'bar-swap' : 'bar-mem';
-}
 
 onMounted(async () => {
   try {
@@ -50,9 +48,7 @@ onMounted(async () => {
         <span>{{ t('common.frag') }}: {{ p.fragmentation_pct.toFixed(0) }}%</span>
         <span>{{ t('common.dedup') }}: {{ p.dedup.toFixed(2) }}x</span>
       </div>
-      <div class="bar-wrap" style="margin-top:10px;">
-        <div :class="['bar', barClass(p.capacity_pct)]" :style="{ width: p.capacity_pct + '%' }"></div>
-      </div>
+      <ProgressBar :pct="p.capacity_pct" variant="auto" style="margin-top:10px;" />
     </div>
     </template>
 
@@ -91,9 +87,7 @@ onMounted(async () => {
             <td class="mono">{{ m.size > 0 ? fmtBytes(m.available) : '—' }}</td>
             <td>
               <div v-if="m.size > 0" class="flex">
-                <div class="bar-wrap sm" style="width:80px;">
-                  <div :class="['bar', barClass(m.capacity_pct)]" :style="{ width: m.capacity_pct + '%' }"></div>
-                </div>
+                <ProgressBar :pct="m.capacity_pct" variant="auto" size="sm" style="width:80px;" />
                 <span class="text-dim mono" style="font-size:11px;">{{ m.capacity_pct.toFixed(0) }}%</span>
               </div>
               <span v-else>—</span>

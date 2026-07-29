@@ -138,7 +138,7 @@ onMounted(load);
           <th>{{ t('common.name') }}</th>
           <th>{{ t('accounts.gid') }}</th>
           <th>{{ t('accounts.members') }}</th>
-          <th>{{ t('common.actions') }}</th>
+          <th class="col-actions">{{ t('common.actions') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -154,7 +154,7 @@ onMounted(load);
             </template>
             <span v-else class="text-dim">—</span>
           </td>
-          <td>
+          <td class="col-actions">
             <div class="btn-group">
               <button class="btn-secondary btn-sm" @click="editGroup(g)">{{ t('common.edit') }}</button>
               <button class="btn-danger btn-sm" :disabled="isSystemGroup(g)" @click="deleteGroup(g)">{{ t('common.delete') }}</button>

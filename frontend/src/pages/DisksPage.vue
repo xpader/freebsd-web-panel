@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
 import { fmtBytes } from '../lib/format.js';
 import { useToast, useAlert } from '../composables/useDialog.js';
+import ProgressBar from '../components/ui/ProgressBar.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -78,9 +79,7 @@ onMounted(async () => {
           <span class="text-dim">{{ t('disks.allocated', { used: fmtBytes(usedBytes(d)), free: fmtBytes(Math.max(0, d.size_bytes - usedBytes(d))) }) }}</span>
           <span class="mono text-dim">{{ (usedBytes(d) / d.size_bytes * 100).toFixed(0) }}%</span>
         </div>
-        <div class="bar-wrap">
-          <div :class="['bar', usedBytes(d) / d.size_bytes * 100 > 80 ? 'bar-swap' : 'bar-cpu']" :style="{ width: Math.min(100, usedBytes(d) / d.size_bytes * 100) + '%' }"></div>
-        </div>
+        <ProgressBar :pct="usedBytes(d) / d.size_bytes * 100" variant="auto" />
       </div>
 
       <div style="padding:0 18px 18px;">

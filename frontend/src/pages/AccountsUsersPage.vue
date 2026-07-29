@@ -212,7 +212,7 @@ onMounted(load);
           <th>{{ t('common.description') }}</th>
           <th>{{ t('accounts.home') }}</th>
           <th>Shell</th>
-          <th>{{ t('common.actions') }}</th>
+          <th class="col-actions">{{ t('common.actions') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -224,15 +224,23 @@ onMounted(load);
           <td class="mono">{{ u.uid }}</td>
           <td class="mono">{{ u.group_name || '—' }} <span class="text-dim">({{ u.gid }})</span></td>
           <td>
-            <template v-if="u.groups && u.groups.length">
-              <span v-for="g in u.groups" :key="g" class="badge badge-dim">{{ g }}</span>
-            </template>
-            <span v-else class="text-dim">—</span>
+            <div class="cell-wrap" style="max-width:160px;">
+              <template v-if="u.groups && u.groups.length">
+                <span v-for="g in u.groups" :key="g" class="badge badge-dim">{{ g }}</span>
+              </template>
+              <span v-else class="text-dim">—</span>
+            </div>
           </td>
-          <td class="text-dim">{{ u.gecos || '—' }}</td>
-          <td class="mono">{{ u.home }}</td>
-          <td class="mono">{{ u.shell }}</td>
           <td>
+            <div class="cell-wrap" style="max-width:160px;">{{ u.gecos || '—' }}</div>
+          </td>
+          <td>
+            <div class="mono cell-ellipsis" style="max-width:140px;" :title="u.home">{{ u.home }}</div>
+          </td>
+          <td>
+            <div class="mono cell-ellipsis" style="max-width:120px;" :title="u.shell">{{ u.shell }}</div>
+          </td>
+          <td class="col-actions">
             <div class="btn-group">
               <button class="btn-secondary btn-sm" @click="editUser(u)">{{ t('common.edit') }}</button>
               <button class="btn-danger btn-sm" :disabled="isSystemUser(u)" @click="deleteUser(u)">{{ t('common.delete') }}</button>

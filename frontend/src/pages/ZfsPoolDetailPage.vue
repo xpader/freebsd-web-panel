@@ -7,6 +7,7 @@ import { fmtBytes } from '../lib/format.js';
 import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
 import BackButton from '../components/ui/BackButton.vue';
 import PoolManageModal from '../components/ui/PoolManageModal.vue';
+import ProgressBar from '../components/ui/ProgressBar.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -28,9 +29,6 @@ function healthBadge(health) {
   return 'badge-danger';
 }
 
-function barClass(pct) {
-  return pct > 80 ? 'bar-swap' : 'bar-mem';
-}
 
 async function load() {
   refreshing.value = true;
@@ -203,9 +201,7 @@ onMounted(load);
 
     <div class="card">
       <div class="card-title">{{ t('zfs.capacityUsage') }}</div>
-      <div class="bar-wrap" style="height:16px;">
-        <div :class="['bar', barClass(info.capacity_pct || 0)]" :style="{ width: (info.capacity_pct || 0) + '%' }"></div>
-      </div>
+      <ProgressBar :pct="info.capacity_pct || 0" variant="auto" style="height:16px;" />
       <div class="text-dim" style="font-size:12px;margin-top:6px;">{{ fmtBytes(info.allocated) }} / {{ fmtBytes(info.size) }} ({{ (info.capacity_pct || 0).toFixed(1) }}%)</div>
     </div>
 

@@ -8,6 +8,8 @@
   --text-dim: #848d97;
   --accent: #58a6ff;
   --accent-hover: #388bfd;
+  --accent-emphasis: #2563eb;
+  --accent-emphasis-hover: #1d4ed8;
   --accent-2: #a371f7;
   --accent-glow: rgba(88, 166, 255, 0.12);
   --accent-glow-strong: rgba(88, 166, 255, 0.2);
@@ -46,6 +48,8 @@
   --text-dim: #5c6573;
   --accent: #c5283d;
   --accent-hover: #9d1f30;
+  --accent-emphasis: #c5283d;
+  --accent-emphasis-hover: #9d1f30;
   --accent-2: #d4602e;
   --accent-glow: rgba(197, 40, 61, 0.08);
   --accent-glow-strong: rgba(197, 40, 61, 0.14);
@@ -544,7 +548,7 @@ button, .btn, .btn-secondary, .btn-danger {
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  background: var(--accent);
+  background: var(--accent-emphasis);
   color: #fff;
   border: none;
   border-radius: var(--radius);
@@ -553,7 +557,7 @@ button, .btn, .btn-secondary, .btn-danger {
   cursor: pointer;
   transition: background 0.15s, transform 0.08s ease;
 }
-button:hover, .btn:hover { background: var(--accent-hover); }
+button:hover, .btn:hover { background: var(--accent-emphasis-hover); }
 button:active, .btn:active { transform: scale(0.96); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-secondary { background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text); }
@@ -564,7 +568,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger:active { background: var(--danger-hover); }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 .time-range { display: flex; gap: 6px; }
-.active-range, .active-bucket { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+.active-range, .active-bucket { background: var(--accent-emphasis) !important; color: #fff !important; border-color: var(--accent-emphasis) !important; }
 .card canvas { max-height: 260px; }
 .net-section-title { margin: 24px 0 12px; font-size: 15px; color: var(--text-dim); }
 
@@ -575,6 +579,19 @@ th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--bo
 .table-wrap > table { width: 100%; }
 .table-wrap th, .table-wrap td { white-space: nowrap; }
 .table-wrap .cell-wrap { white-space: normal; }
+/* Sticky right actions column — stays visible during horizontal scroll */
+.table-wrap th.col-actions,
+.table-wrap td.col-actions {
+  position: sticky;
+  right: 0;
+  background: var(--bg-elev);
+  white-space: nowrap;
+  width: 1%;
+  z-index: 2;
+  box-shadow: -6px 0 10px -6px var(--shadow);
+}
+.table-wrap th.col-actions { z-index: 3; }
+.table-wrap tbody tr:hover td.col-actions { background: var(--bg-elev2); }
 /* Prevent badge/button inner text from wrapping, but allow multiple buttons to wrap */
 .badge { white-space: nowrap; }
 td button { white-space: nowrap; }
@@ -977,7 +994,7 @@ tr.row-dim { opacity: 0.55; }
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px;
   font-size: 10px; font-weight: 700; color: #fff;
-  background: var(--accent); border-radius: 8px;
+  background: var(--accent-emphasis); border-radius: 8px;
 }
 
 /* Terminal page — fills the right-side main area, no page scroll behind it */
@@ -1025,7 +1042,7 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .filter-group { display: inline-flex; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg-elev); padding: 2px; }
 .filter-btn { padding: 4px 12px; font-size: 12px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; transition: background 0.15s; }
 .filter-btn:hover { background: var(--hover-bg); }
-.filter-btn.active { background: var(--accent); color: #fff; }
+.filter-btn.active { background: var(--accent-emphasis); color: #fff; }
 .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .checkbox-label input { margin: 0; }
 .modal > .text-dim { margin-bottom: 16px; }
@@ -1071,5 +1088,5 @@ body.term-active .main .page-header { flex-shrink: 0; }
 }
 tr.row-modified > td { background: var(--warn-glow); }
 .pagination { display: flex; align-items: center; gap: 4px; justify-content: center; padding: 12px 0; flex-wrap: wrap; }
-.pagination .btn-sm.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pagination .btn-sm.active { background: var(--accent-emphasis); color: #fff; border-color: var(--accent-emphasis); }
 

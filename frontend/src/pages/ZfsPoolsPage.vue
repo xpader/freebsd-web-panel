@@ -6,6 +6,7 @@ import { api } from '../lib/api.js';
 import { fmtBytes } from '../lib/format.js';
 import { useToast, useAlert, useConfirm, useFormModal } from '../composables/useDialog.js';
 import PoolManageModal from '../components/ui/PoolManageModal.vue';
+import ProgressBar from '../components/ui/ProgressBar.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -24,9 +25,6 @@ const importable = ref([]);
 const importing = ref(false);
 const includeDestroyed = ref(false);
 
-function barClass(pct) {
-  return pct > 80 ? 'bar-swap' : 'bar-mem';
-}
 
 async function load() {
   refreshing.value = true;
@@ -148,9 +146,7 @@ onMounted(load);
         <span>{{ t('common.frag') }}: {{ p.fragmentation_pct.toFixed(0) }}%</span>
         <span>{{ t('common.dedup') }}: {{ p.dedup.toFixed(2) }}x</span>
       </div>
-      <div class="bar-wrap" style="margin-top:10px;">
-        <div :class="['bar', barClass(p.capacity_pct)]" :style="{ width: p.capacity_pct + '%' }"></div>
-      </div>
+      <ProgressBar :pct="p.capacity_pct" variant="auto" style="margin-top:10px;" />
     </div>
   </template>
 

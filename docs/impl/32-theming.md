@@ -21,7 +21,9 @@
 | `--bg-elev2` | 次级背景（hover、代码块、子元素） |
 | `--border` | 边框颜色 |
 | `--text` / `--text-dim` | 主文字 / 暗淡文字 |
-| `--accent` / `--accent-hover` | 主强调色（蓝）及 hover 态 |
+| `--accent` / `--accent-hover` | 文字/链接/导航/进度条强调色（较亮蓝）及 hover 态（更深） |
+| `--accent-emphasis` | 按钮/激活填充背景色（更深蓝，配白字保证对比度） |
+| `--accent-emphasis-hover` | 按钮 hover 背景色（比 emphasis 更深）；与文字 hover `--accent-hover` 分离 |
 | `--accent-2` | 次强调色（紫），用于渐变 |
 | `--accent-glow` / `--accent-glow-strong` | 强调色半透明辉光（选中态背景、focus 环） |
 | `--success-glow` / `--danger-glow` / `--warn-glow` | 状态色半透明辉光（badge 背景） |
