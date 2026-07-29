@@ -282,7 +282,7 @@ onUnmounted(() => {
             <td class="text-dim" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
               {{ m.from || '—' }}
             </td>
-            <td style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <td style="max-width: 400px; word-break: break-word;">
               {{ m.subject || ('(' + t('mail.noSubject') + ')') }}
             </td>
             <td class="mono text-dim">{{ m.date }}</td>
@@ -316,7 +316,7 @@ onUnmounted(() => {
     <div class="mail-detail">
       <div class="mail-detail-header">
         <h2>{{ detail.subject || ('(' + t('mail.noSubject') + ')') }}</h2>
-        <div class="btn-group">
+        <div class="btn-group" style="flex-shrink: 0;">
           <button class="btn-secondary btn-sm" @click="closeDetail">{{ t('common.close') }}</button>
           <button class="btn-danger btn-sm" @click="deleteMail(detail.index)">{{ t('common.delete') }}</button>
         </div>
@@ -380,7 +380,7 @@ onUnmounted(() => {
 .mail-detail-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
   gap: 12px;
@@ -390,9 +390,9 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 600;
   margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .mail-detail-meta {
