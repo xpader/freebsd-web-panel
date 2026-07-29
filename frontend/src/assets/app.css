@@ -359,6 +359,7 @@ a:hover { color: var(--accent-hover); }
 
 /* ---- Login ---- */
 .login-wrap {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -374,8 +375,53 @@ a:hover { color: var(--accent-hover); }
   width: 100%;
   max-width: 380px;
 }
-.login-card h1 { font-size: 20px; margin-bottom: 4px; }
-.login-card .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
+.login-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: 28px;
+}
+.login-brand .brand-mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  font-size: 20px;
+  margin-bottom: 14px;
+}
+.login-card h1 { font-size: 20px; margin: 0 0 6px; }
+.login-card .subtitle { color: var(--text-dim); font-size: 13px; margin: 0; line-height: 1.4; }
+.login-footer {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.login-footer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.login-footer-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.login-footer .settings-dropdown {
+  top: auto;
+  bottom: calc(100% + 6px);
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 150px;
+}
+.login-footer .settings-menu.open .lang-btn,
+.login-footer .settings-menu.open .theme-btn {
+  background: var(--hover-bg);
+}
 .login-card .field { margin-bottom: 16px; }
 .login-card label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-dim); }
 .form-row-half { display: flex; gap: 12px; }

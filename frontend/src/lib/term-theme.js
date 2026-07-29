@@ -31,8 +31,8 @@ const DARK = {
 // Catppuccin Latte — cool gray-blue background, high-contrast ANSI accents.
 // All 16 colors chosen for clear distinction on light surfaces.
 const LIGHT = {
-  background: '#eff1f5',
-  foreground: '#4c4f69',
+  background: '#f7f8f8',
+  foreground: '#2f303f',
   cursor: '#4c4f69',
   cursorAccent: '#eff1f5',
   selectionBackground: '#dce0e8',

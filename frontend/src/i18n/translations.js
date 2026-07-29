@@ -660,7 +660,7 @@ export const en = {
     themeDark: 'Dark',
   },
   auth: {
-    loginSubtitle: 'Please sign in to manage the system',
+    slogan: 'Easily use the powerful FreeBSD system',
     username: 'Username',
     password: 'Password',
     login: 'Login',
@@ -2313,7 +2313,7 @@ export const zh = {
     themeDark: '深色',
   },
   auth: {
-    loginSubtitle: '请登录以管理系统',
+    slogan: '轻松使用强大的 FreeBSD 系统',
     username: '用户名',
     password: '密码',
     login: '登录',
