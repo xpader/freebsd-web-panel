@@ -230,10 +230,7 @@ pub async fn initialize(
     let driver_val = driver;
     let mode_val = mode;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        match driver_val {
-            FirewallDriver::Ipfw => fw::init_ipfw(mode_val, &rules, &tables, &nat_rules)?,
-            FirewallDriver::Pf => fw::init_pf(mode_val, &rules, &tables, &nat_rules)?,
-        }
+        fw::init(driver_val, mode_val, &rules, &tables, &nat_rules)?;
         Ok(())
     })
     .await
@@ -302,21 +299,10 @@ pub async fn switch(
     let mode_val = mode;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         // Deactivate old driver
-        match old {
-            FirewallDriver::Ipfw => fw::deactivate_ipfw()?,
-            FirewallDriver::Pf => fw::deactivate_pf()?,
-        }
+        fw::deactivate(old)?;
         // Initialize the new driver, then load its rules while it remains disabled.
-        match new {
-            FirewallDriver::Ipfw => {
-                fw::init_ipfw(mode_val, &new_rules, &tables, &nat_rules)?;
-                fw::apply_ipfw(&new_rules, mode_val, &tables, &nat_rules)?;
-            }
-            FirewallDriver::Pf => {
-                fw::init_pf(mode_val, &new_rules, &tables, &nat_rules)?;
-                fw::apply_pf(&new_rules, mode_val, &tables, &nat_rules)?;
-            }
-        }
+        fw::init(new, mode_val, &new_rules, &tables, &nat_rules)?;
+        fw::apply(new, &new_rules, mode_val, &tables, &nat_rules)?;
         Ok(())
     })
     .await
@@ -431,12 +417,7 @@ pub async fn disable(
 
     let d = driver;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        fw::disable_firewall(d)?;
-        // Also set rc.conf to NO so it won't start on boot
-        match d {
-            FirewallDriver::Ipfw => crate::sysrc::ensure_no("firewall_enable"),
-            FirewallDriver::Pf => crate::sysrc::ensure_no("pf_enable"),
-        }
+        fw::deactivate(d)?;
         Ok(())
     })
         .await
@@ -531,15 +512,8 @@ pub async fn set_mode(
     let mode_val = new_mode;
     let driver_val = driver;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        match driver_val {
-            FirewallDriver::Ipfw => {
-                fw::set_ipfw_mode(mode_val)?;
-                fw::apply_ipfw(&rules_clone, mode_val, &tables, &nat_rules)?;
-            }
-            FirewallDriver::Pf => {
-                fw::apply_pf(&rules_clone, mode_val, &tables, &nat_rules)?;
-            }
-        }
+        fw::set_mode(driver_val, mode_val)?;
+        fw::apply(driver_val, &rules_clone, mode_val, &tables, &nat_rules)?;
         Ok(())
     })
     .await
@@ -829,10 +803,7 @@ pub async fn apply(
     let mode_val = mode;
     let driver_val = driver;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
-        match driver_val {
-            FirewallDriver::Ipfw => fw::apply_ipfw(&rules_clone, mode_val, &tables, &nat_rules)?,
-            FirewallDriver::Pf => fw::apply_pf(&rules_clone, mode_val, &tables, &nat_rules)?,
-        }
+        fw::apply(driver_val, &rules_clone, mode_val, &tables, &nat_rules)?;
         Ok(())
     })
     .await

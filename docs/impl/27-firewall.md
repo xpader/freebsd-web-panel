@@ -85,6 +85,15 @@ CREATE TABLE firewall_table_entries (
 
 > **注意**：规则与引擎完全解耦，所有规则统一存储。切换引擎时共用同一套规则，不按引擎分表。
 
+### 驱动抽象（FirewallBackend trait）
+
+所有驱动特定的操作集中在 `FirewallBackend` trait 后面。`FirewallDriver::backend()` 返回 `&'static dyn FirewallBackend`，分发到 `Ipfw` 或 `Pf` 的具体实现。调用方通过统一模块级函数（`init`、`apply`、`deactivate`、`set_mode` 等）转调，不再手写 `match driver { Ipfw => …, Pf => … }`。
+
+- **trait 方法**（每驱动各自实现）：`generate`、`apply`、`init`、`deactivate`、`enable`、`disable`、`is_enabled`、`reload_config`
+- **trait 默认方法**（共享逻辑）：`set_mode`（no-op）、`module_loaded`、`ensure_module`、`write_config`、`read_config_file`、`rollback`（基于 `reload_config` + `disable`）
+- **配置生成**（`generate_ipfw`/`generate_pf`）：保留为模块级自由函数，trait `generate` 转调
+- **模块级转调函数**：`init`/`apply`/`deactivate`/`set_mode`/`enable_firewall`/`is_firewall_enabled`/`write_config_only`/`read_config_file`/`rollback`/`preview_config`——接收 `FirewallDriver`，转调 `backend()`
+
 ### 规则生成
 
 **ipfw**（`generate_ipfw`）— 生成原生规则文件 `/etc/ipfw.rules`（pathname 模式）：
@@ -127,17 +136,17 @@ CREATE TABLE firewall_table_entries (
 
 ### 初始化流程
 
-`init_ipfw(mode, rules, tables, nat_rules)`：
+**ipfw**（`Ipfw::init`，trait 方法）：
 1. `sysrc::set_multi` 一次性设置 `firewall_enable=YES`、`firewall_type=/etc/ipfw.rules`、`firewall_quiet=YES`、`firewall_logging=YES`（1 次 sysrc 调用）
 2. sysrc 删除 `firewall_script`（回退到 `/etc/rc.firewall`，由其 `*)` 分支执行 `ipfw -q ${firewall_type}` 加载规则）
-3. `kldload ipfw`（如未加载）
-4. **立即 `sysctl net.inet.ip.fw.enable=0`**——kldload 默认启用 ipfw 且默认规则为 deny，不显式禁用会断网
+3. `self.ensure_module()` → `kldload ipfw`（如未加载）
+4. **立即 `self.disable()`**——kldload 默认启用 ipfw 且默认规则为 deny，不显式禁用会断网
 5. 生成配置文件（`atomic_write` 到 `/etc/ipfw.rules`）
 6. **不加载规则、不启用防火墙**——用户手动 Apply + Enable
 
-`init_pf(mode, rules, tables)`：
+**pf**（`Pf::init`，trait 方法）：
 1. `sysrc::set_multi` 一次性设置 `pf_enable=YES`、`pf_rules=/etc/pf.conf`（1 次 sysrc 调用）
-2. `kldload pf`（如未加载）
+2. `self.ensure_module()` → `kldload pf`（如未加载）
 3. 生成配置文件
 4. **不加载规则、不启用防火墙**
 
@@ -149,7 +158,7 @@ CREATE TABLE firewall_table_entries (
 - **两个引擎都通过 `service start`**：rc.subr 的 `required_modules` 自动加载内核模块，解决重启后模块未加载的问题
 - **防锁死**：enable 必定触发倒计时（`was_enabled=false`，回滚时禁用防火墙）
 
-**disable**：运行时禁用 + rc.conf 设为 `NO`，同时清除 staging 文件（若有未提交的变更则丢弃）。
+**disable**：调用 `deactivate(driver)`（= trait `disable()` + rc.conf 设 NO），同时清除 staging 文件（若有未提交的变更则丢弃）。
 - ipfw: `service ipfw stop`（`sysctl net.inet.ip.fw.enable=0`）+ `sysrc::ensure_no("firewall_enable")`
 - pf: `pfctl -d`（fire-and-forget）+ `sysrc::ensure_no("pf_enable")`
 
@@ -157,9 +166,9 @@ CREATE TABLE firewall_table_entries (
 
 ### 切换引擎
 
-1. 禁用旧驱动（`deactivate_ipfw`/`deactivate_pf`——运行时禁用 + rc.conf 设 NO）
-2. 初始化新驱动（`init_*`；ipfw 的 `kldload` 后会立即显式禁用）
-3. 在新驱动仍禁用时加载规则（`apply_*`）
+1. 禁用旧驱动（`deactivate(old)`——运行时禁用 + rc.conf 设 NO）
+2. 初始化新驱动（`init(new, …)`；ipfw 的 `kldload` 后会立即显式禁用）
+3. 在新驱动仍禁用时加载规则（`apply(new, …)`）
 4. 更新 DB `active_driver`
 5. 不自动启用——返回 `enabled=false`
 
@@ -254,10 +263,10 @@ CREATE TABLE firewall_table_entries (
 | set_mode | 否 | 否（仅写配置文件） |
 | switch | — | 否（结果保持 disabled） |
 
-**回滚流程**（`rollback()` in `firewall_gen.rs`）：
+**回滚流程**（`FirewallBackend::rollback` 默认方法）：
 1. 将 `backup_config` 写回配置文件（原子写入）
-2. 重新加载配置（ipfw: `ipfw -q /etc/ipfw.rules`；pf: `pfctl -f`）
-3. 如果 `was_enabled=false`：禁用防火墙（`disable_firewall`）
+2. `reload_config()` 重新加载配置（ipfw: `ipfw -q /etc/ipfw.rules`；pf: `pfctl -f`）
+3. 如果 `was_enabled=false`：`disable()` 禁用防火墙
 4. 删除 `/var/db/fwp/firewall_pending.json`
 
 > 回滚通过进程内 `tokio::spawn(sleep)` 定时器触发，执行本地系统命令（`pfctl`/`sysctl`），不经过网络。即使新规则阻断了所有网络流量，本地命令仍可执行。

@@ -50,7 +50,7 @@ impl FirewallDriver {
     }
 
     pub fn module_loaded(&self) -> bool {
-        cmd::status_sync(KLDSTAT, &["-q", "-n", self.as_str()])
+        self.backend().module_loaded()
     }
 }
 
@@ -889,7 +889,7 @@ pub fn validate_address(addr: &str) -> ApiResult<()> {
 
 // ── config generation ──────────────────────────────────────────────
 
-fn header(driver: FirewallDriver, mode: FirewallMode) -> String {
+fn header(name: &str, mode: FirewallMode) -> String {
     let mode_desc = if mode == FirewallMode::Whitelist {
         "default deny"
     } else {
@@ -898,9 +898,9 @@ fn header(driver: FirewallDriver, mode: FirewallMode) -> String {
     format!(
         "# ============================================================\n\
          # Managed by FreeBSD Web Panel (fwp) - DO NOT EDIT MANUALLY\n\
-         # Driver: {driver} | Mode: {mode} ({mode_desc})\n\
+         # Driver: {name} | Mode: {mode} ({mode_desc})\n\
          # ============================================================\n\n",
-        driver = driver.as_str(),
+        name = name,
         mode = mode.as_str(),
         mode_desc = mode_desc,
     )
@@ -999,7 +999,7 @@ fn filter_referenced_tables<'a>(rules: &[FirewallRule], tables: &'a [IpTable]) -
 /// addresses get correct state entries. Filter rules after check-state only
 /// process packets that didn't match an existing state.
 pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
-    let mut buf = header(FirewallDriver::Ipfw, mode);
+    let mut buf = header("ipfw", mode);
     buf.push_str("-f flush\n\n");
 
     // Loopback — always allow.
@@ -1146,7 +1146,7 @@ pub fn generate_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTab
 
 /// Generate the full pf.conf from enabled rules.
 pub fn generate_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
-    let mut buf = header(FirewallDriver::Pf, mode);
+    let mut buf = header("pf", mode);
 
     // IP tables — only include those referenced by enabled rules.
     let active_tables = filter_referenced_tables(rules, tables);
@@ -1907,233 +1907,345 @@ fn atomic_write(path: &str, content: &str) -> ApiResult<()> {
 }
 
 // ── driver operations ──────────────────────────────────────────────
+//
+// All driver-specific behavior is concentrated behind the `FirewallBackend`
+// trait. `FirewallDriver::backend()` dispatches to the correct `&'static dyn
+// FirewallBackend`. The free functions below (`apply`, `init`, …) are thin
+// wrappers that accept a `FirewallDriver` and forward to the trait, so callers
+// never write `match driver { Ipfw => …, Pf => … }` again.
 
-/// Load kernel module if not already loaded.
-pub fn ensure_module(driver: FirewallDriver) -> ApiResult<()> {
-    if driver.module_loaded() {
-        return Ok(());
+/// Driver-specific firewall operations.
+///
+/// Methods without a default body differ per driver; those with a default body
+/// share identical logic and rely only on other trait methods + module helpers.
+pub trait FirewallBackend {
+    // ── identity ──
+    fn name(&self) -> &'static str;
+    fn module_name(&self) -> &'static str;
+    fn config_path(&self) -> &'static str;
+
+    // ── per-driver operations ──
+    fn generate(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String;
+    fn apply(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()>;
+    fn init(&self, mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()>;
+    fn deactivate(&self) -> ApiResult<()>;
+    fn enable(&self) -> ApiResult<()>;
+    fn disable(&self) -> ApiResult<()>;
+    fn is_enabled(&self) -> bool;
+    /// Reload the current config file into the kernel (used by rollback).
+    fn reload_config(&self) -> ApiResult<()>;
+
+    // ── shared defaults ──
+
+    /// No-op by default; the runtime default policy is enforced via generated rules.
+    fn set_mode(&self, _mode: FirewallMode) -> ApiResult<()> {
+        Ok(())
     }
-    cmd::run_sync(KLDLOAD, &[driver.as_str()])?;
-    Ok(())
-}
 
-/// Check if the ipfw_nat kernel module is loaded.
-pub fn ipfw_nat_loaded() -> bool {
-    cmd::status_sync(KLDSTAT, &["-q", "-n", "ipfw_nat"])
-}
-
-/// Load the ipfw_nat kernel module if not already loaded.
-/// Required for ipfw NAT rules (snat/dnat). Called by apply_ipfw when NAT
-/// rules exist. If the module cannot be loaded, apply fails with a clear
-/// error — we do not silently apply filter rules without NAT.
-pub fn ensure_ipfw_nat() -> ApiResult<()> {
-    if ipfw_nat_loaded() {
-        return Ok(());
+    fn module_loaded(&self) -> bool {
+        cmd::status_sync(KLDSTAT, &["-q", "-n", self.module_name()])
     }
-    cmd::run_sync(KLDLOAD, &["ipfw_nat"])?;
-    Ok(())
-}
 
-/// Generate and write config file WITHOUT loading into kernel.
-/// Used when the firewall is disabled — keeps the file ready for next enable.
-pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
-    match driver {
-        FirewallDriver::Ipfw => {
-            let content = generate_ipfw(rules, mode, tables, nat_rules);
-            atomic_write(IPFW_RULES_PATH, &content)?;
+    fn ensure_module(&self) -> ApiResult<()> {
+        if self.module_loaded() {
+            return Ok(());
         }
-        FirewallDriver::Pf => {
-            let content = generate_pf(rules, mode, tables, nat_rules);
-            // Just write the file — validation happens at apply/enable time
-            // when the PF module is loaded and /dev/pf exists.
-            atomic_write(PF_CONF_PATH, &content)?;
+        cmd::run_sync(KLDLOAD, &[self.module_name()])?;
+        Ok(())
+    }
+
+    /// Generate and write the config file WITHOUT loading it into the kernel.
+    /// Used when the firewall is disabled — keeps the file ready for next enable.
+    fn write_config(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+        let content = self.generate(rules, mode, tables, nat_rules);
+        atomic_write(self.config_path(), &content)
+    }
+
+    fn read_config_file(&self) -> String {
+        fs::read_to_string(self.config_path()).unwrap_or_default()
+    }
+
+    /// Restore a backed-up config and revert runtime state.
+    /// Runs local system commands — does not depend on network connectivity.
+    fn rollback(&self, backup_config: &str, was_enabled: bool) -> ApiResult<()> {
+        atomic_write(self.config_path(), backup_config)?;
+        self.reload_config()?;
+        if !was_enabled {
+            self.disable()?;
+        }
+        tracing::warn!(
+            "firewall rollback completed (driver={}, was_enabled={})",
+            self.name(), was_enabled
+        );
+        Ok(())
+    }
+}
+
+// ── ipfw backend ──
+
+pub struct Ipfw;
+
+impl Ipfw {
+    /// Check if the ipfw_nat kernel module is loaded.
+    fn nat_loaded() -> bool {
+        cmd::status_sync(KLDSTAT, &["-q", "-n", "ipfw_nat"])
+    }
+
+    /// Load ipfw_nat if not already loaded.
+    /// Required for NAT rules (snat/dnat). If the module cannot be loaded, apply
+    /// fails with a clear error — we do not silently apply filter rules without NAT.
+    fn ensure_nat(&self) -> ApiResult<()> {
+        if Self::nat_loaded() {
+            return Ok(());
+        }
+        cmd::run_sync(KLDLOAD, &["ipfw_nat"])?;
+        Ok(())
+    }
+}
+
+impl FirewallBackend for Ipfw {
+    fn name(&self) -> &'static str { "ipfw" }
+    fn module_name(&self) -> &'static str { "ipfw" }
+    fn config_path(&self) -> &'static str { IPFW_RULES_PATH }
+
+    fn generate(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
+        generate_ipfw(rules, mode, tables, nat_rules)
+    }
+
+    fn apply(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+        // NAT requires the ipfw_nat kernel module. Load it if NAT rules exist.
+        if nat_rules.iter().any(|r| r.enabled) {
+            self.ensure_nat()?;
+            // With one_pass=1 (kernel default), packets matching a nat rule exit
+            // the firewall immediately — filter rules after the nat rule (including
+            // the default deny at 65534) are never evaluated. Set one_pass=0 so
+            // packets continue through the firewall after NAT translation.
+            cmd::run_sync(SYSCTL, &["net.inet.ip.fw.one_pass=0"])?;
+        }
+
+        let content = generate_ipfw(rules, mode, tables, nat_rules);
+
+        // Write to temp file and validate syntax before applying.
+        let tmp = format!("{IPFW_RULES_PATH}.tmp");
+        fs::write(&tmp, &content).map_err(|e| ApiError::Internal(format!("write tmp: {e}")))?;
+
+        // Validate syntax (-n = test only, does not modify kernel state).
+        if let Err(e) = cmd::run_sync(IPFW, &["-n", "-q", &tmp]) {
+            let _ = fs::remove_file(&tmp);
+            return Err(ApiError::Command(format!("ipfw.rules validation failed: {e}")));
+        }
+
+        // All good — move to real path and load.
+        fs::rename(&tmp, IPFW_RULES_PATH)?;
+
+        // Load via pathname mode: `ipfw -q /etc/ipfw.rules`
+        // The file's first line is `-f flush` which clears all rules,
+        // then re-adds everything from scratch.
+        cmd::run_sync(IPFW, &["-q", IPFW_RULES_PATH])?;
+        Ok(())
+    }
+
+    fn init(&self, mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+        use crate::sysrc;
+
+        sysrc::set_multi(&[
+            ("firewall_enable", "YES"),
+            ("firewall_type", IPFW_RULES_PATH),
+            ("firewall_quiet", "YES"),
+            ("firewall_logging", "YES"),
+        ]).map_err(|e| ApiError::Command(e))?;
+        // Remove firewall_script so rc.d falls back to /etc/rc.firewall,
+        // which loads our rules via `ipfw -q ${firewall_type}` (pathname mode).
+        sysrc::delete("firewall_script");
+
+        self.ensure_module()?;
+
+        // kldload ipfw enables ipfw by default (net.inet.ip.fw.enable defaults to 1)
+        // with a default-deny rule 65535. Explicitly disable to avoid blocking all traffic.
+        self.disable()?;
+
+        // Persist one_pass=0 so NAT'd packets continue through the firewall after
+        // translation (survives reboot). Without this, nat rules at 50000+ would
+        // bypass all filter rules including the default deny at 65534.
+        crate::sysctl_conf::upsert("net.inet.ip.fw.one_pass", "0")?;
+
+        // Only generate the file — do NOT load it into the kernel yet.
+        let content = generate_ipfw(rules, mode, tables, nat_rules);
+        atomic_write(IPFW_RULES_PATH, &content)?;
+        Ok(())
+    }
+
+    fn deactivate(&self) -> ApiResult<()> {
+        use crate::sysrc;
+        self.disable()?;
+        sysrc::ensure_no("firewall_enable");
+        Ok(())
+    }
+
+    fn enable(&self) -> ApiResult<()> {
+        // `service ipfw start` does (via rc.d/ipfw → rc.firewall):
+        //   1. kldload ipfw (required_modules — auto-loaded by rc.subr)
+        //   2. ipfw -q /etc/ipfw.rules (pathname mode, loads our rules)
+        //   3. sysctl net.inet.ip.fw.enable=1 (enable)
+        cmd::run_sync(SERVICE, &["ipfw", "start"])?;
+        Ok(())
+    }
+
+    fn disable(&self) -> ApiResult<()> {
+        // `service ipfw stop` runs `sysctl net.inet.ip.fw.enable=0`.
+        // Errors if already stopped, so ignore failure.
+        cmd::run_forget_sync(SERVICE, &["ipfw", "stop"]);
+        Ok(())
+    }
+
+    fn is_enabled(&self) -> bool {
+        let out = cmd::run_sync(SYSCTL, &["-n", "net.inet.ip.fw.enable"]).unwrap_or_default();
+        out.trim() == "1"
+    }
+
+    fn reload_config(&self) -> ApiResult<()> {
+        cmd::run_sync(IPFW, &["-q", IPFW_RULES_PATH])?;
+        Ok(())
+    }
+}
+
+// ── pf backend ──
+
+pub struct Pf;
+
+impl FirewallBackend for Pf {
+    fn name(&self) -> &'static str { "pf" }
+    fn module_name(&self) -> &'static str { "pf" }
+    fn config_path(&self) -> &'static str { PF_CONF_PATH }
+
+    fn generate(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> String {
+        generate_pf(rules, mode, tables, nat_rules)
+    }
+
+    fn apply(&self, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+        let content = generate_pf(rules, mode, tables, nat_rules);
+
+        // Write to temp file and validate
+        let tmp = format!("{PF_CONF_PATH}.tmp");
+        fs::write(&tmp, &content).map_err(|e| ApiError::Internal(format!("write tmp: {e}")))?;
+
+        // Validate syntax
+        if let Err(e) = cmd::run_sync(PFCTL, &["-n", "-f", &tmp]) {
+            let _ = fs::remove_file(&tmp);
+            return Err(ApiError::Command(format!("pf.conf validation failed: {e}")));
+        }
+
+        // All good — move to real path and reload.
+        // `service pf reload` runs `pfctl -n -f` (redundant check) then `pfctl -f`.
+        fs::rename(&tmp, PF_CONF_PATH)?;
+        cmd::run_sync(SERVICE, &["pf", "reload"])?;
+        // Flush state table so old connections are killed — new rules apply
+        // to all connections immediately. The apply HTTP response has already
+        // been sent (with Connection: close), so the browser will reconnect.
+        cmd::run_forget_sync(PFCTL, &["-F", "states"]);
+        Ok(())
+    }
+
+    fn init(&self, mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+        use crate::sysrc;
+
+        sysrc::set_multi(&[
+            ("pf_enable", "YES"),
+            ("pf_rules", PF_CONF_PATH),
+        ]).map_err(|e| ApiError::Command(e))?;
+
+        self.ensure_module()?;
+
+        // Only generate the file — do NOT load it into the kernel yet.
+        let content = generate_pf(rules, mode, tables, nat_rules);
+        atomic_write(PF_CONF_PATH, &content)?;
+        Ok(())
+    }
+
+    fn deactivate(&self) -> ApiResult<()> {
+        use crate::sysrc;
+        self.disable()?;
+        sysrc::ensure_no("pf_enable");
+        Ok(())
+    }
+
+    fn enable(&self) -> ApiResult<()> {
+        // `service pf start` does three things (via rc.d/pf):
+        //   1. kldload pf (required_modules="pf" — auto-loaded by rc.subr)
+        //   2. pfctl -F all + pfctl -f /etc/pf.conf (load rules)
+        //   3. pfctl -eq (enable)
+        cmd::run_sync(SERVICE, &["pf", "start"])?;
+        Ok(())
+    }
+
+    fn disable(&self) -> ApiResult<()> {
+        // pfctl -d disables PF. PF is running at this point, so /dev/pf
+        // exists. Non-zero exit (already disabled) is harmless — ignore.
+        cmd::run_forget_sync(PFCTL, &["-d"]);
+        Ok(())
+    }
+
+    fn is_enabled(&self) -> bool {
+        let out = cmd::run_sync(PFCTL, &["-s", "info"]).unwrap_or_default();
+        out.contains("Status: Enabled")
+    }
+
+    fn reload_config(&self) -> ApiResult<()> {
+        cmd::run_sync(PFCTL, &["-f", PF_CONF_PATH])?;
+        Ok(())
+    }
+}
+
+// ── dispatch: FirewallDriver → &'static dyn FirewallBackend ──
+
+impl FirewallDriver {
+    /// Return the static backend implementation for this driver variant.
+    pub fn backend(&self) -> &'static dyn FirewallBackend {
+        static IPFW: Ipfw = Ipfw;
+        static PF: Pf = Pf;
+        match self {
+            Self::Ipfw => &IPFW,
+            Self::Pf => &PF,
         }
     }
-    Ok(())
 }
 
-/// Apply ipfw rules: generate file, validate, then load.
-pub fn apply_ipfw(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
-    // NAT requires the ipfw_nat kernel module. Load it if NAT rules exist.
-    if nat_rules.iter().any(|r| r.enabled) {
-        ensure_ipfw_nat()?;
-        // With one_pass=1 (kernel default), packets matching a nat rule exit
-        // the firewall immediately — filter rules after the nat rule (including
-        // the default deny at 65534) are never evaluated. Set one_pass=0 so
-        // packets continue through the firewall after NAT translation.
-        cmd::run_sync(SYSCTL, &["net.inet.ip.fw.one_pass=0"])?;
-    }
+// ── driver-agnostic wrappers (forward to the trait) ──
 
-    let content = generate_ipfw(rules, mode, tables, nat_rules);
-
-    // Write to temp file and validate syntax before applying.
-    let tmp = format!("{IPFW_RULES_PATH}.tmp");
-    fs::write(&tmp, &content).map_err(|e| ApiError::Internal(format!("write tmp: {e}")))?;
-
-    // Validate syntax (-n = test only, does not modify kernel state).
-    if let Err(e) = cmd::run_sync(IPFW, &["-n", "-q", &tmp]) {
-        let _ = fs::remove_file(&tmp);
-        return Err(ApiError::Command(format!("ipfw.rules validation failed: {e}")));
-    }
-
-    // All good — move to real path and load.
-    fs::rename(&tmp, IPFW_RULES_PATH)?;
-
-    // Load via pathname mode: `ipfw -q /etc/ipfw.rules`
-    // The file's first line is `-f flush` which clears all rules,
-    // then re-adds everything from scratch.
-    cmd::run_sync(IPFW, &["-q", IPFW_RULES_PATH])?;
-    Ok(())
+pub fn init(driver: FirewallDriver, mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+    driver.backend().init(mode, rules, tables, nat_rules)
 }
 
-/// Apply pf rules: generate file, validate, write, then reload via rc.d.
-pub fn apply_pf(rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
-    let content = generate_pf(rules, mode, tables, nat_rules);
-
-    // Write to temp file and validate
-    let tmp = format!("{PF_CONF_PATH}.tmp");
-    fs::write(&tmp, &content).map_err(|e| ApiError::Internal(format!("write tmp: {e}")))?;
-
-    // Validate syntax
-    if let Err(e) = cmd::run_sync(PFCTL, &["-n", "-f", &tmp]) {
-        let _ = fs::remove_file(&tmp);
-        return Err(ApiError::Command(format!("pf.conf validation failed: {e}")));
-    }
-
-    // All good — move to real path and reload.
-    // `service pf reload` runs `pfctl -n -f` (redundant check) then `pfctl -f`.
-    fs::rename(&tmp, PF_CONF_PATH)?;
-    cmd::run_sync(SERVICE, &["pf", "reload"])?;
-    // Flush state table so old connections are killed — new rules apply
-    // to all connections immediately. The apply HTTP response has already
-    // been sent (with Connection: close), so the browser will reconnect.
-    cmd::run_forget_sync(PFCTL, &["-F", "states"]);
-    Ok(())
+pub fn apply(driver: FirewallDriver, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+    driver.backend().apply(rules, mode, tables, nat_rules)
 }
 
-/// Enable firewall at runtime (does not modify rc.conf).
-/// Caller must have already set the appropriate rc.conf flags
-/// (e.g. `pf_enable=YES`) so that `service` accepts the start command.
+pub fn deactivate(driver: FirewallDriver) -> ApiResult<()> {
+    driver.backend().deactivate()
+}
+
+pub fn set_mode(driver: FirewallDriver, mode: FirewallMode) -> ApiResult<()> {
+    driver.backend().set_mode(mode)
+}
+
 pub fn enable_firewall(driver: FirewallDriver) -> ApiResult<()> {
-    match driver {
-        FirewallDriver::Ipfw => {
-            // `service ipfw start` does (via rc.d/ipfw → rc.firewall):
-            //   1. kldload ipfw (required_modules — auto-loaded by rc.subr)
-            //   2. ipfw -q /etc/ipfw.rules (pathname mode, loads our rules)
-            //   3. sysctl net.inet.ip.fw.enable=1 (enable)
-            cmd::run_sync(SERVICE, &["ipfw", "start"])?;
-        }
-        FirewallDriver::Pf => {
-            // `service pf start` does three things (via rc.d/pf):
-            //   1. kldload pf (required_modules="pf" — auto-loaded by rc.subr)
-            //   2. pfctl -F all + pfctl -f /etc/pf.conf (load rules)
-            //   3. pfctl -eq (enable)
-            cmd::run_sync(SERVICE, &["pf", "start"])?;
-        }
-    }
-    Ok(())
+    driver.backend().enable()
 }
 
-/// Disable firewall at runtime (does not modify rc.conf).
-pub fn disable_firewall(driver: FirewallDriver) -> ApiResult<()> {
-    match driver {
-        FirewallDriver::Ipfw => {
-            // `service ipfw stop` runs `sysctl net.inet.ip.fw.enable=0`.
-            // Errors if already stopped, so ignore failure.
-            cmd::run_forget_sync(SERVICE, &["ipfw", "stop"]);
-        }
-        FirewallDriver::Pf => {
-            // pfctl -d disables PF. PF is running at this point, so /dev/pf
-            // exists. Non-zero exit (already disabled) is harmless — ignore.
-            cmd::run_forget_sync(PFCTL, &["-d"]);
-        }
-    }
-    Ok(())
-}
-
-/// Check if firewall is currently enabled (running).
 pub fn is_firewall_enabled(driver: FirewallDriver) -> bool {
-    match driver {
-        FirewallDriver::Ipfw => {
-            let out = cmd::run_sync(SYSCTL, &["-n", "net.inet.ip.fw.enable"]).unwrap_or_default();
-            out.trim() == "1"
-        }
-        FirewallDriver::Pf => {
-            let out = cmd::run_sync(PFCTL, &["-s", "info"]).unwrap_or_default();
-            out.contains("Status: Enabled")
-        }
-    }
+    driver.backend().is_enabled()
 }
 
-/// Set the ipfw mode. Does NOT touch loader.conf or sysctl.conf.
-/// The runtime default policy is enforced via rule 65534 in the generated script.
-pub fn set_ipfw_mode(_mode: FirewallMode) -> ApiResult<()> {
-    Ok(())
+pub fn write_config_only(driver: FirewallDriver, rules: &[FirewallRule], mode: FirewallMode, tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
+    driver.backend().write_config(rules, mode, tables, nat_rules)
 }
 
-/// Initialize ipfw: write rc.conf entries, load module, generate config file.
-/// Does NOT load rules or enable the firewall — both happen via Apply/Enable.
-pub fn init_ipfw(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
-    use crate::sysrc;
-
-    sysrc::set_multi(&[
-        ("firewall_enable", "YES"),
-        ("firewall_type", IPFW_RULES_PATH),
-        ("firewall_quiet", "YES"),
-        ("firewall_logging", "YES"),
-    ]).map_err(|e| ApiError::Command(e))?;
-    // Remove firewall_script so rc.d falls back to /etc/rc.firewall,
-    // which loads our rules via `ipfw -q ${firewall_type}` (pathname mode).
-    sysrc::delete("firewall_script");
-
-    ensure_module(FirewallDriver::Ipfw)?;
-
-    // kldload ipfw enables ipfw by default (net.inet.ip.fw.enable defaults to 1)
-    // with a default-deny rule 65535. Explicitly disable to avoid blocking all traffic.
-    disable_firewall(FirewallDriver::Ipfw)?;
-
-    // Persist one_pass=0 so NAT'd packets continue through the firewall after
-    // translation (survives reboot). Without this, nat rules at 50000+ would
-    // bypass all filter rules including the default deny at 65534.
-    crate::sysctl_conf::upsert("net.inet.ip.fw.one_pass", "0")?;
-
-    // Only generate the file — do NOT load it into the kernel yet.
-    let content = generate_ipfw(rules, mode, tables, nat_rules);
-    atomic_write(IPFW_RULES_PATH, &content)?;
-    Ok(())
+pub fn read_config_file(driver: FirewallDriver) -> String {
+    driver.backend().read_config_file()
 }
 
-/// Initialize pf: write rc.conf entries, load module, load rules.
-pub fn init_pf(mode: FirewallMode, rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
-    use crate::sysrc;
-
-    sysrc::set_multi(&[
-        ("pf_enable", "YES"),
-        ("pf_rules", PF_CONF_PATH),
-    ]).map_err(|e| ApiError::Command(e))?;
-
-    ensure_module(FirewallDriver::Pf)?;
-
-    // Only generate the file — do NOT load it into the kernel yet.
-    let content = generate_pf(rules, mode, tables, nat_rules);
-    atomic_write(PF_CONF_PATH, &content)?;
-    Ok(())
-}
-
-/// Disable ipfw in rc.conf and at runtime.
-pub fn deactivate_ipfw() -> ApiResult<()> {
-    use crate::sysrc;
-    disable_firewall(FirewallDriver::Ipfw)?;
-    sysrc::ensure_no("firewall_enable");
-    Ok(())
-}
-
-/// Disable pf in rc.conf and at runtime.
-pub fn deactivate_pf() -> ApiResult<()> {
-    use crate::sysrc;
-    disable_firewall(FirewallDriver::Pf)?;
-    sysrc::ensure_no("pf_enable");
-    Ok(())
+pub fn rollback(driver: FirewallDriver, backup_config: &str, was_enabled: bool) -> ApiResult<()> {
+    driver.backend().rollback(backup_config, was_enabled)
 }
 
 /// Generate config content without writing to disk (for preview before apply).
@@ -2144,10 +2256,7 @@ pub fn preview_config(
     tables: &[IpTable],
     nat_rules: &[NatRule],
 ) -> String {
-    match driver {
-        FirewallDriver::Ipfw => generate_ipfw(rules, mode, tables, nat_rules),
-        FirewallDriver::Pf => generate_pf(rules, mode, tables, nat_rules),
-    }
+    driver.backend().generate(rules, mode, tables, nat_rules)
 }
 
 // ── anti-lockout: backup + rollback ────────────────────────────────
@@ -2212,15 +2321,6 @@ pub fn clear_pending_apply() {
     let _ = fs::remove_file(PENDING_APPLY_PATH);
 }
 
-/// Read the current config file content for backup.
-pub fn read_config_file(driver: FirewallDriver) -> String {
-    let path = match driver {
-        FirewallDriver::Ipfw => IPFW_RULES_PATH,
-        FirewallDriver::Pf => PF_CONF_PATH,
-    };
-    fs::read_to_string(path).unwrap_or_default()
-}
-
 /// Update the old_mode field in an existing pending-apply file.
 pub fn set_pending_old_mode(mode: &str) -> ApiResult<()> {
     if let Some(mut p) = get_pending_apply() {
@@ -2229,36 +2329,6 @@ pub fn set_pending_old_mode(mode: &str) -> ApiResult<()> {
             .map_err(|e| ApiError::Internal(format!("serialize pending: {e}")))?;
         atomic_write(PENDING_APPLY_PATH, &json)?;
     }
-    Ok(())
-}
-
-/// Restore a backed-up config and revert runtime state.
-/// This runs local system commands — does not depend on network connectivity.
-pub fn rollback(driver: FirewallDriver, backup_config: &str, was_enabled: bool) -> ApiResult<()> {
-    let path = match driver {
-        FirewallDriver::Ipfw => IPFW_RULES_PATH,
-        FirewallDriver::Pf => PF_CONF_PATH,
-    };
-
-    // Restore the backup config file.
-    atomic_write(path, backup_config)?;
-
-    // Reload it into the kernel.
-    match driver {
-        FirewallDriver::Ipfw => {
-            cmd::run_sync(IPFW, &["-q", path])?;
-        }
-        FirewallDriver::Pf => {
-            cmd::run_sync(PFCTL, &["-f", path])?;
-        }
-    }
-
-    // If the firewall was NOT enabled before the operation, disable it now.
-    if !was_enabled {
-        disable_firewall(driver)?;
-    }
-
-    tracing::warn!("firewall rollback completed (driver={driver:?}, was_enabled={was_enabled})");
     Ok(())
 }
 
