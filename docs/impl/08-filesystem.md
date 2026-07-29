@@ -2,7 +2,7 @@
 
 ## 概述
 
-「文件系统」主菜单下含两个子页面：
+「存储」主菜单下含两个子页面：
 
 - **概览**（`/filesystem`）：物理磁盘、挂载点、ZFS 存储池概要
 - **磁盘**（`/filesystem/disks`）：各磁盘详细参数 + 分区表
@@ -62,7 +62,7 @@
 
 ### 菜单集成
 
-`layout.js` 的「文件系统」主菜单含：「概览」（`/filesystem`）+「磁盘」（`/filesystem/disks`）+「文件管理器」（`/filesystem/files`，见 [10-file-manager.md](10-file-manager.md)）+「ZFS」（`/zfs`）四个子项。
+`menu.js` 的「存储」主菜单含：「概览」（`/filesystem`）+「磁盘」（`/filesystem/disks`）+「文件管理器」（`/filesystem/files`，见 [10-file-manager.md](10-file-manager.md)）+「ZFS」（`/zfs`）四个子项。
 
 ## API
 

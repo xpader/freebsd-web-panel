@@ -2,7 +2,7 @@
 
 ## 概述
 
-SMB 模块在"文件系统 → 文件共享"下提供 Samba 服务的初始化、运行状态控制、共享目录 CRUD、Samba 用户管理和全局配置管理。
+SMB 模块在"服务 → 文件共享"下提供 Samba 服务的初始化、运行状态控制、共享目录 CRUD、Samba 用户管理和全局配置管理。
 
 FreeBSD base system 不提供现代 SMB 服务器。模块以 `samba416` pkg 为外部依赖，采用与 Bhyve 一致的"状态检测 → 初始化引导 → 流式后台任务"流程。面板不创建系统账户：Samba 用户必须是已有系统用户，模块只通过 `smbpasswd` 写入 Samba 密码数据库。
 
@@ -109,7 +109,7 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 
 设置页采用 `form-row`（`180px 1fr` 网格）布局，与 Jail/Bhyve 编辑页一致。除工作组、服务器描述、最小协议、访客映射和日志级别外，还提供 macOS 兼容性复选框（对应 `fruit_enabled`），使用 `checkbox-label` + `param-desc-inline` 内联描述样式。
 
-菜单定义在 `frontend/src/lib/menu.js`，位于文件系统组：SMB 共享（`fa-folder-tree`）、SMB 用户（`fa-user-lock`）和 SMB 设置（`fa-gear`）。
+菜单定义在 `frontend/src/lib/menu.js`，位于服务组（紧跟"系统服务"rc.d 项之后，父菜单标签为「SMB 共享」）：共享目录（`fa-folder-tree`）、共享用户（`fa-user-lock`）和 Samba 设置（`fa-gear`）。
 
 ## API
 

@@ -2,7 +2,7 @@
 
 ## 概述
 
-「文件系统」主菜单下的「文件管理器」（`/filesystem/files`）：一个完整的双栏 Web 文件管理器，以 root 身份浏览整个文件系统。
+「存储」主菜单下的「文件管理器」（`/filesystem/files`）：一个完整的双栏 Web 文件管理器，以 root 身份浏览整个文件系统。
 
 功能：
 
@@ -59,7 +59,7 @@
 
 ### 菜单集成
 
-`layout.js`「文件系统」主菜单含：「概览」+「磁盘」+「文件管理器」+「ZFS」。`main.js` 注册 `/filesystem/files` → `renderFiles`。
+`menu.js`「存储」主菜单含：「概览」+「磁盘」+「文件管理器」+「ZFS」。`main.js` 注册 `/filesystem/files` → `renderFiles`。
 
 ## API
 

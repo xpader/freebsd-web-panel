@@ -12,15 +12,14 @@ export const MENU = [
     ],
   },
   {
-    key: 'config',
-    labelKey: 'nav.config',
+    key: 'system',
+    labelKey: 'nav.system',
     icon: 'fa-solid fa-sliders',
     default: '/rcconf',
     items: [
       { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
       { path: '/sysctl', labelKey: 'nav.sysctl', icon: 'fa-solid fa-microchip' },
       { path: '/cron', labelKey: 'nav.cron', icon: 'fa-solid fa-clock-rotate-left' },
-      { path: '/services', labelKey: 'nav.services', icon: 'fa-solid fa-play' },
       {
         path: '/pkg',
         labelKey: 'nav.packages',
@@ -37,6 +36,25 @@ export const MENU = [
         children: [
           { path: '/accounts/users', labelKey: 'nav.sysUsers', icon: 'fa-solid fa-user' },
           { path: '/accounts/groups', labelKey: 'nav.sysGroups', icon: 'fa-solid fa-users-rectangle' },
+        ],
+      },
+    ],
+  },
+  {
+    key: 'services',
+    labelKey: 'nav.services',
+    icon: 'fa-solid fa-atom',
+    default: '/services',
+    items: [
+      { path: '/services', labelKey: 'nav.systemServices', icon: 'fa-solid fa-play' },
+      {
+        path: '/shares/smb',
+        labelKey: 'nav.smb',
+        icon: 'fa-solid fa-share-nodes',
+        children: [
+          { path: '/shares/smb', labelKey: 'nav.smbShares', icon: 'fa-solid fa-folder-tree' },
+          { path: '/shares/smb/users', labelKey: 'nav.smbUsers', icon: 'fa-solid fa-user-lock' },
+          { path: '/shares/smb/settings', labelKey: 'nav.smbSettings', icon: 'fa-solid fa-gear' },
         ],
       },
     ],
@@ -64,8 +82,8 @@ export const MENU = [
     ],
   },
   {
-    key: 'filesystem',
-    labelKey: 'nav.filesystem',
+    key: 'storage',
+    labelKey: 'nav.storage',
     icon: 'fa-solid fa-hard-drive',
     default: '/filesystem',
     items: [
@@ -80,16 +98,6 @@ export const MENU = [
           { path: '/zfs/pools', labelKey: 'nav.zpool', icon: 'fa-solid fa-circle-nodes' },
           { path: '/zfs/datasets', labelKey: 'nav.datasets', icon: 'fa-solid fa-layer-group' },
           { path: '/zfs/snapshots', labelKey: 'nav.snapshots', icon: 'fa-solid fa-camera' },
-        ],
-      },
-      {
-        path: '/shares/smb',
-        labelKey: 'nav.smb',
-        icon: 'fa-solid fa-share-nodes',
-        children: [
-          { path: '/shares/smb', labelKey: 'nav.smbShares', icon: 'fa-solid fa-folder-tree' },
-          { path: '/shares/smb/users', labelKey: 'nav.smbUsers', icon: 'fa-solid fa-user-lock' },
-          { path: '/shares/smb/settings', labelKey: 'nav.smbSettings', icon: 'fa-solid fa-gear' },
         ],
       },
     ],

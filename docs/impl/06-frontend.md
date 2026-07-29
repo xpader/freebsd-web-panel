@@ -196,7 +196,7 @@ const result = await formModal('添加仓库', fields, {
 
 ### 导航 `src/lib/menu.js` + `components/layout/`
 
-`MENU` 常量定义 6 个顶级组（概览/配置/网络/文件系统/虚拟化/监控），每组含 `items`（侧栏菜单项），菜单项可选 `children`（可折叠子组）。`groupOfPath(path)` 计算路径所属组。
+`MENU` 常量定义 7 个顶级组（概览/系统/服务/网络/存储/虚拟化/监控），每组含 `items`（侧栏菜单项），菜单项可选 `children`（可折叠子组）。`groupOfPath(path)` 计算路径所属组。
 
 - `AppLayout.vue` — 骨架：topbar + sidebar + `<router-view />`
 - `TopBar.vue` — logo 标识（闪电方块 + fwp）+ 导航标签 + 语言切换（国旗）+ 主题切换（太阳/月亮图标）+ 设置下拉 + 用户下拉
