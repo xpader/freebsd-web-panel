@@ -29,6 +29,8 @@
   --github-icon-filter: brightness(0) invert(1);
   --hover-bg: rgba(177, 186, 196, 0.08);
   --term-bg: #0b0e14;
+  --input-bg: #0d1117;
+  --input-bg-disabled: #161b22;
   --btn-sec-hover: #2a3240;
   --radius: 8px;
   --sidebar-w: 240px;
@@ -64,6 +66,8 @@
   --modal-overlay: rgba(67, 77, 92, 0.4);
   --modal-busy-bg: rgba(244, 246, 249, 0.6);
   --github-icon-filter: none;
+  --input-bg: #f9fafb;
+  --input-bg-disabled: #e9ecf1;
   --hover-bg: rgba(67, 77, 92, 0.06);
   --term-bg: #eff1f5;
 }
@@ -383,7 +387,7 @@ label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-d
 input, select, textarea {
   width: 100%;
   padding: 8px 12px;
-  background: var(--bg);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
@@ -394,6 +398,11 @@ input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow-strong);
+}
+input:disabled, select:disabled, textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--input-bg-disabled);
 }
 input[type="checkbox"], input[type="radio"] {
   width: auto;
