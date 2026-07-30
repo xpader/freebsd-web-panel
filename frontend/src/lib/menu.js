@@ -57,6 +57,7 @@ export const MENU = [
           { path: '/shares/smb/settings', labelKey: 'nav.smbSettings', icon: 'fa-solid fa-gear' },
         ],
       },
+      { path: '/rsync', labelKey: 'nav.rsync', icon: 'fa-solid fa-arrows-rotate' },
     ],
   },
   {

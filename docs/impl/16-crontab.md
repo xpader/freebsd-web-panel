@@ -72,6 +72,14 @@ FreeBSD 默认 `/etc/crontab` 预装了一批基本系统维护任务。`is_free
 
 `@`-别名（`@reboot` 等）走单独分支，不参与时间字段校验。
 
+#### fwp 托管条目保护（`fwp_managed`）
+
+当条目的注释行含 `[fwp-managed` 标签时，`entry_to_cron` 置 `fwp_managed: true`。这类条目由面板其他模块托管（当前仅 rsync 定时同步），其源数据存在对应模块的 DB 表中，crontab 只是物化镜像。
+
+**保护机制**：`update` / `delete` 在定位到目标条目后检查其 `comment_raw` 是否含 `[fwp-managed`——是则返回 **409 Conflict**，拒绝编辑/删除。用户只能在源模块（如 rsync 任务页）管理这些条目。
+
+前端（`CronPage.vue`）对 `fwp_managed` 条目隐藏编辑/启用/删除按钮，显示「FWP 管理」徽标。
+
 #### 系统格式 vs 用户格式
 
 `is_system` 决定字段数：系统多一个 `who` 列（计划 7 字段、`@`-别名 3 字段）；用户 5/2 字段。
@@ -136,6 +144,7 @@ struct CronEntry {
     comment: String,         // 注释，\n 连接（可编辑）
     disabled: bool,
     system_task: bool,       // FreeBSD 自带系统任务（save-entropy/newsyslog/periodic/adjkerntz）
+    fwp_managed: bool,       // fwp 托管（注释含 [fwp-managed]，不可在此编辑/删除）
 }
 
 struct EntryInput { minute, hour, dom, month, dow, special, user, command, comment, disabled }  // 条目字段

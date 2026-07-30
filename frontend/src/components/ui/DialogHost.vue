@@ -4,13 +4,28 @@ import { ui } from '../../stores/ui.js';
 import { useI18n } from 'vue-i18n';
 import FieldHelp from './FieldHelp.vue';
 import FilePicker from './FilePicker.vue';
+import RemoteFilePicker from './RemoteFilePicker.vue';
+import CronScheduleInput from './CronScheduleInput.vue';
 const { t } = useI18n();
-
-const firstInput = ref(null);
 const submitting = ref(false);
+const firstInput = ref(null);
 const radioState = reactive({});
 const formValues = reactive({});
 const pickerField = ref(null);
+const pickerRemote = ref(false);
+
+/// True when a path spec looks like an SSH connection (`user@host` or `host:`).
+function isRemoteSpec(v) {
+  if (!v) return false;
+  return /^[^/\s]+@/.test(v) || (!v.startsWith('/') && v.includes(':'));
+}
+
+/// Open the picker for a field, auto-detecting local vs remote from its value.
+/// `f.portKey` (optional) names another field whose value holds the SSH port.
+function openPicker(f) {
+  pickerField.value = f.key;
+  pickerRemote.value = isRemoteSpec(formValues[f.key]);
+}
 
 // Generic form-state reset when a form dialog opens.
 watch(() => ui.dialog, (d) => {
@@ -246,10 +261,12 @@ function groupedFields(d) {
                   :type="f.inputType || 'text'"
                   :placeholder="f.placeholder || ''"
                   :required="isFieldRequired(f)" :disabled="f.disabled" />
-                <button type="button" class="btn-secondary btn-sm fp-trigger" @click="pickerField = f.key">
-                  <i class="fa-solid fa-folder-open"></i>
+                <button type="button" class="btn-secondary btn-sm fp-trigger" @click="openPicker(f)">
+                  <i :class="isRemoteSpec(formValues[f.key]) ? 'fa-solid fa-globe' : 'fa-solid fa-folder-open'"></i>
                 </button>
               </div>
+              <!-- cron schedule (single cron_expr string) -->
+              <CronScheduleInput v-else-if="f.type === 'cron'" v-model="formValues[f.key]" />
               <!-- text input -->
               <input v-else :id="'field-' + f.key" v-model.trim="formValues[f.key]"
                 :type="f.inputType || 'text'"
@@ -267,10 +284,19 @@ function groupedFields(d) {
       </form>
     </div>
   </div>
+  <!-- Local directory picker -->
   <FilePicker
-    v-if="pickerField"
+    v-if="pickerField && !pickerRemote"
     :mode="(ui.dialog.fields.find(f => f.key === pickerField)?.picker) || 'dir'"
     :initial-path="formValues[pickerField] || '/'"
+    @select="(p) => { formValues[pickerField] = p; pickerField = null; }"
+    @close="pickerField = null"
+  />
+  <!-- Remote directory picker (SSH) -->
+  <RemoteFilePicker
+    v-if="pickerField && pickerRemote"
+    :initial-spec="formValues[pickerField] || ''"
+    :port="formValues[(ui.dialog.fields.find(f => f.key === pickerField)?.portKey)] || 22"
     @select="(p) => { formValues[pickerField] = p; pickerField = null; }"
     @close="pickerField = null"
   />

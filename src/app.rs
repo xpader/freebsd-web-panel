@@ -214,6 +214,13 @@ pub fn build(state: AppState) -> Router {
         .route("/api/smb/users/{name}", delete(handlers::smb::delete_user))
         .route("/api/smb/users/{name}/password", put(handlers::smb::change_password))
         .route("/api/smb/service/{action}", post(handlers::smb::service_control))
+        // --- Rsync sync tasks ---
+        .route("/api/rsync/status", get(handlers::rsync::status))
+        .route("/api/rsync/init", post(handlers::rsync::init))
+        .route("/api/rsync/tasks", get(handlers::rsync::list_tasks).post(handlers::rsync::create_task))
+        .route("/api/rsync/tasks/{id}", put(handlers::rsync::update_task).delete(handlers::rsync::delete_task))
+        .route("/api/rsync/tasks/{id}/run", post(handlers::rsync::run_task))
+        .route("/api/rsync/browse", get(handlers::rsync::browse))
         .layer(from_fn_with_state(state.clone(), require_auth));
 
     // File upload sends raw bytes as the request body and can be large;

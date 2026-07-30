@@ -147,7 +147,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 | `showIf` | `{key: val}` | 条件显示：当另一字段等于 `val`（或数组中任一值）时显示 |
 | `requiredIf` | `{key: val}` | 条件必填 |
 | `options` | array | `select`/`radio`：`{value, label}`；`checkbox-group`：`{key, label, value, help?}` |
-| `picker` | `'dir'`/`'file'` | 路径选择器：渲染 `.input-with-btn` + `FilePicker` 组件 |
+| `picker` | `'dir'`/`'file'` | 路径选择器：渲染 `.input-with-btn` + 按钮。按钮按字段值自动判定本地/远程——值形如 `user@host`（SSH 连接）时打开 `RemoteFilePicker`，否则打开本地 `FilePicker` |
 
 `opts` 支持 `submitLabel`（提交按钮文字）和 `submitHandler`（异步提交函数，抛错时内联显示错误不关闭对话框）。
 
@@ -158,7 +158,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - **`checkbox-group`** — 多个 pill 样式 checkbox 内联排列，共用 `label` 作为组标题，每个 option 的值直接写入 `formValues[opt.key]`。每个 option 可选 `help` 属性，渲染为 pill 内的 FieldHelp 工具提示
 - **`select`** — 下拉框
 - **`textarea`** — 多行文本
-- **`picker`** — 输入框 + 文件夹按钮，点击打开 `FilePicker` 弹窗选择路径
+- **`picker`** — 输入框 + 单按钮，按钮行为按字段当前值自动判定：本地路径或空 → 打开 `FilePicker`（📁）；SSH 规格（`user@host`）→ 打开 `RemoteFilePicker`（🌐）。可选 `portKey` 属性指定另一字段名，远程选择器从中读取 SSH 端口
 - **`half` + `row` 布局** — `groupedFields()` 将连续 `half` 字段两两配对为 flex 行；同 `row` 值的字段强制同组
 
 #### 示例

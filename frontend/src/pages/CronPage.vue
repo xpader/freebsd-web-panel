@@ -245,7 +245,10 @@ onMounted(async () => {
                 <span v-else class="badge badge-success">{{ t('common.enabled') }}</span>
               </td>
               <td>
-                <div class="btn-group">
+                <div v-if="e.fwp_managed" class="cell-wrap">
+                  <span class="badge badge-info">{{ t('cron.fwpManaged') }}</span>
+                </div>
+                <div v-else class="btn-group">
                   <button class="btn-secondary btn-sm" @click="openEdit(e.source, e.line)">{{ t('common.edit') }}</button>
                   <button class="btn-secondary btn-sm" @click="toggleEntry(e.source, e.line)">{{ e.disabled ? t('cron.enable') : t('cron.disable') }}</button>
                   <button class="btn-danger btn-sm" @click="deleteEntry(e.source, e.line)">{{ t('common.delete') }}</button>

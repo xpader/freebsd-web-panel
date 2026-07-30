@@ -75,6 +75,8 @@ const routes = [
       { path: 'shares/smb/init', name: 'smb-init', component: () => import('../pages/SmbInitPage.vue') },
       { path: 'shares/smb/users', name: 'smb-users', component: () => import('../pages/SmbUsersPage.vue') },
       { path: 'shares/smb/settings', name: 'smb-settings', component: () => import('../pages/SmbSettingsPage.vue') },
+      { path: 'rsync', name: 'rsync-tasks', component: () => import('../pages/RsyncTasksPage.vue') },
+      { path: 'rsync/init', name: 'rsync-init', component: () => import('../pages/RsyncInitPage.vue') },
     ],
   },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../pages/NotFoundPage.vue') },

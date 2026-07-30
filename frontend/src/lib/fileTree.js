@@ -46,23 +46,52 @@ export function extMatch(name, accept) {
 
 /**
  * Create a reactive tree state with lazy-loading children.
+ *
+ * Generic over how directories are fetched and how a path is split into its
+ * ancestor chain, so both the local FilePicker (`/api/files/list`) and the
+ * remote RemoteFilePicker (`/api/rsync/browse`, `[user@]host:/path` specs) can
+ * share identical tree behaviour.
+ *
  * @param {object} opts
- * @param {function} opts.filterFn  - (entry) => boolean, filter which entries to keep
+ * @param {function} [opts.filterFn]  - (entry) => boolean, applied to each
+ *   fetched list (local default only).
+ * @param {function} [opts.fetchDir]  - (path) => Promise<entry[]>. Defaults to
+ *   the local `/api/files/list` fetch (applying filterFn).
+ * @param {function} [opts.ancestorPaths] - (path) => string[], ancestor paths
+ *   from the tree root down to and including `path`. Defaults to splitting on
+ *   `/` with ROOT first.
  * @returns { object } { expanded, treeChildren, toggleExpand, ensureAncestors, getChildren, invalidate, refreshAll }
  */
-export function createTreeState({ filterFn } = {}) {
+export function createTreeState({ filterFn, fetchDir, ancestorPaths } = {}) {
   const expanded = reactive(new Set());
   const treeChildren = reactive(new Map());
 
-  async function fetchDir(path) {
-    const list = await api.get(`/api/files/list?path=${encodeURIComponent(path)}`);
-    return filterFn ? list.filter(filterFn) : list;
+  const _fetchDir = fetchDir
+    || (async (path) => {
+        const list = await api.get(`/api/files/list?path=${encodeURIComponent(path)}`);
+        return filterFn ? list.filter(filterFn) : list;
+      });
+
+  const _ancestorPaths = ancestorPaths
+    || ((path) => {
+        const parts = path.split('/').filter(Boolean);
+        let cur = '';
+        const out = [ROOT];
+        for (const part of parts) {
+          cur = cur + '/' + part;
+          out.push(cur);
+        }
+        return out;
+      });
+
+  async function loadDir(path) {
+    if (!treeChildren.has(path)) {
+      try { treeChildren.set(path, await _fetchDir(path)); } catch { treeChildren.set(path, []); }
+    }
   }
 
   async function toggleExpand(path) {
-    if (!treeChildren.has(path)) {
-      try { treeChildren.set(path, await fetchDir(path)); } catch { treeChildren.set(path, []); }
-    }
+    await loadDir(path);
     if (expanded.has(path)) expanded.delete(path);
     else expanded.add(path);
   }
@@ -72,16 +101,10 @@ export function createTreeState({ filterFn } = {}) {
   }
 
   async function ensureAncestors(path) {
-    const parts = path.split('/').filter(Boolean);
-    let cur = '';
-    for (const part of parts) {
-      cur = cur + '/' + part;
-      if (!treeChildren.has(cur)) {
-        try { treeChildren.set(cur, await fetchDir(cur)); } catch { treeChildren.set(cur, []); }
-      }
+    for (const cur of _ancestorPaths(path)) {
+      await loadDir(cur);
       expanded.add(cur);
     }
-    expanded.add(ROOT);
   }
 
   function invalidate(path) {
@@ -92,7 +115,7 @@ export function createTreeState({ filterFn } = {}) {
 
   async function refreshAll(paths) {
     for (const p of paths) {
-      try { treeChildren.set(p, await fetchDir(p)); } catch {}
+      try { treeChildren.set(p, await _fetchDir(p)); } catch {}
     }
   }
 

@@ -39,7 +39,6 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 - **Frontend:** Vue 3 (Composition API) + Vite, Pinia (state), Vue Router (hash), vue-i18n, Chart.js, xterm.js, noVNC. Hand-written dark-theme CSS. Built output is embedded into the binary.
 - **Deployment:** Single binary with embedded web assets. TOML config at `/usr/local/etc/fwp.toml`.
 - **Jail FFI:** Direct libjail calls (`jailparam_*`) — all `unsafe` isolated in a dedicated `sys` submodule.
-
 ## Quick Start
 
 ### Prerequisites

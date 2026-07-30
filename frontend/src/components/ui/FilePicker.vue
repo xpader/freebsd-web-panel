@@ -80,7 +80,9 @@ onMounted(async () => {
     expanded.add(ROOT);
     if (props.initialPath && props.initialPath !== ROOT) {
       await ensureAncestors(props.initialPath);
-      selected.value = props.initialPath;
+      // Normalize trailing slashes so selected matches the canonical node path
+      // (entry paths are slash-normalized by the backend).
+      selected.value = props.initialPath.replace(/\/+$/, '') || ROOT;
     }
   } catch { /* ignore */ } finally {
     loading.value = false;

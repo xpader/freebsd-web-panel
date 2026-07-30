@@ -147,6 +147,11 @@ mod migrations {
             desc: "firewall: create firewall_nat_rules table",
             func: m2,
         },
+        Migration {
+            version: 3,
+            desc: "rsync: create rsync_tasks table",
+            func: m3,
+        },
     ];
 
     /// v1: Create firewall tables (rules, state, tables, table entries).
@@ -250,6 +255,34 @@ mod migrations {
         )?;
         Ok(())
     }
+
+    /// v3: Create rsync_tasks table (Rsync sync task definitions).
+    fn m3(conn: &Connection) -> ApiResult<()> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS rsync_tasks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                description TEXT NOT NULL DEFAULT '',
+                source      TEXT NOT NULL,
+                dest        TEXT NOT NULL,
+                archive     INTEGER NOT NULL DEFAULT 1,
+                compress    INTEGER NOT NULL DEFAULT 0,
+                \"delete\"   INTEGER NOT NULL DEFAULT 0,
+                verbose     INTEGER NOT NULL DEFAULT 1,
+                port        INTEGER,
+                extra_args  TEXT NOT NULL DEFAULT '',
+                run_user    TEXT NOT NULL DEFAULT '',
+                cron_enabled INTEGER NOT NULL DEFAULT 0,
+                cron_expr   TEXT NOT NULL DEFAULT '',
+                last_run_at INTEGER,
+                last_status TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+
 }
 
 pub fn user_count(conn: &Connection) -> ApiResult<i64> {

@@ -150,6 +150,10 @@ pub struct CronEntry {
     /// True for FreeBSD's built-in `/etc/crontab` tasks (save-entropy,
     /// newsyslog, periodic *, adjkerntz) — display hint, not enforced.
     pub system_task: bool,
+    /// True if a comment line carries an `[fwp-managed ...]` tag — these
+    /// entries are owned by fwp (e.g. rsync schedules) and cannot be edited
+    /// or deleted through the crontab API; they are managed at their source.
+    pub fwp_managed: bool,
 }
 
 // ---- parsing --------------------------------------------------------------
@@ -450,6 +454,7 @@ fn entry_to_cron(source: &str, e: &EntryBlock) -> CronEntry {
         ),
     };
     let system_task = is_freebsd_builtin(source, &command);
+    let fwp_managed = e.comment_raw.iter().any(|l| l.contains("[fwp-managed"));
     CronEntry {
         source: source.to_string(),
         line: e.task_idx,
@@ -465,6 +470,7 @@ fn entry_to_cron(source: &str, e: &EntryBlock) -> CronEntry {
         comment,
         disabled: e.disabled,
         system_task,
+        fwp_managed,
     }
 }
 
@@ -942,6 +948,13 @@ pub async fn update(
         .iter()
         .position(|b| matches!(b, Block::Entry(e) if e.task_idx == req.line))
         .ok_or_else(|| ApiError::NotFound("crontab line not found".into()))?;
+    if let Block::Entry(e) = &blocks[idx] {
+        if e.comment_raw.iter().any(|l| l.contains("[fwp-managed")) {
+            return Err(ApiError::Conflict(
+                "this entry is managed by FreeBSD-Web-Panel and cannot be edited here".into(),
+            ));
+        }
+    }
 
     let (body, parsed) = build_task(&req.entry, is_system)?;
     let task_line = if req.entry.disabled.unwrap_or(false) {
@@ -998,6 +1011,13 @@ pub async fn delete(
         .iter()
         .position(|b| matches!(b, Block::Entry(e) if e.task_idx == q.line))
         .ok_or_else(|| ApiError::NotFound("crontab line not found".into()))?;
+    if let Block::Entry(e) = &blocks[idx] {
+        if e.comment_raw.iter().any(|l| l.contains("[fwp-managed")) {
+            return Err(ApiError::Conflict(
+                "this entry is managed by FreeBSD-Web-Panel and cannot be deleted here".into(),
+            ));
+        }
+    }
     blocks.remove(idx);
 
     let backup = backup_dir(&state);

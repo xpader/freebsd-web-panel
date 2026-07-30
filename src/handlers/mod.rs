@@ -12,6 +12,7 @@ pub mod mail;
 pub mod network;
 pub mod pkg;
 pub mod rcconf;
+pub mod rsync;
 pub mod services;
 pub mod smb;
 pub mod sysctl;
