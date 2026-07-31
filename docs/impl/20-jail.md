@@ -517,10 +517,22 @@ myjail {
 | GET | `/api/jails/bases` | — | `[{name, type, source_path, snapshots[], sharedfs_path?, created_at}]` |
 | POST | `/api/jails/bases` | `{name, method, type, ...method-specific fields}` | `201 {name, type, ...}` |
 | GET | `/api/jails/bases/mirrors` | — | `[{name, url}]` |
-| PUT | `/api/jails/bases/{name}` | `{snapshots[]}` | `200 {name, type, ...}` |
+| PUT | `/api/jails/bases/{name}` | `{name?, snapshots?}` | `200 {name, type, ...}` |
 | DELETE | `/api/jails/bases/{name}` | — | `204` |
 | GET | `/api/jails/bases/snapshots?name=dataset` | — | `["pool@snap1", "pool@snap2"]` |
 | POST | `/api/jails/bases/{name}/image` | `{method, snapshot?, dataset?, target}` | `201 {method, target, sharedfs_path?, fstab?}` |
+
+PUT `/api/jails/bases/{name}` 编辑基础系统，两个字段均可选、互不依赖：
+
+- `name` — 重命名（任意类型均可）。`name` 只是注册表中的显示标签，不影响源文件/数据集路径。已基于该基础系统创建的 Jail 不受影响——它们在创建时已将基础系统解析为具体的路径/快照。重名时返回 `409 Conflict`。
+- `snapshots` — 仅 ZFS 类型，替换允许使用的快照列表。提交的快照必须实际存在于 dataset 上（不存在则 `400`）；**允许传空数组**以清空失效引用（例如导入后该快照已被外部删除的场景）。省略时保持不变。SharedFS 类型传此字段返回 `400`。
+
+**失效快照（stale snapshot）处理**：导入时选中的快照可能后来被外部删除，此时注册表里残留一条指向已不存在快照的引用。后端不再因这类残留而阻塞改名；前端编辑弹窗会：
+1. 打开时实时拉取 dataset 上的现存快照列表，将"已注册但磁盘上已不存在"的快照识别为失效项；
+2. 失效快照以禁用+删除线+"已删除"标记单独展示（不可勾选），从提交列表中剔除；
+3. 保存时只提交仍存在的快照，从而在改名/保存的同时自动清理失效引用。
+
+前端编辑弹窗对**所有类型**显示（不再仅 ZFS）：ZFS 类型同时可改名称与快照，SharedFS 类型仅可改名称。
 
 POST `/api/jails/bases` 请求体根据 `method` 不同：
 

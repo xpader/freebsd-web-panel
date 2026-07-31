@@ -1520,43 +1520,86 @@ pub async fn base_destroy(
 
 #[derive(Debug, Deserialize)]
 pub struct BaseUpdateBody {
+    /// New display name. If provided and different from the current name,
+    /// the base is renamed in the registry (works for any base type).
+    /// Renaming does not affect jails already created from this base — they
+    /// resolved the base to concrete paths/snapshots at creation time.
+    #[serde(default)]
+    pub name: Option<String>,
     /// New list of allowed snapshots (full names). Only for ZFS type.
-    pub snapshots: Vec<String>,
+    /// When omitted, the snapshot list is left unchanged.
+    #[serde(default)]
+    pub snapshots: Option<Vec<String>>,
 }
 
-/// Update a base system (currently only ZFS snapshots list).
+/// Update a base system: rename (any type) and/or replace the ZFS snapshot list.
 pub async fn base_update(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(body): Json<BaseUpdateBody>,
 ) -> ApiResult<Json<BaseSystem>> {
+    let snapshots_provided = body.snapshots.is_some();
+    let original_name = name.clone();
     let state_for_blocking = state.clone();
     let updated = tokio::task::spawn_blocking(move || -> ApiResult<BaseSystem> {
         let mut bases = read_bases(&state_for_blocking);
-        let base = bases
-            .iter_mut()
-            .find(|b| b.name == name)
+        let idx = bases
+            .iter()
+            .position(|b| b.name == name)
             .ok_or_else(|| ApiError::NotFound(format!("base system \"{name}\" not found")))?;
 
-        if base.type_ != "zfs" {
-            return Err(ApiError::BadRequest(
-                "snapshot update is only supported for ZFS base systems".into(),
-            ));
+        // Rename (any base type). The name is a registry label only.
+        if let Some(new_name) = body
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if new_name != name {
+                validate_jail_name(new_name)?;
+                if bases.iter().any(|b| b.name == new_name) {
+                    return Err(ApiError::Conflict(format!(
+                        "base system \"{new_name}\" already exists"
+                    )));
+                }
+                bases[idx].name = new_name.to_string();
+            }
         }
 
-        if body.snapshots.is_empty() {
-            return Err(ApiError::BadRequest("at least one snapshot is required".into()));
+        // Snapshot list update (ZFS only).
+        if let Some(snapshots) = &body.snapshots {
+            if bases[idx].type_ != "zfs" {
+                return Err(ApiError::BadRequest(
+                    "snapshot update is only supported for ZFS base systems".into(),
+                ));
+            }
+            // Empty list is allowed: it clears stale references (e.g. when
+            // all registered snapshots have been deleted from disk). The
+            // frontend guards against accidental wipes; here we only reject
+            // snapshots that are claimed to exist but actually don't.
+            validate_zfs_snapshots(&bases[idx].source_path, snapshots)?;
+            bases[idx].snapshots = snapshots.clone();
         }
 
-        validate_zfs_snapshots(&base.source_path, &body.snapshots)?;
-
-        base.snapshots = body.snapshots.clone();
-        let updated = base.clone();
+        let updated = bases[idx].clone();
         write_bases(&state_for_blocking, &bases)?;
         Ok(updated)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
+
+    let mut parts: Vec<String> = Vec::new();
+    if updated.name != original_name {
+        parts.push(format!("renamed {original_name} → {}", updated.name));
+    }
+    if snapshots_provided {
+        parts.push(format!("snapshots: [{}]", updated.snapshots.join(", ")));
+    }
+    let detail = if parts.is_empty() {
+        format!("updated base system {}", updated.name)
+    } else {
+        format!("updated base system {}: {}", updated.name, parts.join("; "))
+    };
 
     crate::audit::record(
         &state,
@@ -1564,11 +1607,7 @@ pub async fn base_update(
         "PUT",
         &format!("/api/jails/bases/{}", updated.name),
         200,
-        Some(format!(
-            "updated base system {} snapshots: [{}]",
-            updated.name,
-            updated.snapshots.join(", ")
-        )),
+        Some(detail),
     );
 
     Ok(Json(updated))

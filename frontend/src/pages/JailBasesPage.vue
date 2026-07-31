@@ -38,10 +38,12 @@ const form = reactive({
   new_sharedfs: '', new_template: '',
 });
 
-// Edit snapshots modal
-const showEditSnap = ref(false);
+// Edit base system modal
+const showEdit = ref(false);
 const editBase = ref(null);
+const editName = ref('');
 const allSnaps = ref([]);
+const staleSnaps = ref([]);
 const editSnapChecked = ref(new Set());
 
 // File picker
@@ -219,29 +221,49 @@ async function deleteBase(name) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
   }
 }
-
-async function editSnapshots(base) {
+async function openEdit(base) {
   editBase.value = base;
-  editSnapChecked.value = new Set(base.snapshots || []);
+  editName.value = base.name;
   allSnaps.value = [];
-  showEditSnap.value = true;
-  try {
-    allSnaps.value = await api.get(`/api/jails/bases/snapshots?name=${encodeURIComponent(base.source_path)}`);
-  } catch (e) {
-    allSnaps.value = [];
+  staleSnaps.value = [];
+  editSnapChecked.value = new Set();
+  showEdit.value = true;
+  if (base.type === 'zfs') {
+    const registered = new Set(base.snapshots || []);
+    let live = [];
+    try {
+      live = await api.get(`/api/jails/bases/snapshots?name=${encodeURIComponent(base.source_path)}`);
+    } catch (e) { live = []; }
+    allSnaps.value = live;
+    const liveSet = new Set(live);
+    // Stale = registered snapshots that no longer exist on disk.
+    staleSnaps.value = [...registered].filter(s => !liveSet.has(s));
+    // Pre-check only the snapshots that still exist; stale ones are shown
+    // separately (disabled) and dropped from the submitted list on save.
+    editSnapChecked.value = new Set([...registered].filter(s => liveSet.has(s)));
   }
 }
 
-async function saveSnapshots() {
-  const snaps = [...editSnapChecked.value];
-  if (!snaps.length) {
-    await alert(t('common.operationFailed'), t('jails.noSnapshotsSelected'));
-    return;
+async function saveEdit() {
+  const body = {};
+  const newName = editName.value.trim();
+  if (newName && newName !== editBase.value.name) body.name = newName;
+  if (editBase.value.type === 'zfs') {
+    const snaps = [...editSnapChecked.value];
+    // Block accidental wipe only when live snapshots exist to choose from.
+    // If every snapshot is gone (allSnaps empty), allow clearing so a rename
+    // or stale-ref cleanup is never blocked.
+    if (!snaps.length && allSnaps.value.length) {
+      await alert(t('common.operationFailed'), t('jails.noSnapshotsSelected'));
+      return;
+    }
+    body.snapshots = snaps;
   }
+  if (!body.name && !body.snapshots) { showEdit.value = false; return; }
   try {
-    await api.put(`/api/jails/bases/${encodeURIComponent(editBase.value.name)}`, { snapshots: snaps });
-    toast.toast(t('jails.snapshotsUpdated'));
-    showEditSnap.value = false;
+    await api.put(`/api/jails/bases/${encodeURIComponent(editBase.value.name)}`, body);
+    toast.toast(t('common.saved'));
+    showEdit.value = false;
     await load();
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
@@ -286,7 +308,7 @@ onMounted(load);
           <td class="mono text-dim">{{ b.snapshots?.length || '—' }}</td>
           <td>
             <div class="btn-group">
-              <button v-if="b.type === 'zfs'" class="btn-secondary btn-sm" @click="editSnapshots(b)">{{ t('common.edit') }}</button>
+              <button class="btn-secondary btn-sm" @click="openEdit(b)">{{ t('common.edit') }}</button>
               <button class="btn-secondary btn-sm" @click="deleteBase(b.name)">{{ t('common.delete') }}</button>
             </div>
           </td>
@@ -363,8 +385,8 @@ onMounted(load);
           </div>
           <div v-if="snapshots.length" class="field">
             <label>{{ t('jails.selectSnapshots') }} <span style="color:var(--danger)">*</span></label>
-            <div style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;">
-              <label v-for="s in snapshots" :key="s" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:13px;cursor:pointer;">
+            <div style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);">
+              <label v-for="s in snapshots" :key="s" class="checkbox-row" style="display:flex;">
                 <input type="checkbox" :value="s" :checked="snapChecked.has(s)" @change="snapChecked.has(s) ? snapChecked.delete(s) : snapChecked.add(s)" />
                 {{ s.includes('@') ? s.split('@').pop() : s }}
               </label>
@@ -428,25 +450,38 @@ onMounted(load);
     </div>
   </div>
 
-  <!-- Edit snapshots modal -->
-  <div v-if="showEditSnap" class="modal-overlay">
+  <!-- Edit base system modal -->
+  <div v-if="showEdit" class="modal-overlay">
     <div class="modal" style="max-width:520px;">
-      <h3>{{ t('jails.editSnapshots') }} — {{ editBase?.name }}</h3>
-      <p class="text-dim" style="margin-bottom:12px;">{{ editBase?.source_path }}</p>
-      <div class="field">
-        <label>{{ t('jails.selectSnapshots') }} <span style="color:var(--danger)">*</span></label>
-        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;">
-          <span v-if="!allSnaps.length" class="text-dim">{{ t('jails.noSnapshots') }}</span>
-          <label v-for="s in allSnaps" :key="s" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:13px;cursor:pointer;">
-            <input type="checkbox" :value="s" :checked="editSnapChecked.has(s)" @change="editSnapChecked.has(s) ? editSnapChecked.delete(s) : editSnapChecked.add(s)" />
-            {{ s.includes('@') ? s.split('@').pop() : s }}
-          </label>
+      <h3>{{ t('common.edit') }} — {{ editBase?.name }}</h3>
+      <form @submit.prevent="saveEdit">
+        <div class="field">
+          <label>{{ t('common.name') }} <span style="color:var(--danger)">*</span></label>
+          <input type="text" v-model="editName" required />
         </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-secondary" @click="showEditSnap = false">{{ t('common.cancel') }}</button>
-        <button @click="saveSnapshots">{{ t('common.save') }}</button>
-      </div>
+        <template v-if="editBase?.type === 'zfs'">
+          <p class="text-dim" style="margin:0 0 8px;">{{ editBase?.source_path }}</p>
+          <div class="field">
+            <label>{{ t('jails.selectSnapshots') }} <span style="color:var(--danger)">*</span></label>
+            <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);">
+              <span v-if="!allSnaps.length && !staleSnaps.length" class="text-dim" style="display:block;padding:6px 14px;">{{ t('jails.noSnapshots') }}</span>
+              <label v-for="s in allSnaps" :key="s" class="checkbox-row" style="display:flex;">
+                <input type="checkbox" :value="s" :checked="editSnapChecked.has(s)" @change="editSnapChecked.has(s) ? editSnapChecked.delete(s) : editSnapChecked.add(s)" />
+                {{ s.includes('@') ? s.split('@').pop() : s }}
+              </label>
+              <label v-for="s in staleSnaps" :key="`stale-${s}`" class="checkbox-row" style="display:flex;opacity:0.5;">
+                <input type="checkbox" disabled />
+                <span style="text-decoration:line-through;">{{ s.includes('@') ? s.split('@').pop() : s }}</span>
+                <span class="text-dim" style="margin-left:2px;">({{ t('common.deleted') }})</span>
+              </label>
+            </div>
+          </div>
+        </template>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" @click="showEdit = false">{{ t('common.cancel') }}</button>
+          <button type="submit">{{ t('common.save') }}</button>
+        </div>
+      </form>
     </div>
   </div>
 

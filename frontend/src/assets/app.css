@@ -1090,6 +1090,7 @@ body.term-active .main .page-header { flex-shrink: 0; }
   transition: background 0.15s, color 0.15s;
 }
 .checkbox-label { margin-left: -14px; white-space: nowrap; }
+.checkbox-row { margin-bottom: 0; }
 .checkbox-label input[type="checkbox"],
 .checkbox-row input[type="checkbox"],
 .confirm-opt input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
