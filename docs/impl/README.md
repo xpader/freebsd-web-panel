@@ -40,6 +40,7 @@
 | [31-smb.md](31-smb.md) | SMB 文件共享：Samba 初始化、服务状态与控制、共享 CRUD、Samba 用户和全局配置管理 | `handlers/smb.rs`, `cmd.rs`, `frontend/src/pages/Smb*.vue`, `frontend/src/components/shared/SmbStatusBar.vue` |
 | [32-theming.md](32-theming.md) | 主题系统：深色/浅色/跟随系统三模式切换、CSS 变量体系、anti-FOUC、Chart.js 主题适配 | `frontend/src/assets/app.css`, `frontend/src/stores/theme.js`, `frontend/src/components/layout/TopBar.vue`, `frontend/src/lib/chart.js` |
 | [33-rsync.md](33-rsync.md) | Rsync 同步任务：rsync 安装初始化、同步任务 CRUD、手动运行（含试运行，流式输出）、定时调度（写入 /etc/crontab）、指定执行用户、源/目标本地与远程目录浏览 | `handlers/rsync.rs`, `frontend/src/pages/Rsync*.vue`, `frontend/src/components/ui/RemoteFilePicker.vue`, `frontend/src/components/ui/CronScheduleInput.vue` |
+| [34-power-management.md](34-power-management.md) | 系统电源管理：关机/重启（`/sbin/shutdown`）、设置菜单入口、二次确认、审计日志 | `handlers/system.rs`, `frontend/src/components/layout/TopBar.vue` |
 
 ## 文档规范
 

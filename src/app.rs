@@ -37,6 +37,8 @@ pub fn build(state: AppState) -> Router {
         .route("/api/auth/me", get(handlers::auth::me))
         .route("/api/system/info", get(handlers::system::system_info))
         .route("/api/system/metrics", get(handlers::system::system_metrics))
+        .route("/api/system/shutdown", post(handlers::system::shutdown))
+        .route("/api/system/reboot", post(handlers::system::reboot))
         .route("/api/users", get(handlers::users::list_users))
         .route("/api/users", post(handlers::users::create_user))
         .route("/api/users/{id}", put(handlers::users::update_user))

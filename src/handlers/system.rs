@@ -3,12 +3,16 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use axum::extract::State;
 use axum::Json;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::audit;
+use crate::auth::AuthUser;
 use crate::cmd;
 use crate::error::ApiResult;
+use crate::state::AppState;
 use crate::sysinfo;
 
 // ---- Static system info ----
@@ -403,4 +407,44 @@ fn now_ts() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+// ---- Power management ----
+
+/// POST /api/system/shutdown — power off the system.
+pub async fn shutdown(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        "/api/system/shutdown",
+        200,
+        Some("system shutdown initiated".into()),
+    );
+    tokio::task::spawn_blocking(|| {
+        let _ = cmd::run_sync("/sbin/shutdown", &["-p", "now"]);
+    });
+    Ok(Json(serde_json::json!({ "status": "shutting_down" })))
+}
+
+/// POST /api/system/reboot — reboot the system.
+pub async fn reboot(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    audit::record(
+        &state,
+        Some(&auth.username),
+        "POST",
+        "/api/system/reboot",
+        200,
+        Some("system reboot initiated".into()),
+    );
+    tokio::task::spawn_blocking(|| {
+        let _ = cmd::run_sync("/sbin/shutdown", &["-r", "now"]);
+    });
+    Ok(Json(serde_json::json!({ "status": "rebooting" })))
 }

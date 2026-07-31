@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue';
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { MENU, SETTINGS } from '../../lib/menu.js';
@@ -7,10 +7,13 @@ import { LANGUAGES, setLang, currentLangMeta, getLang } from '../../i18n/index.j
 import { useAuthStore } from '../../stores/auth.js';
 import { preference as themePref, setTheme } from '../../stores/theme.js';
 import { api } from '../../lib/api.js';
+import { useConfirm, useAlert } from '../../composables/useDialog.js';
 
 const { t } = useI18n();
 const router = useRouter();
 const auth = useAuthStore();
+const confirm = useConfirm();
+const alert = useAlert();
 
 defineProps({
   activeGroup: { type: String, default: 'overview' },
@@ -31,6 +34,10 @@ const themeIcon = computed(() =>
   themeOptions.find((o) => o.val === themePref.value)?.icon || 'fa-solid fa-circle-half-stroke',
 );
 
+// Power overlay state
+const power = reactive({ visible: false, mode: '', phase: 'waiting' });
+let powerTimer = null;
+
 function toggleLang() { langOpen.value = !langOpen.value; }
 function toggleSettings() { settingsOpen.value = !settingsOpen.value; }
 function toggleUser() { userOpen.value = !userOpen.value; }
@@ -49,6 +56,64 @@ async function doLogout() {
   router.push('/login');
 }
 
+async function probeServer() {
+  try {
+    const r = await fetch('/api/users/bootstrap', { signal: AbortSignal.timeout(3000) });
+    return r.ok;
+  } catch { return false; }
+}
+
+function startPowerPoll(mode) {
+  power.visible = true;
+  power.mode = mode;
+  power.phase = 'waiting';
+  powerTimer = setInterval(async () => {
+    const reachable = await probeServer();
+    if (!reachable && power.phase === 'waiting') {
+      power.phase = mode === 'reboot' ? 'rebooting' : 'done';
+    }
+    if (mode === 'reboot' && power.phase === 'rebooting' && reachable) {
+      clearInterval(powerTimer);
+      powerTimer = null;
+      location.reload();
+      return;
+    }
+    if (power.phase === 'done' && mode === 'shutdown') {
+      clearInterval(powerTimer);
+      powerTimer = null;
+    }
+  }, 2000);
+}
+
+function closePowerOverlay() {
+  power.visible = false;
+  if (powerTimer) { clearInterval(powerTimer); powerTimer = null; }
+  if (power.mode === 'reboot' && power.phase === 'done') {
+    auth.logout();
+    router.push('/login');
+  }
+}
+
+async function doShutdown() {
+  settingsOpen.value = false;
+  const ok = await confirm(t('topbar.shutdown'), t('topbar.shutdownConfirm'));
+  if (!ok) return;
+  try {
+    await api.post('/api/system/shutdown');
+  } catch {}
+  startPowerPoll('shutdown');
+}
+
+async function doReboot() {
+  settingsOpen.value = false;
+  const ok = await confirm(t('topbar.reboot'), t('topbar.rebootConfirm'));
+  if (!ok) return;
+  try {
+    await api.post('/api/system/reboot');
+  } catch {}
+  startPowerPoll('reboot');
+}
+
 function closeOnClick(e) {
   if (!e.target.closest('#lang-menu')) langOpen.value = false;
   if (!e.target.closest('#theme-menu')) themeOpen.value = false;
@@ -58,6 +123,9 @@ function closeOnClick(e) {
 
 onMounted(() => {
   document.addEventListener('click', closeOnClick);
+});
+onUnmounted(() => {
+  if (powerTimer) clearInterval(powerTimer);
 });
 </script>
 
@@ -130,6 +198,13 @@ onMounted(() => {
         >
           <span class="icon"><i :class="s.icon"></i></span>{{ s.labelKey ? t(s.labelKey) : s.label }}
         </a>
+        <div class="dropdown-divider"></div>
+        <a href="#" @click.prevent="doShutdown">
+          <span class="icon"><i class="fa-solid fa-power-off"></i></span>{{ t('topbar.shutdown') }}
+        </a>
+        <a href="#" @click.prevent="doReboot">
+          <span class="icon"><i class="fa-solid fa-rotate-right"></i></span>{{ t('topbar.reboot') }}
+        </a>
       </div>
     </div>
 
@@ -146,4 +221,29 @@ onMounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- Power action overlay -->
+  <Teleport to="body">
+    <div v-if="power.visible" class="power-overlay">
+      <div class="power-card">
+        <!-- Waiting for server to go down -->
+        <template v-if="power.phase === 'waiting'">
+          <div class="power-spinner"><i class="fa-solid fa-spinner fa-spin"></i></div>
+          <div class="power-text">{{ power.mode === 'shutdown' ? t('topbar.shuttingDown') : t('topbar.rebooting') }}</div>
+        </template>
+        <!-- Rebooting: server is down, waiting for it to come back -->
+        <template v-else-if="power.phase === 'rebooting'">
+          <div class="power-spinner"><i class="fa-solid fa-spinner fa-spin"></i></div>
+          <div class="power-text">{{ t('topbar.waitingReboot') }}</div>
+        </template>
+        <!-- Done (shutdown only; reboot auto-reloads) -->
+        <template v-else>
+          <div class="power-icon">
+            <i class="fa-solid fa-power-off"></i>
+          </div>
+          <div class="power-text">{{ t('topbar.shutdownDone') }}</div>
+        </template>
+      </div>
+    </div>
+  </Teleport>
 </template>

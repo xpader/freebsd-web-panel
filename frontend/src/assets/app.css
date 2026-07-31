@@ -264,6 +264,25 @@ a:hover { color: var(--accent-hover); }
 .settings-dropdown a:hover { background: var(--hover-bg); color: var(--text); }
 .settings-dropdown a.active { color: var(--accent); }
 .settings-dropdown .icon { width: 16px; text-align: center; opacity: 0.8; }
+.dropdown-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+.power-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--modal-overlay);
+  display: flex; align-items: center; justify-content: center;
+}
+.power-card {
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px;
+  padding: 40px 48px; text-align: center; min-width: 280px;
+}
+.power-spinner { font-size: 36px; color: var(--accent); margin-bottom: 16px; }
+.power-icon { font-size: 48px; color: var(--accent); margin-bottom: 16px; }
+.power-text { font-size: 16px; color: var(--text); margin-bottom: 20px; }
+.power-btn {
+  background: var(--accent); color: #fff; border: none; border-radius: 6px;
+  padding: 8px 24px; cursor: pointer; font-size: 14px;
+}
+.power-btn:hover { opacity: 0.9; }
 
 .body-wrap { display: flex; flex: 1; min-height: 0; }
 
