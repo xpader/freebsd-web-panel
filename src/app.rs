@@ -162,6 +162,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/zfs/snapshot/clone", post(handlers::zfs::snapshot_clone))
         .route("/api/filesystem/overview", get(handlers::filesystem::overview))
         .route("/api/filesystem/disks", get(handlers::filesystem::disk_detail))
+        .route("/api/filesystem/disks/{name}/smart", get(handlers::filesystem::disk_smart))
         // --- File manager ---
         .route("/api/files/list", get(handlers::files::list))
         .route("/api/files/stat", get(handlers::files::stat))

@@ -5,7 +5,7 @@
 「存储」主菜单下含两个子页面：
 
 - **概览**（`/filesystem`）：物理磁盘、挂载点、ZFS 存储池概要
-- **磁盘**（`/filesystem/disks`）：各磁盘详细参数 + 分区表
+- **磁盘**（`/filesystem/disks`）：各磁盘详细参数 + 分区表 + SMART 健康（运转时长/温度/属性）
 
 数据来自 `geom`/`mount`/`df`/`zpool` 命令实时采集。
 
@@ -45,6 +45,24 @@
 
 最终 `disks.into_values()` 按名称排序返回（ada0, ada1, da0, …）。
 
+### SMART 健康 `GET /api/filesystem/disks/{name}/smart`
+
+`disk_smart()` 对单个磁盘运行 `smartctl -j -a /dev/<name>`，解析其 JSON 输出。`SmartctlRoot` 用宽松反序列化（全部字段 `Option` + `#[serde(default)]`），兼容 ATA/NVMe/USB 等不同协议的输出差异。
+
+**退出码处理（关键）**：smartctl 的退出码是 bitmask 而非简单的成功/失败——bit 3（`& 8`）表示磁盘 *未通过* SMART（此时输出仍然有效），bit 1（`& 2`）表示设备无法打开。因此 handler **不把非零退出码当作错误**：用 `cmd::run_output` 拿原始 `Output`，解析 stdout JSON；仅当 JSON 解析失败时才降级为带 `note` 的空记录。
+
+**字段提取**（统一 ATA 与 NVMe，多级回退）：
+- `healthy` — `smart_status.passed`（PASSED→true / FAILED→false；None 表示不支持或未启用 SMART）
+- `power_on_hours` — ATA 顶层 `power_on_time.hours` → 属性 id 9（Power_On_Hours）的 raw → NVMe log
+- `power_cycle_count` — ATA 顶层 → 属性 id 12（Power_Cycle_Count）的 raw → NVMe `power_cycles`
+- `temperature` — `temperature.current` → NVMe log 的 `temperature`
+- `attributes`（ATA 专属）— `ata_smart_attributes.table`，每项含归一化 value/worst/thresh + raw 值；`failing` = `value ≤ thresh`（仅当 thresh > 0），前端红色标记告警属性
+- `nvme`（NVMe 专属）— `nvme_smart_health_information_log`：磨损百分比（percentage_used）、可用备用块（available_spare）、媒体错误数（media_errors）、异常断电次数（unsafe_shutdowns）、控制器繁忙时间（controller_busy_time）
+
+**降级路径**：设备不支持 SMART、未启用、或无任何 SMART 数据时（如光驱、不存在的设备名），返回 `healthy=null` + 空 `attributes` + `note` 说明原因，**不报错**。前端据 `note` 显示"不支持 SMART"。
+
+**输入校验**：设备名经 `validate_dev_name()` 校验（`^[a-zA-Z0-9_-]{1,32}$`），防御路径分隔符/Shell 元字符注入。
+
 ### 前端 `web/js/pages/filesystem.js`
 
 `renderFsOverview` 渲染三段：
@@ -52,13 +70,12 @@
 2. **物理磁盘表格**：设备名、型号、容量、转速（`unknown` 显示 `SSD?`）
 3. **挂载点表格**：设备、挂载点、类型徽章、总容量/已用/可用、使用率迷你进度条
 
-### 前端 `web/js/pages/disks.js`
+### 前端 `DisksPage.vue`（`/filesystem/disks`）
 
-`renderDisks`（`/filesystem/disks`）渲染每张磁盘卡片：
-- 头部：磁盘名 + 型号 + 分区方案徽章 + 状态徽章 + 总容量
-- 参数网格（`stat-grid`）：设备路径、型号、总容量、扇区大小、序列号(ident)、LUN ID、转速、访问模式、固件扇区/磁头、GPT 元数据
-- 已分配进度条（分区大小之和 / 总容量）
-- 分区表：设备/类型/标签/大小/起止扇区/UUID。UUID 截断显示前 8 位，悬停（`.uuid-tip` CSS 伪元素）显示完整 UUID，点击复制到剪贴板并 toast 提示
+每张磁盘卡片头部带磁盘图标，关键参数常驻、补充参数与分区表按需展开：
+- **卡片默认**：头部（磁盘图标 + 磁盘名 + 型号 + 分区方案徽章 + 状态徽章 + 总容量）+ 右上角按钮组【详情】【SMART】+ 关键参数网格（`stat-grid`，常驻：设备路径/序列号/扇区大小/转速/访问模式）+ 已分配进度条（分区大小之和 / 总容量）
+- **详情**（点【详情】内联展开）：补充参数网格（型号/LUN ID/分区方案/GPT 条目上限/固件扇区/固件磁头）+ 分区表（设备/类型/标签/大小/起止扇区/UUID；UUID 截断显示，点击复制到剪贴板并 toast 提示）
+- **SMART**（点【SMART】打开模态对话框）：声明式 modal（复用 `.modal-overlay/.modal-wide` 样式），**首次打开才请求** `/api/filesystem/disks/{name}/smart`（按需加载，不在列表挂载时对每盘 spawn smartctl）。内容含健康徽章（PASSED=绿 / FAILED=红 / 未知=黄）、运转时长、温度（≥50°C 黄 / ≥60°C 红）、通电次数；NVMe 盘额外显示磨损度/可用备用/媒体错误/异常断电；ATA 盘显示完整属性表（failing 属性带红色 badge）。ESC 键 / 点击遮罩 / 关闭按钮均可关闭；对话框内可刷新
 
 ### 菜单集成
 
@@ -70,13 +87,15 @@
 |---|---|---|
 | GET | `/api/filesystem/overview` | 磁盘 + 挂载点 + ZFS 池概览 |
 | GET | `/api/filesystem/disks` | 各磁盘详细参数 + 分区表 |
+| GET | `/api/filesystem/disks/{name}/smart` | 单个磁盘的 SMART 健康数据（运转时长/温度/属性/NVMe 指标） |
 
 ## 外部依赖
 
 - 系统命令：`/sbin/geom`（disk list、part list）、`/sbin/mount`、`/bin/df`、`/sbin/zpool`
+- `/usr/local/sbin/smartctl`（smartmontools port）：SMART 健康/属性/温度采集，`-j -a` 输出 JSON。系统未安装时 handler 仍响应（返回带 `note` 的空记录）
 
 ## 已知限制
 
-- 磁盘温度（SMART）未采集
+- SMART 健康数据依赖系统安装 smartmontools（`pkg install smartmontools`）；未安装时点【SMART】打开的对话框显示"不支持"提示
 - 非 ZFS 的 UFS/MSDOSFS 挂载点也能显示（通过 mount+df），但无专门管理
 - 列表无搜索/过滤（挂载点多时可考虑后续加分页）

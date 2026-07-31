@@ -9,7 +9,7 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <a :href="href" class="back-btn">
+  <a :href="href" class="back-btn" :title="t('common.back')">
     <i class="fa-solid fa-arrow-left"></i>
   </a>
 </template>

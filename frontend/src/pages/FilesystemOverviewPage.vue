@@ -60,7 +60,7 @@ onMounted(async () => {
         <tbody>
           <tr v-if="!data.disks.length"><td colspan="4" class="empty">{{ t('fs.noDisks') }}</td></tr>
           <tr v-for="d in data.disks" :key="d.name">
-            <td class="mono"><strong>{{ d.name }}</strong></td>
+            <td class="mono"><i class="fa-solid fa-hard-drive" style="color:var(--accent);margin-right:8px;"></i><strong>{{ d.name }}</strong></td>
             <td>{{ d.descr }}</td>
             <td class="mono">{{ fmtBytes(d.size_bytes) }}</td>
             <td>{{ d.rotation_rate === 'unknown' ? t('fs.ssdUnknown') : d.rotation_rate + ' rpm' }}</td>

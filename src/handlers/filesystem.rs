@@ -2,11 +2,16 @@
 
 use std::collections::HashMap;
 
+use axum::extract::Path;
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cmd;
 use crate::error::{ApiError, ApiResult};
+/// Path to smartctl (from the smartmontools port). Used for SMART health data
+/// (power-on hours, temperature, attributes). Absent on a base system — the
+/// handler degrades gracefully and reports the device as unsupported.
+const SMARTCTL: &str = "/usr/local/sbin/smartctl";
 
 #[derive(Debug, Serialize)]
 pub struct FsOverview {
@@ -101,6 +106,342 @@ pub async fn disk_detail() -> ApiResult<Json<Vec<DiskDetail>>> {
         .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
     Ok(Json(result))
 }
+// ── SMART health ──────────────────────────────────────────────────
+
+/// SMART health snapshot for a single disk, exposed to the frontend.
+///
+/// Aggregates the most operationally relevant fields from `smartctl -j -a`:
+/// overall health, power-on hours, temperature, power cycles, plus the full
+/// ATA attribute table or the NVMe SMART/health log. `note` carries a reason
+/// when the data is partial or unsupported (e.g. device open failed, SMART
+/// disabled).
+#[derive(Debug, Serialize)]
+pub struct DiskSmart {
+    /// Disk device name (e.g. "ada0").
+    pub name: String,
+    /// smartctl-detected device type (e.g. "ata", "sat", "atacam", "nvme").
+    pub device_type: Option<String>,
+    pub model: Option<String>,
+    pub serial: Option<String>,
+    /// Overall SMART health: PASSED → true, FAILED → false. None when SMART
+    /// is not supported or disabled on the device.
+    pub healthy: Option<bool>,
+    pub power_on_hours: Option<u64>,
+    pub power_cycle_count: Option<u64>,
+    /// Current temperature in °C.
+    pub temperature: Option<i32>,
+    /// ATA SMART attribute table (SATA/SAS disks); empty for NVMe.
+    pub attributes: Vec<SmartAttr>,
+    /// NVMe SMART/health log fields; None for ATA disks.
+    pub nvme: Option<NvmeHealth>,
+    pub note: Option<String>,
+    /// True when the `smartctl` binary is not installed on the host. The
+    /// frontend offers to install `smartmontools` via pkg in this case.
+    #[serde(default)]
+    pub smartctl_missing: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SmartAttr {
+    pub id: u32,
+    pub name: String,
+    /// Normalized value (vendor-specific, higher is better; typically 1–253).
+    pub value: Option<u64>,
+    pub worst: Option<u64>,
+    pub thresh: Option<u64>,
+    /// Raw counter value.
+    pub raw: Option<u64>,
+    pub raw_string: Option<String>,
+    /// Normalized value at or below threshold (a failing/prefail attribute).
+    pub failing: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NvmeHealth {
+    /// Estimated percentage of NVM endurance used (0–100+).
+    pub percentage_used: Option<f64>,
+    pub available_spare: Option<f64>,
+    pub available_spare_threshold: Option<f64>,
+    pub media_errors: Option<u64>,
+    pub unsafe_shutdowns: Option<u64>,
+    pub controller_busy_time: Option<u64>,
+}
+
+/// `GET /api/filesystem/disks/{name}/smart` — SMART health for one disk.
+///
+/// Runs `smartctl -j -a /dev/<name>`. smartctl's exit code is a bitmask, not a
+/// simple success/failure: bit 3 (`& 8`) means the disk is *failing* SMART
+/// (still useful output), bit 1 (`& 2`) means the device could not be opened.
+/// We therefore never treat a non-zero exit as an error — we parse stdout and
+/// only surface a `note` when the data is absent.
+pub async fn disk_smart(Path(name): Path<String>) -> ApiResult<Json<DiskSmart>> {
+    validate_dev_name(&name)?;
+    let dev = format!("/dev/{name}");
+    let name = name.clone();
+    // smartmontools not installed — return a structured marker so the frontend
+    // can offer to install it, instead of an opaque 500.
+    if !std::path::Path::new(SMARTCTL).exists() {
+        return Ok(Json(empty_smart_missing(name)));
+    }
+    let output = cmd::run_output(SMARTCTL, &["-j", "-a", &dev]).await?;
+    let code = output.status.code().unwrap_or(0);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let root: SmartctlRoot = match serde_json::from_str(&stdout) {
+        Ok(r) => r,
+        Err(_) => {
+            // No usable JSON — device unsupported, absent, or smartctl missing.
+            let note = if code & 2 != 0 {
+                stderr.trim().to_string()
+            } else if stdout.trim().is_empty() {
+                "smartctl produced no output".to_string()
+            } else {
+                "could not parse smartctl output".to_string()
+            };
+            return Ok(Json(empty_smart(name, note)));
+        }
+    };
+
+    // Power-on hours / cycles: prefer smartctl's top-level提炼, fall back to
+    // ATA attribute id 9/12, then the NVMe log.
+    let mut power_on_hours = root.power_on_time.as_ref().and_then(|p| p.hours);
+    let mut power_cycle_count = root.power_cycle_count;
+
+    let mut attributes = Vec::new();
+    if let Some(attrs) = &root.ata_smart_attributes {
+        for a in &attrs.table {
+            let failing = match (a.value, a.thresh) {
+                (Some(v), Some(th)) if th > 0 => v <= th,
+                _ => false,
+            };
+            let raw_val = a.raw.as_ref().and_then(|r| r.value);
+            if a.id == 9 && power_on_hours.is_none() {
+                power_on_hours = raw_val;
+            }
+            if a.id == 12 && power_cycle_count.is_none() {
+                power_cycle_count = raw_val;
+            }
+            attributes.push(SmartAttr {
+                id: a.id,
+                name: a.name.clone(),
+                value: a.value,
+                worst: a.worst,
+                thresh: a.thresh,
+                raw: raw_val,
+                raw_string: a.raw.as_ref().and_then(|r| r.string.clone()),
+                failing,
+            });
+        }
+    }
+
+    let mut nvme = None;
+    if let Some(log) = &root.nvme_smart_health_information_log {
+        if power_on_hours.is_none() {
+            power_on_hours = log.power_on_time.as_ref().and_then(|p| p.hours);
+        }
+        if power_cycle_count.is_none() {
+            power_cycle_count = log.power_cycles;
+        }
+        nvme = Some(NvmeHealth {
+            percentage_used: log.percentage_used,
+            available_spare: log.available_spare,
+            available_spare_threshold: log.available_spare_threshold,
+            media_errors: log.media_errors,
+            unsafe_shutdowns: log.unsafe_shutdowns,
+            controller_busy_time: log.controller_busy_time,
+        });
+    }
+
+    let temperature = root
+        .temperature
+        .as_ref()
+        .and_then(|t| t.current)
+        .or_else(|| {
+            root.nvme_smart_health_information_log
+                .as_ref()
+                .and_then(|l| l.temperature)
+        })
+        .map(|v| v as i32);
+
+    let mut result = DiskSmart {
+        name,
+        device_type: root.device.as_ref().and_then(|d| d.typ.clone()),
+        model: root.model_name,
+        serial: root.serial_number,
+        healthy: root.smart_status.as_ref().and_then(|s| s.passed),
+        power_on_hours,
+        power_cycle_count,
+        temperature,
+        attributes,
+        nvme,
+        note: None,
+        smartctl_missing: false,
+    };
+    // smartctl may emit a valid JSON skeleton without any SMART content (e.g.
+    // an unsupported or absent device that still parses). Flag that explicitly
+    // instead of returning an empty-looking record.
+    if result.healthy.is_none()
+        && result.attributes.is_empty()
+        && result.nvme.is_none()
+        && result.power_on_hours.is_none()
+        && result.power_cycle_count.is_none()
+        && result.temperature.is_none()
+    {
+        result.note = Some("no SMART data reported".to_string());
+    }
+    Ok(Json(result))
+}
+
+fn empty_smart(name: String, note: String) -> DiskSmart {
+    DiskSmart {
+        name,
+        device_type: None,
+        model: None,
+        serial: None,
+        healthy: None,
+        power_on_hours: None,
+        power_cycle_count: None,
+        temperature: None,
+        attributes: vec![],
+        nvme: None,
+        note: Some(note),
+        smartctl_missing: false,
+    }
+}
+
+/// Marker record returned when `smartctl` is not installed.
+fn empty_smart_missing(name: String) -> DiskSmart {
+    DiskSmart {
+        name,
+        device_type: None,
+        model: None,
+        serial: None,
+        healthy: None,
+        power_on_hours: None,
+        power_cycle_count: None,
+        temperature: None,
+        attributes: vec![],
+        nvme: None,
+        note: None,
+        smartctl_missing: true,
+    }
+}
+
+/// Validate a GEOM disk device name (e.g. `ada0`, `da0`, `nda0`).
+/// Rejects path separators and other shell-meta characters defensively.
+fn validate_dev_name(name: &str) -> ApiResult<()> {
+    if name.is_empty()
+        || name.len() > 32
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+    {
+        return Err(ApiError::BadRequest("invalid device name".into()));
+    }
+    Ok(())
+}
+
+// ── smartctl JSON schema (subset; all fields optional — varies by protocol) ──
+
+#[derive(Deserialize)]
+struct SmartctlRoot {
+    #[serde(default)]
+    model_name: Option<String>,
+    #[serde(default)]
+    serial_number: Option<String>,
+    #[serde(default)]
+    device: Option<SmartctlDevice>,
+    #[serde(default)]
+    smart_status: Option<SmartctlSmartStatus>,
+    #[serde(default)]
+    temperature: Option<SmartctlTemp>,
+    #[serde(default)]
+    power_on_time: Option<SmartctlPowerOn>,
+    #[serde(default)]
+    power_cycle_count: Option<u64>,
+    #[serde(default)]
+    ata_smart_attributes: Option<SmartctlAtaAttrs>,
+    #[serde(default)]
+    nvme_smart_health_information_log: Option<SmartctlNvmeLog>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlDevice {
+    #[serde(default, rename = "type")]
+    typ: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlSmartStatus {
+    #[serde(default)]
+    passed: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlTemp {
+    #[serde(default)]
+    current: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlPowerOn {
+    #[serde(default)]
+    hours: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlAtaAttrs {
+    #[serde(default)]
+    table: Vec<SmartctlAttr>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlAttr {
+    #[serde(default)]
+    id: u32,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    value: Option<u64>,
+    #[serde(default)]
+    worst: Option<u64>,
+    #[serde(default)]
+    thresh: Option<u64>,
+    #[serde(default)]
+    raw: Option<SmartctlRaw>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlRaw {
+    #[serde(default)]
+    value: Option<u64>,
+    #[serde(default)]
+    string: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SmartctlNvmeLog {
+    #[serde(default)]
+    percentage_used: Option<f64>,
+    #[serde(default)]
+    available_spare: Option<f64>,
+    #[serde(default)]
+    available_spare_threshold: Option<f64>,
+    #[serde(default)]
+    media_errors: Option<u64>,
+    #[serde(default)]
+    unsafe_shutdowns: Option<u64>,
+    #[serde(default)]
+    controller_busy_time: Option<u64>,
+    #[serde(default)]
+    power_cycles: Option<u64>,
+    #[serde(default)]
+    power_on_time: Option<SmartctlPowerOn>,
+    #[serde(default)]
+    temperature: Option<i64>,
+}
+
 
 /// Parse `geom disk list` for physical disks. Skips zero-size devices (cd0).
 fn list_disks() -> Vec<Disk> {
