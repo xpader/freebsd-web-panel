@@ -520,13 +520,6 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-dim);
 }
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  padding-top: 8px;
-}
 .lock-disabled {
   opacity: 0.4;
   pointer-events: none;

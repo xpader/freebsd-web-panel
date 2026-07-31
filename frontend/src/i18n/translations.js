@@ -1839,6 +1839,7 @@ export const zh = {
     options: '选项',
   },
   nav: {
+    overview: '概览',
     system: '系统',
     storage: '存储',
     virtualization: '虚拟化',

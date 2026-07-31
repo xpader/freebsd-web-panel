@@ -195,16 +195,16 @@ onMounted(loadOptions);
         <template v-if="active === 'install'">
           <div class="form-row">
             <label class="form-row-label">{{ t('bhyve.installMethod') }}</label>
-            <div class="radio-group-inline">
-              <label class="radio-label">
+            <div class="radio-pill-group">
+              <label class="radio-pill" :class="{ active: form.install_method === 'none' }">
                 <input type="radio" v-model="form.install_method" value="none" />
                 <span>{{ t('bhyve.installNone') }}</span>
               </label>
-              <label class="radio-label">
+              <label class="radio-pill" :class="{ active: form.install_method === 'image' }">
                 <input type="radio" v-model="form.install_method" value="image" />
                 <span>{{ t('bhyve.installImage') }}</span>
               </label>
-              <label class="radio-label">
+              <label class="radio-pill" :class="{ active: form.install_method === 'iso' }">
                 <input type="radio" v-model="form.install_method" value="iso" />
                 <span>{{ t('bhyve.installIso') }}</span>
               </label>

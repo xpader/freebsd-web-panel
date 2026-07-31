@@ -105,12 +105,12 @@ onMounted(async () => {
   <template v-else>
   <div class="card">
     <h3>{{ t('bhyve.initStorageType') }}</h3>
-    <div class="flex" style="gap:24px;margin-bottom:16px;">
-      <label class="flex" style="gap:6px;cursor:pointer;align-items:center;">
+    <div class="radio-pill-group" style="margin-bottom:16px;">
+      <label class="radio-pill" :class="{ active: initType === 'zfs' }">
         <input type="radio" value="zfs" v-model="initType" :disabled="initializing" />
         <span>ZFS {{ t('bhyve.initDataset') }}</span>
       </label>
-      <label class="flex" style="gap:6px;cursor:pointer;align-items:center;">
+      <label class="radio-pill" :class="{ active: initType === 'directory' }">
         <input type="radio" value="directory" v-model="initType" :disabled="initializing" />
         <span>{{ t('bhyve.initDirectory') }}</span>
       </label>

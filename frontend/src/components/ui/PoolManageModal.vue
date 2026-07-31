@@ -228,10 +228,12 @@ async function submit() {
           + {{ t('zfs.addVdevGroup') }}
         </button>
 
-        <label v-if="mode === 'add'" class="checkbox-row" style="margin-top:12px;">
-          <input type="checkbox" v-model="force" />
-          <span style="font-size:13px;">{{ t('zfs.poolForceAdd') }}</span>
-        </label>
+        <div v-if="mode === 'add'" style="margin-top:12px;">
+          <label class="checkbox-row">
+            <input type="checkbox" v-model="force" />
+            <span style="font-size:13px;">{{ t('zfs.poolForceAdd') }}</span>
+          </label>
+        </div>
 
         <div class="modal-actions">
           <button class="btn-secondary" :disabled="submitting" @click="emit('close')">{{ t('common.cancel') }}</button>
