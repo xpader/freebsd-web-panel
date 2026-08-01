@@ -8,7 +8,7 @@ export const MENU = [
     default: '/dashboard',
     items: [
       { path: '/dashboard', labelKey: 'nav.dashboard', icon: 'fa-solid fa-gauge-high' },
-      { path: '/shell', labelKey: 'nav.shell', icon: 'fa-solid fa-terminal' },
+      { path: '/fwp', labelKey: 'nav.monitorFwp', icon: 'fa-solid fa-circle-info' },
     ],
   },
   {
@@ -38,6 +38,7 @@ export const MENU = [
           { path: '/accounts/groups', labelKey: 'nav.sysGroups', icon: 'fa-solid fa-users-rectangle' },
         ],
       },
+      { path: '/shell', labelKey: 'nav.shell', icon: 'fa-solid fa-terminal' },
     ],
   },
   {
@@ -143,7 +144,6 @@ export const MENU = [
       { path: '/monitor/memory', labelKey: 'nav.monitorMemory', icon: 'fa-solid fa-memory' },
       { path: '/monitor/network', labelKey: 'common.network', icon: 'fa-solid fa-network-wired' },
       { path: '/mail', labelKey: 'nav.mail', icon: 'fa-solid fa-envelope' },
-      { path: '/monitor/fwp', labelKey: 'nav.monitorFwp', icon: 'fa-solid fa-circle-info' },
     ],
   },
 ];

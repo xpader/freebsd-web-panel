@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAlert } from '../composables/useDialog.js';
 import { api } from '../lib/api.js';
-import { fmtBytes } from '../lib/format.js';
+import { fmtBytes, fmtUptime } from '../lib/format.js';
 
 const { t } = useI18n();
 const alert = useAlert();
@@ -107,21 +107,12 @@ function fmtTs(ts) {
   return new Date(ts * 1000).toLocaleString();
 }
 
-function fmtUptime(startedAt) {
-  if (!startedAt) return '—';
-  const secs = Math.floor(Date.now() / 1000) - startedAt;
-  if (secs < 0) return '—';
-  const d = Math.floor(secs / 86400);
-  const h = Math.floor((secs % 86400) / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  const parts = [];
-  if (d > 0) parts.push(d + 'd');
-  if (h > 0) parts.push(h + 'h');
-  if (m > 0) parts.push(m + 'm');
-  parts.push(s + 's');
-  return parts.join('');
-}
+// fwp 进程启动至今的秒数，交给共享 fmtUptime() 格式化（与仪表盘一致）。
+const fwpUptimeSec = computed(() => {
+  const sa = tasks.value?.started_at;
+  if (!sa) return null;
+  return Math.max(0, Math.floor(Date.now() / 1000) - sa);
+});
 </script>
 
 <template>
@@ -153,11 +144,18 @@ function fmtUptime(startedAt) {
   </div>
 
   <template v-else-if="stats && memBreakdown">
-    <!-- ── 进程总 RSS ─────────────────────────────────── -->
-    <div class="card debug-rss-total">
-      <div class="debug-rss-label">{{ t('debug.totalRss') }}</div>
-      <div class="debug-rss-value">{{ stats.process_rss == null ? '—' : fmtBytes(stats.process_rss) }}</div>
-      <div class="debug-rss-hint">{{ t('debug.totalRssHint') }}</div>
+    <!-- ── 进程总览：RSS + 启动时长 ──────────────────── -->
+    <div class="debug-heroes">
+      <div class="card debug-rss-total">
+        <div class="debug-rss-label">{{ t('debug.totalRss') }}</div>
+        <div class="debug-rss-value">{{ stats.process_rss == null ? '—' : fmtBytes(stats.process_rss) }}</div>
+        <div class="debug-rss-hint">{{ t('debug.totalRssHint') }}</div>
+      </div>
+      <div class="card debug-rss-total">
+        <div class="debug-rss-label">{{ t('dash.uptime') }}</div>
+        <div class="debug-rss-value">{{ fwpUptimeSec == null ? '—' : fmtUptime(fwpUptimeSec) }}</div>
+        <div class="debug-rss-hint">{{ t('debug.uptimeHint') }}</div>
+      </div>
     </div>
 
     <!-- ── 内存分布堆叠条 ─────────────────────────────── -->
@@ -326,7 +324,7 @@ function fmtUptime(startedAt) {
       <div class="debug-details-title">
         <i class="fa-solid fa-clock-rotate-left"></i> {{ t('tasks.subtitle') }}
         <span v-if="tasks.started_at" class="text-dim" style="margin-left:auto; font-size:12px; font-weight:normal;">
-          {{ t('dash.uptime') }}: {{ fmtUptime(tasks.started_at) }}
+          {{ t('dash.uptime') }}: {{ fmtUptime(fwpUptimeSec) }}
         </span>
       </div>
       <table>
@@ -367,6 +365,17 @@ function fmtUptime(startedAt) {
   padding: 12px 16px;
   margin-bottom: 12px;
   border-left: 4px solid var(--accent);
+}
+.debug-heroes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.debug-heroes .debug-rss-total {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 260px;
 }
 .debug-rss-label {
   font-size: 13px;
