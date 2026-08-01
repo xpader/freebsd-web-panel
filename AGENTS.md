@@ -70,7 +70,9 @@ src/
 ├── auth.rs           # 密码哈希（argon2）、session token、require_auth 中间件、
 │                     # AuthUser 提取器（FromRequestParts）
 ├── audit.rs          # 追加式 JSON 审计日志（parking_lot::Mutex<File>）
-├── monitor.rs        # 监控采集器（后台 tokio 任务）+ 时序查询 API
+├── monitor.rs        # 监控采样逻辑 + 时序查询 API（由 scheduler 驱动）
+├── scheduler.rs      # 中央调度器：周期任务统一管理（cron + interval，sleep-until-next）
+├── cron.rs           # 轻量 cron 表达式解析器（自写，仅依赖 chrono）
 ├── web_assets.rs     # rust-embed + 磁盘回退的资源 handler
 └── handlers/
     ├── auth.rs       # login / logout / me

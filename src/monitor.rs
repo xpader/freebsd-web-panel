@@ -1,12 +1,13 @@
 //! Background metric collector + monitoring query handlers.
 //!
-//! A tokio task wakes every `interval_sec`, reads system metrics (CPU, memory,
-//! load, temperature) via sysctl, and writes a batch of samples to SQLite.
-//! A separate purge task trims samples older than `retention_days`.
+//! Metric sampling is driven by the central scheduler (`scheduler.rs`).
+//! This module provides the sampling logic and the API handlers for querying
+//! stored time series.
 
 use axum::extract::{Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 use crate::db::{self, MetricSample};
 use crate::error::ApiResult;
@@ -27,49 +28,8 @@ where
 
 // ---- Collector ----
 
-/// Spawn the background collector task. Returns immediately.
-pub fn spawn_collector(state: AppState) {
-    if !state.config.monitor.enabled {
-        tracing::info!("monitoring disabled by config");
-        return;
-    }
-    let interval = state.config.monitor.interval_sec;
-    let retention = state.config.monitor.retention_days;
-    let s = state.clone();
-    tokio::spawn(async move {
-        // Prime the CPU delta on first tick so the first stored sample is real.
-        let _ = sample_metrics(&s).await;
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval));
-        // Don't accumulate missed ticks after a pause.
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tick.tick().await;
-            if let Err(e) = sample_metrics(&s).await {
-                tracing::warn!(error = %e, "metric sampling failed");
-            }
-        }
-    });
-
-    // Purge task — runs hourly.
-    let s2 = state.clone();
-    tokio::spawn(async move {
-        let mut hour = tokio::time::interval(std::time::Duration::from_secs(3600));
-        hour.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            hour.tick().await;
-            let cutoff = s2.now_ts() - (retention as i64 * 86400);
-            let conn = s2.db.lock().await;
-            match db::purge_old_samples(&conn, cutoff) {
-                Ok(n) if n > 0 => tracing::info!(purged = n, "old metric samples removed"),
-                Ok(_) => {}
-                Err(e) => tracing::warn!(error = %e, "purge old samples failed"),
-            }
-        }
-    });
-}
-
 /// Read current metrics and write a batch of samples.
-async fn sample_metrics(state: &AppState) -> anyhow::Result<()> {
+pub(crate) async fn sample_metrics(state: &AppState) -> anyhow::Result<()> {
     let now = state.now_ts();
     let samples = collect_samples(now)?;
 
@@ -162,7 +122,6 @@ fn collect_samples(now: i64) -> anyhow::Result<Vec<MetricSample>> {
 // ---- CPU delta (monitoring-local) ----
 
 use parking_lot::Mutex;
-use std::sync::LazyLock;
 
 struct CpuState {
     times: Vec<u64>,

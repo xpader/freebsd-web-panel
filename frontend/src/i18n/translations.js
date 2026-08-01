@@ -115,6 +115,9 @@ export const en = {
     stopped: 'Stopped',
     restart: 'Restart',
     options: 'Options',
+    manual: 'Manual',
+    auto: 'Auto',
+    error: 'Error',
   },
   nav: {
     overview: 'Overview',
@@ -158,7 +161,7 @@ export const en = {
     bhyveIsos: 'ISO',
     monitorCpu: 'CPU & Load',
     monitorMemory: 'Memory',
-    monitorFwp: 'FWP Status',
+    monitorFwp: 'Panel Status',
     mail: 'System Mail',
     shell: 'Shell',
     packages: 'Packages',
@@ -1769,11 +1772,18 @@ export const en = {
       },
     },
   },
+
+  tasks: {
+    subtitle: 'Built-in periodic jobs running since FWP startup',
+    runCount: 'Runs',
+    lastRun: 'Last Run',
+    nextRun: 'Next Run',
+    pending: 'Pending',
+  },
 };
 
 export const zh = {
   common: {
-    loading: '加载中…',
     loadFailed: '加载失败：{{msg}}',
     cancel: '取消',
     confirm: '确认',
@@ -1856,6 +1866,9 @@ export const zh = {
     stopped: '已停止',
     restart: '重启',
     options: '选项',
+    manual: '手动',
+    auto: '自动',
+    error: '错误',
   },
   nav: {
     overview: '概览',
@@ -1899,7 +1912,7 @@ export const zh = {
     bhyveIsos: 'ISO',
     monitorCpu: 'CPU & 负载',
     monitorMemory: '内存',
-    monitorFwp: 'FWP 状态',
+    monitorFwp: '面板状态',
     mail: '系统邮件',
     shell: '终端',
     packages: '软件包',
@@ -3508,5 +3521,13 @@ export const zh = {
         subtitle: '创建新 Jail 时复制使用的 DNS 配置',
       },
     },
+  },
+
+  tasks: {
+    subtitle: 'FWP 启动以来运行的内置周期任务',
+    runCount: '执行次数',
+    lastRun: '上次执行',
+    nextRun: '下次执行',
+    pending: '待执行',
   },
 };

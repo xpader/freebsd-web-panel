@@ -41,6 +41,7 @@
 | [32-theming.md](32-theming.md) | 主题系统：深色/浅色/跟随系统三模式切换、CSS 变量体系、anti-FOUC、Chart.js 主题适配 | `frontend/src/assets/app.css`, `frontend/src/stores/theme.js`, `frontend/src/components/layout/TopBar.vue`, `frontend/src/lib/chart.js` |
 | [33-rsync.md](33-rsync.md) | Rsync 同步任务：rsync 安装初始化、同步任务 CRUD、手动运行（含试运行，流式输出）、定时调度（写入 /etc/crontab）、指定执行用户、源/目标本地与远程目录浏览 | `handlers/rsync.rs`, `frontend/src/pages/Rsync*.vue`, `frontend/src/components/ui/RemoteFilePicker.vue`, `frontend/src/components/ui/CronScheduleInput.vue` |
 | [34-power-management.md](34-power-management.md) | 系统电源管理：关机/重启（`/sbin/shutdown`）、设置菜单入口、二次确认、审计日志 | `handlers/system.rs`, `frontend/src/components/layout/TopBar.vue` |
+|| [35-scheduler.md](35-scheduler.md) | 中央调度器：统一管理周期任务（监控采集、样本清理、Session 清理）、内置轻量 cron 解析器、sleep-until-next 精确调度、运行时统计 | `scheduler.rs`, `cron.rs`, `monitor.rs`, `state.rs` |
 
 ## 文档规范
 

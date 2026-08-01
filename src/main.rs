@@ -7,6 +7,7 @@ mod bgtask;
 mod bhyve;
 mod cmd;
 mod config;
+mod cron;
 mod db;
 mod error;
 mod firewall_gen;
@@ -14,6 +15,7 @@ mod handlers;
 mod ifutil;
 mod jail;
 mod monitor;
+mod scheduler;
 mod state;
 mod sysinfo;
 mod sysrc;
@@ -73,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         audit,
         web_root: Some(config.server.web_root.clone()),
-        tokio_accumulator: Arc::new(parking_lot::Mutex::new(Default::default())),
+        scheduler_stats: Arc::new(parking_lot::Mutex::new(Default::default())),
         login_guard: auth::LoginGuard::new(),
     };
 
@@ -107,8 +109,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app = build(state.clone());
-    monitor::spawn_collector(state.clone());
-    handlers::debug::spawn_tokio_accumulator(state);
+    scheduler::spawn(state.clone(), state.scheduler_stats.clone());
 
     // Parse listen address.
     let addr: SocketAddr = config.server.listen.parse().map_err(|e| {

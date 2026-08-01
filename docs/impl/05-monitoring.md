@@ -2,18 +2,16 @@
 
 ## 概述
 
-后台 tokio 任务周期采样系统指标，写入 SQLite `metric_samples` 表。前端用 Chart.js 绘制时序折线图，支持时间范围选择。
+系统指标由中央调度器（[35-scheduler.md](35-scheduler.md)）周期采样，写入 SQLite `metric_samples` 表。前端用 Chart.js 绘制时序折线图，支持时间范围选择。
 
 ## 实现细节
 
-### 采集器 `src/monitor.rs::spawn_collector`
+### 采集器 `src/monitor.rs::sample_metrics`
 
-启动时 `main.rs` 调用，spawn 两个异步任务：
+监控采集不再拥有独立的 tokio 任务，而是作为调度器的一个 interval job（`metric-sampling`）注册在 `scheduler.rs` 中。采样逻辑保持不变：
 
-1. **采样任务**：`tokio::time::interval(interval_sec)` 每 30 秒唤醒，调用 `sample_metrics()` 采集并写入
-   - 首次调用立即执行（prime CPU delta），保证第一次存储的数据有效
-   - `MissedTickBehavior::Skip`：暂停后不补积压的 tick
-2. **清理任务**：每小时执行 `purge_old_samples(before_ts)`，删除超过 `retention_days`（默认 30 天）的样本
+- 每 `interval_sec`（默认 30 秒）由调度器唤醒调用 `sample_metrics()`
+- 首次执行在启动时立即运行（initial_delay = 0），prime CPU delta 保证第一次存储的数据有效
 
 ### 采样逻辑 `collect_samples(now)`
 
@@ -82,7 +80,8 @@ retention_days = 30     # 数据保留天数
 
 ## 外部依赖
 
-- crate：`sysctl`、`libc`（通过 `src/sysinfo.rs`，详见 [13-sysinfo.md](13-sysinfo.md)）、`tokio`（interval/spawn）、`parking_lot`、`std::sync::LazyLock`
+- crate：`sysctl`、`libc`（通过 `src/sysinfo.rs`，详见 [13-sysinfo.md](13-sysinfo.md)）、`parking_lot`、`std::sync::LazyLock`
+- 调度器：详见 [35-scheduler.md](35-scheduler.md)
 - 前端：Chart.js 4.4.7（UMD 本地托管）、chartjs-adapter-date-fns 3.0.0
 
 ## 已知限制

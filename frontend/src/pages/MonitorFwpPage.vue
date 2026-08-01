@@ -10,6 +10,7 @@ const alert = useAlert();
 
 const stats = ref(null);
 const tokio = ref(null);
+const tasks = ref(null);
 const loading = ref(true);
 const lastUpdate = ref(null);
 const autoRefresh = ref(false);
@@ -17,12 +18,14 @@ let timer = null;
 
 async function load() {
   try {
-    const [memRes, tokioRes] = await Promise.all([
+    const [memRes, tokioRes, tasksRes] = await Promise.all([
       api.get('/api/debug/jemalloc-stats'),
       api.get('/api/debug/tokio-metrics'),
+      api.get('/api/scheduler/status'),
     ]);
     stats.value = memRes;
     tokio.value = tokioRes;
+    tasks.value = tasksRes;
     lastUpdate.value = new Date();
     loading.value = false;
   } catch (e) {
@@ -98,12 +101,33 @@ function breakdown() {
   return { used, other, cached, overhead, pct };
 }
 const memBreakdown = computed(breakdown);
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function fmtUptime(startedAt) {
+  if (!startedAt) return '—';
+  const secs = Math.floor(Date.now() / 1000) - startedAt;
+  if (secs < 0) return '—';
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const parts = [];
+  if (d > 0) parts.push(d + 'd');
+  if (h > 0) parts.push(h + 'h');
+  if (m > 0) parts.push(m + 'm');
+  parts.push(s + 's');
+  return parts.join('');
+}
 </script>
 
 <template>
   <div class="page-header">
     <div>
-      <h1>FWP {{ t('common.status') }}</h1>
+      <h1>{{ t('nav.monitorFwp') }}</h1>
       <p>{{ t('debug.subtitle') }}</p>
     </div>
     <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
@@ -295,6 +319,41 @@ const memBreakdown = computed(breakdown);
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- ── 定时任务 ─────────────────────────────────────── -->
+    <div v-if="tasks" class="card debug-tasks-section" style="padding:0;">
+      <div class="debug-details-title">
+        <i class="fa-solid fa-clock-rotate-left"></i> {{ t('tasks.subtitle') }}
+        <span v-if="tasks.started_at" class="text-dim" style="margin-left:auto; font-size:12px; font-weight:normal;">
+          {{ t('dash.uptime') }}: {{ fmtUptime(tasks.started_at) }}
+        </span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>{{ t('common.name') }}</th>
+          <th>{{ t('cron.schedule') }}</th>
+          <th>{{ t('tasks.runCount') }}</th>
+          <th>{{ t('tasks.lastRun') }}</th>
+          <th>{{ t('tasks.nextRun') }}</th>
+          <th>{{ t('common.status') }}</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="!tasks.jobs.length"><td colspan="6" class="empty">{{ t('common.noData') }}</td></tr>
+          <tr v-for="job in tasks.jobs" :key="job.name">
+            <td class="mono">{{ job.name }}</td>
+            <td class="mono">{{ job.schedule }}</td>
+            <td>{{ job.run_count.toLocaleString() }}</td>
+            <td class="text-dim">{{ fmtTs(job.last_run_ts) }}</td>
+            <td class="text-dim">{{ fmtTs(job.next_run_ts) }}</td>
+            <td>
+              <span v-if="job.last_error" class="tag tag-error">{{ t('common.error') }}</span>
+              <span v-else-if="job.run_count > 0" class="tag tag-ok">{{ t('common.ok') }}</span>
+              <span v-else class="tag tag-dim">{{ t('tasks.pending') }}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </template>
 </template>
@@ -503,5 +562,14 @@ const memBreakdown = computed(breakdown);
   width: 14px;
   margin-right: 4px;
   color: #60a5fa;
+}
+
+/* ── Tasks table section ──────────────────────────────── */
+.debug-tasks-section {
+  margin-top: 12px;
+}
+.debug-tasks-section .debug-details-title {
+  display: flex;
+  align-items: center;
 }
 </style>

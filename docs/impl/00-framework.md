@@ -10,14 +10,14 @@
 
 ```
 CLI(clap) → Config::load_or_create() → db::open() → AuditLog::open()
-  → AppState 构造 → build(state) → monitor::spawn_collector(state)
+  → AppState 构造 → build(state) → scheduler::spawn(state)
   → TcpListener::bind → axum::serve
 ```
 
 - `--config <path>` 默认 `/usr/local/etc/fwp.toml`
 - 配置文件不存在时自动写入默认值
 - 用户数为 0 时打印警告（首启引导提示）
-- 监控采集器在 `axum::serve` 之前 spawn，与 HTTP 服务并行运行
+- 中央调度器在 `axum::serve` 之前 spawn，管理所有周期任务（监控采集、样本清理、Session 清理等），与 HTTP 服务并行运行。详见 [35-scheduler.md](35-scheduler.md)
 
 ### 路由组装 `src/app.rs`
 
@@ -37,6 +37,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub audit: Option<Arc<AuditLog>>,
     pub web_root: Option<PathBuf>,
+    pub scheduler_stats: SharedSchedulerStats,  // Arc<Mutex<SchedulerStats>>
 }
 ```
 

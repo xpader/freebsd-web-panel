@@ -118,9 +118,9 @@ pub async fn jemalloc_stats() -> ApiResult<Json<JemallocStats>> {
     }))
 }
 
-/// Cumulative tokio runtime metrics, accumulated by a background task.
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct TokioMetricsAccum {
+/// Snapshot of tokio runtime metrics, read on-demand from `Handle::metrics()`.
+#[derive(Debug, Serialize)]
+pub struct TokioMetrics {
     pub workers_count: usize,
     pub live_tasks_count: usize,
     pub total_polls_count: u64,
@@ -130,40 +130,31 @@ pub struct TokioMetricsAccum {
     pub total_steal_count: u64,
     pub blocking_queue_depth: usize,
     pub blocking_threads_count: usize,
-    pub elapsed_ms: u64,
-}
-
-/// Spawn a background task that polls tokio runtime metrics every 3 seconds
-/// and accumulates the deltas into the shared accumulator in `AppState`.
-pub fn spawn_tokio_accumulator(state: crate::state::AppState) {
-    let accum = state.tokio_accumulator.clone();
-    tokio::spawn(async move {
-        let handle = tokio::runtime::Handle::current();
-        let monitor = tokio_metrics::RuntimeMonitor::new(&handle);
-        let mut it = monitor.intervals();
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            if let Some(m) = it.next() {
-                let mut a = accum.lock();
-                a.workers_count = m.workers_count;
-                a.live_tasks_count = m.live_tasks_count;
-                a.total_polls_count += m.total_polls_count;
-                a.total_busy_duration_ms += m.total_busy_duration.as_millis() as u64;
-                a.global_queue_depth = m.global_queue_depth;
-                a.total_local_queue_depth = m.total_local_queue_depth;
-                a.total_steal_count += m.total_steal_count;
-                a.blocking_queue_depth = m.blocking_queue_depth;
-                a.blocking_threads_count = m.blocking_threads_count;
-                a.elapsed_ms += m.elapsed.as_millis() as u64;
-            }
-        }
-    });
 }
 
 /// GET /api/debug/tokio-metrics
-pub async fn tokio_metrics(
-    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
-) -> ApiResult<Json<TokioMetricsAccum>> {
-    let a = state.tokio_accumulator.lock().clone();
-    Ok(Json(a))
+pub async fn tokio_metrics() -> ApiResult<Json<TokioMetrics>> {
+    let m = tokio::runtime::Handle::current().metrics();
+    let workers = m.num_workers();
+    let mut total_polls = 0u64;
+    let mut total_busy_ms = 0u64;
+    let mut total_local_queue = 0usize;
+    let mut total_steals = 0u64;
+    for i in 0..workers {
+        total_polls += m.worker_poll_count(i);
+        total_busy_ms += m.worker_total_busy_duration(i).as_millis() as u64;
+        total_local_queue += m.worker_local_queue_depth(i);
+        total_steals += m.worker_steal_count(i);
+    }
+    Ok(Json(TokioMetrics {
+        workers_count: workers,
+        live_tasks_count: m.num_alive_tasks(),
+        total_polls_count: total_polls,
+        total_busy_duration_ms: total_busy_ms,
+        global_queue_depth: m.global_queue_depth(),
+        total_local_queue_depth: total_local_queue,
+        total_steal_count: total_steals,
+        blocking_queue_depth: m.blocking_queue_depth(),
+        blocking_threads_count: m.num_blocking_threads(),
+    }))
 }

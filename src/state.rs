@@ -7,7 +7,7 @@ use crate::audit::AuditLog;
 use crate::auth::LoginGuard;
 use crate::config::Config;
 use crate::db::Db;
-use crate::handlers::debug::TokioMetricsAccum;
+use crate::scheduler::SharedSchedulerStats;
 
 /// Shared state accessible to all handlers.
 #[derive(Clone)]
@@ -16,7 +16,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub audit: Option<Arc<AuditLog>>,
     pub web_root: Option<PathBuf>,
-    pub tokio_accumulator: Arc<parking_lot::Mutex<TokioMetricsAccum>>,
+    pub scheduler_stats: SharedSchedulerStats,
     pub login_guard: LoginGuard,
 }
 
