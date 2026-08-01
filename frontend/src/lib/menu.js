@@ -174,3 +174,21 @@ function pathBelongsToGroup(path, items) {
   }
   return false;
 }
+
+// Resolve the active child index within a collapsible menu group's children,
+// mirroring longest-prefix routing: exact match → longest path-prefix match →
+// fallback to first child when the route is under the parent. Returns -1 when
+// no child is active. Shared by SideBar and TopBar hover submenu.
+export function activeChildIndex(parent, path) {
+  for (let i = 0; i < parent.children.length; i++) {
+    if (path === parent.children[i].path) return i;
+  }
+  let best = -1, bestLen = 0;
+  for (let i = 0; i < parent.children.length; i++) {
+    const cp = parent.children[i].path;
+    if (path.startsWith(cp + '/') && cp.length > bestLen) { best = i; bestLen = cp.length; }
+  }
+  if (best >= 0) return best;
+  if (path.startsWith(parent.path + '/') || path === parent.path) return 0;
+  return -1;
+}

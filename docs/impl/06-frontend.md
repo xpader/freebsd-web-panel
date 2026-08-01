@@ -196,10 +196,10 @@ const result = await formModal('添加仓库', fields, {
 
 ### 导航 `src/lib/menu.js` + `components/layout/`
 
-`MENU` 常量定义 7 个顶级组（概览/系统/服务/网络/存储/虚拟化/监控），每组含 `items`（侧栏菜单项），菜单项可选 `children`（可折叠子组）。`groupOfPath(path)` 计算路径所属组。
+`MENU` 常量定义 7 个顶级组（概览/系统/服务/网络/存储/虚拟化/监控），每组含 `items`（侧栏菜单项），菜单项可选 `children`（可折叠子组）。`groupOfPath(path)` 计算路径所属组。顶栏主菜单标签支持**鼠标悬停直接展开子菜单下拉列表**（由 `openKey` ref 驱动：wrapper 的 `@mouseenter` 置为当前组 key、`@mouseleave` 置空；`.topnav-submenu` 容器 `@click` 置空——点击任一子项后立即收起），无需先点击主菜单再经过默认子项。下拉内容与侧栏一致（直接项为链接，带 `children` 的项显示为分组小标题 + 缩进子链接）；wrapper 用 `.topnav-submenu::before` 透明伪元素桥接 tab 与下拉间的间隙，保证鼠标斜向移动不脱出（submenu 属 wrapper DOM 子树，移动其间不触发 `mouseleave`）。
 
 - `AppLayout.vue` — 骨架：topbar + sidebar + `<router-view />`
-- `TopBar.vue` — logo 标识（闪电方块 + fwp）+ 导航标签 + 语言切换（国旗）+ 主题切换（太阳/月亮图标）+ 设置下拉 + 用户下拉
+- `TopBar.vue` — logo 标识（闪电方块 + fwp）+ 导航标签（悬停展开子菜单下拉）+ 语言切换（国旗）+ 主题切换（太阳/月亮图标）+ 设置下拉 + 用户下拉
 - `SideBar.vue` — 当前组子菜单，支持可折叠子组
 
 ### 国际化 `src/i18n/`

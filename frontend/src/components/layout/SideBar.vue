@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
+import { activeChildIndex } from '../../lib/menu.js';
 
 const route = useRoute();
 const { t } = useI18n();
@@ -10,28 +11,10 @@ const props = defineProps({
   items: { type: Array, default: () => [] },
 });
 
-function activeChildIndex(parent) {
-  const p = route.path;
-  // 1. Exact match
-  for (let i = 0; i < parent.children.length; i++) {
-    if (p === parent.children[i].path) return i;
-  }
-  // 2. Prefix match (longest wins)
-  let best = -1, bestLen = 0;
-  for (let i = 0; i < parent.children.length; i++) {
-    const cp = parent.children[i].path;
-    if (p.startsWith(cp + '/') && cp.length > bestLen) { best = i; bestLen = cp.length; }
-  }
-  if (best >= 0) return best;
-  // 3. Fallback: route under parent → first child (default)
-  if (p.startsWith(parent.path + '/') || p === parent.path) return 0;
-  return -1;
-}
-
 const itemStates = computed(() =>
   props.items.map((item) => {
     if (item.children) {
-      const idx = activeChildIndex(item);
+      const idx = activeChildIndex(item, route.path);
       return { expanded: idx >= 0, activeChildIdx: idx };
     }
     return { active: route.path === item.path };
