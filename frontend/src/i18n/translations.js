@@ -118,6 +118,8 @@ export const en = {
     manual: 'Manual',
     auto: 'Auto',
     error: 'Error',
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
   },
   nav: {
     overview: 'Overview',
@@ -1871,6 +1873,8 @@ export const zh = {
     manual: '手动',
     auto: '自动',
     error: '错误',
+    collapseSidebar: '收起侧栏',
+    expandSidebar: '展开侧栏',
   },
   nav: {
     overview: '概览',

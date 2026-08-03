@@ -198,7 +198,7 @@ const result = await formModal('添加仓库', fields, {
 
 `MENU` 常量定义 7 个顶级组（概览/系统/服务/网络/存储/虚拟化/监控），每组含 `items`（侧栏菜单项），菜单项可选 `children`（可折叠子组）。`groupOfPath(path)` 计算路径所属组。顶栏主菜单标签支持**鼠标悬停直接展开子菜单下拉列表**（由 `openKey` ref 驱动：wrapper 的 `@mouseenter` 置为当前组 key、`@mouseleave` 置空；`.topnav-submenu` 容器 `@click` 置空——点击任一子项后立即收起），无需先点击主菜单再经过默认子项。下拉内容与侧栏一致（直接项为链接，带 `children` 的项显示为分组小标题 + 缩进子链接）；wrapper 用 `.topnav-submenu::before` 透明伪元素桥接 tab 与下拉间的间隙，保证鼠标斜向移动不脱出（submenu 属 wrapper DOM 子树，移动其间不触发 `mouseleave`）。
 
-- `AppLayout.vue` — 骨架：topbar + sidebar + `<router-view />`
+- `AppLayout.vue` — 骨架：topbar + sidebar + `<router-view />`。侧栏可收缩（`.sidebar-toggle` 竖条按钮附于侧栏右边缘，点击切换；收起状态持久化到 `localStorage` key `fwp_sidebar_collapsed`）
 - `TopBar.vue` — logo 标识（闪电方块 + fwp）+ 导航标签（悬停展开子菜单下拉）+ 语言切换（国旗）+ 主题切换（太阳/月亮图标）+ 设置下拉 + 用户下拉
 - `SideBar.vue` — 当前组子菜单，支持可折叠子组
 
@@ -214,7 +214,7 @@ const result = await formModal('添加仓库', fields, {
 - 支持深色（默认）与浅色两套 CSS 变量主题，通过 `:root[data-theme="light"]` 覆盖 `:root` 默认变量实现切换（详见 [32-theming.md](32-theming.md)）
 - 品牌标识：渐变方块 logo（闪电图标）+ “fwp” 缩写文字，点击跳转仪表盘
 - 所有 hover 态统一使用 `--hover-bg` 变量；选中态使用 `--accent-glow` 半透明辉光
-- 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.main`）
+- 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.sidebar-toggle` 16px 收缩条 + `.main`）。侧栏收缩时 `.sidebar` 宽度动画到 0（`overflow: hidden` 裁切内容），收缩条箭头方向切换
 - 表格横向滚动：在 `.card` 内的 `<table>` 外包一层 `<div class="table-wrap">`，容器设置 `overflow-x: auto`，内部 `th`/`td` 默认 `white-space: nowrap`（不挤压、不换行），仅 `.cell-wrap` 列允许换行吸收空间。视口缩窄时出现横向滚动条而非挤压内容。
 - 按钮组：相邻的多个按钮包裹在 `<div class="btn-group">`（`display: flex; flex-wrap: nowrap`），防止换行且消除按钮间多余间距。
 - 搜索输入框：使用 `SearchInput.vue` 组件（`v-model` + `placeholder`），有内容时右侧显示清除按钮。底层由 `.search-input`（`position: relative`）+ `.search-clear` 定位实现。

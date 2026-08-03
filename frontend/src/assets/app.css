@@ -205,10 +205,12 @@ a:hover { color: var(--accent-hover); }
   background: var(--bg-elev);
   border-right: 1px solid var(--border);
   flex-shrink: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   position: sticky;
   top: 52px;
   height: calc(100vh - 52px);
+  transition: width 0.2s ease, border-right-color 0.2s ease;
 }
 .sidebar-nav { padding: 12px 0; }
 .sidebar-nav a {
