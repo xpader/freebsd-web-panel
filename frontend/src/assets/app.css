@@ -829,6 +829,7 @@ tr.row-dim { opacity: 0.55; }
 
 /* ---- Misc ---- */
 .empty { color: var(--text-dim); text-align: center; padding: 40px; }
+.empty:has(.spinner):not(td) { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
 .text-dim { color: var(--text-dim); }
 .cell-wrap { max-width: 480px; overflow-wrap: anywhere; word-break: break-all; }
@@ -836,7 +837,7 @@ tr.row-dim { opacity: 0.55; }
 .mb-0 { margin-bottom: 0; }
 .mt-8 { margin-top: 8px; }
 .flex { display: flex; gap: 8px; align-items: center; }
-.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: text-bottom; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- File picker trigger ---- */

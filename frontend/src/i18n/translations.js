@@ -1785,6 +1785,7 @@ export const en = {
 
 export const zh = {
   common: {
+    loading: '加载中…',
     loadFailed: '加载失败：{{msg}}',
     cancel: '取消',
     confirm: '确认',
