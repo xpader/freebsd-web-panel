@@ -176,7 +176,6 @@ pub fn build(state: AppState) -> Router {
         .route("/api/monitor/series", get(crate::monitor::series))
         .route("/api/monitor/grouped", get(crate::monitor::grouped))
         .route("/api/monitor/aggregate", get(crate::monitor::aggregate))
-        .route("/api/monitor/latest", get(crate::monitor::latest))
         // --- System mail (mbox) ---
         .route("/api/mail/boxes", get(handlers::mail::list_mailboxes))
         .route("/api/mail/{user}", get(handlers::mail::list_mails).delete(handlers::mail::clear_mailbox))

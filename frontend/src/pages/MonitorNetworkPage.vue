@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '../lib/api.js';
-import { Chart, baseOptions, dataIsEmpty, isNotNoiseIface, gridColor, tickColor, labelColor } from '../lib/chart.js';
+import { Chart, baseOptions, dataIsEmpty, gridColor, tickColor, labelColor } from '../lib/chart.js';
 import { effective as themeEff } from '../stores/theme.js';
 import { formatBytesTick, formatRateTick, fmtBytes, fmtRate, fmtTooltipTime } from '../lib/format.js';
 
@@ -46,15 +46,14 @@ const trafficState = ref({ range: 86400, bucket: 300 });
 const RX_COLOR = '#3b82f6';
 const TX_COLOR = '#f59e0b';
 
+/// Discover interfaces the same way the dashboard does: enumerate the
+/// up + IP-bearing interfaces from /api/system/metrics (which already
+/// filters loopback/pflog and ranks by relevance) instead of mining the
+/// metric history via the expensive /api/monitor/latest scan.
 async function discoverIfaces() {
   try {
-    const latest = await api.get('/api/monitor/latest');
-    return (latest.net || [])
-      .map((s) => s.name)
-      .filter((n) => n.endsWith('.rx'))
-      .map((n) => n.slice(0, -3))
-      .filter(isNotNoiseIface)
-      .sort();
+    const m = await api.get('/api/system/metrics');
+    return (m.network || []).map((n) => n.name);
   } catch {
     return [];
   }

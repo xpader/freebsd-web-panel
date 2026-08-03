@@ -303,23 +303,3 @@ pub async fn grouped(
     }
     Ok(Json(SeriesResponse { series }))
 }
-
-#[derive(Debug, Serialize)]
-pub struct LatestResponse {
-    pub cpu: Vec<MetricSample>,
-    pub memory: Vec<MetricSample>,
-    pub load: Vec<MetricSample>,
-    pub temp: Vec<MetricSample>,
-    pub net: Vec<MetricSample>,
-}
-
-pub async fn latest(State(state): State<AppState>) -> ApiResult<Json<LatestResponse>> {
-    let conn = state.db.lock().await;
-    Ok(Json(LatestResponse {
-        cpu: db::latest_in_category(&conn, "cpu")?,
-        memory: db::latest_in_category(&conn, "memory")?,
-        load: db::latest_in_category(&conn, "load")?,
-        temp: db::latest_in_category(&conn, "temp")?,
-        net: db::latest_in_category(&conn, "net")?,
-    }))
-}

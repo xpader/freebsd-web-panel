@@ -553,30 +553,6 @@ pub fn query_series_grouped(
     Ok(rows)
 }
 
-/// Get the most recent sample for each (category, name) in a category.
-pub fn latest_in_category(conn: &Connection, category: &str) -> ApiResult<Vec<MetricSample>> {
-    let mut stmt = conn.prepare(
-        "SELECT m.ts, m.category, m.name, m.value FROM metric_samples m \
-         INNER JOIN ( \
-             SELECT name, MAX(ts) AS max_ts FROM metric_samples \
-             WHERE category = ?1 GROUP BY name \
-         ) latest ON m.name = latest.name AND m.ts = latest.max_ts \
-         WHERE m.category = ?1 \
-         ORDER BY m.name",
-    )?;
-    let rows = stmt
-        .query_map(params![category], |r| {
-            Ok(MetricSample {
-                ts: r.get(0)?,
-                category: r.get(1)?,
-                name: r.get(2)?,
-                value: r.get(3)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
 /// Delete samples older than the given timestamp (data retention).
 pub fn purge_old_samples(conn: &Connection, before_ts: i64) -> ApiResult<usize> {
     let n = conn.execute(

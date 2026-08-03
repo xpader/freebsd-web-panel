@@ -63,9 +63,8 @@ CPU delta 使用 `MONITOR_CPU`（独立的 `LazyLock<Mutex<Option<CpuState>>>`�
 | **GET** | `/api/monitor/series?category=&from=&to=&names=a,b` | 原始采样点。`names` 为逗号分隔的序列名列表，返回 `{ series: { name: [[ts, value], ...] } }`。一次调用取回同一分类下多个序列 |
 | **GET** | `/api/monitor/grouped?category=&from=&to=&bucket=&agg=&names=a,b` | 按时间桶聚合后的瞬时值。`agg` 可选 `min`/`avg`/`max` |
 | **GET** | `/api/monitor/aggregate?category=&from=&to=&bucket=&names=a,b` | 累计计数器做 SUM（每个 bucket 内累加已存好的 delta），得到区间内真实字节数。当前唯一的 counter 分类是 `net_bytes` |
-| GET | `/api/monitor/latest` | 每个 (category,name) 的最新一条采样，供前端发现接口/指标使用 |
 
-三类端点都返回 `{ series: { name: points } }`，前端一次调用即可拿到一张图表所需的全部数据集。`names` 参数使用 Serde `comma_list` 反序列化，将逗号分隔的字符串解析为 `Vec<String>`。
+三类端点都返回 `{ series: { name: points } }`，前端一次调用即可拿到一张图表所需的全部数据集。`names` 参数使用 Serde `comma_list` 反序列化，将逗号分隔的字符串解析为 `Vec<String>`。前端通过 `/api/system/info`（CPU 核数）和 `/api/system/metrics`（在线网卡）发现动态指标名，无需额外的发现接口。
 
 
 

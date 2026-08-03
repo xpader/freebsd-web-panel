@@ -33,6 +33,7 @@ const selectedAgg = ref('avg');
 const msg = ref('');
 const charts = {};
 let cpuCanvas, tempCanvas, loadCanvas;
+let cpuCores = 0;
 
 async function drawSeries(canvas, category, nameOrNames, from, to, opts) {
   if (!canvas) return;
@@ -81,21 +82,19 @@ async function drawAll() {
     colors: ['#3b82f6', '#8b5cf6', '#f59e0b'],
   });
 
-  // Temperature: discover names from latest.
-  let names = [];
-  try {
-    const latest = await api.get('/api/monitor/latest');
-    names = latest.temp.map((tp) => tp.name).sort();
-  } catch {}
-  if (!names.length) {
-    if (charts['chart-temp']) { charts['chart-temp'].destroy(); delete charts['chart-temp']; }
-  } else {
+  // Temperature: sensor names follow the cpu<N> convention (one per core),
+  // so the names are derived from the core count instead of querying /latest.
+  if (cpuCores > 0) {
+    const names = Array.from({ length: cpuCores }, (_, i) => `cpu${i}`);
     await drawSeries(tempCanvas, 'temp', names, from, now, {
       multi: true,
       labels: names.map((n) => n.replace('cpu', 'CPU ')),
       colors: palette(names.length),
       yUnit: '°C',
     });
+  } else if (charts['chart-temp']) {
+    charts['chart-temp'].destroy();
+    delete charts['chart-temp'];
   }
 }
 
@@ -118,6 +117,10 @@ onMounted(async () => {
   cpuCanvas = document.getElementById('chart-cpu');
   tempCanvas = document.getElementById('chart-temp');
   loadCanvas = document.getElementById('chart-load');
+  try {
+    const info = await api.get('/api/system/info');
+    cpuCores = info.cpu_cores || 0;
+  } catch {}
   await drawAll();
 });
 
