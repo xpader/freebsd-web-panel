@@ -130,7 +130,7 @@ export const en = {
     dashboard: 'Dashboard',
     sysctl: 'Sysctl',
     rcconf: 'RC Config',
-    cron: 'Scheduled Tasks',
+    cron: 'Cron Jobs',
     services: 'Services',
     systemServices: 'System Services',
     accounts: 'Users & Groups',
@@ -1144,7 +1144,7 @@ export const en = {
     deleted: 'Static route deleted',
   },
   cron: {
-    title: 'Scheduled Tasks',
+    title: 'Cron Jobs',
     subtitle: 'Manage cron jobs in the crontab (runs as root)',
     backupNote: 'Each modification is automatically backed up (up to 5 copies per file).',
     filter: 'Filter schedule / command…',

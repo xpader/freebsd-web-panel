@@ -8,6 +8,10 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 
 ![Screenshot](screenshot.png)
 
+## Design Philosophy
+
+**A non-invasive, strictly optional management layer.** FreeBSD Web Panel never alters how the system runs or introduces runtime dependencies. It only configures and orchestrates the tools FreeBSD already provides. Shut it down — or remove it entirely — and everything it manages keeps running exactly as configured, because all state lives in FreeBSD itself, not in the panel.
+
 ## Features
 
 | Module | Capabilities |

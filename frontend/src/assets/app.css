@@ -387,7 +387,7 @@ input:focus, select:focus, textarea:focus {
 input:disabled, select:disabled, textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  background: var(--input-bg-disabled);
+  background-color: var(--input-bg-disabled);
 }
 input[type="checkbox"], input[type="radio"] {
   width: auto;
@@ -760,7 +760,8 @@ tr.row-clickable { cursor: pointer; }
   background: none; border: none; cursor: pointer; padding: 2px 4px;
   color: var(--text-dim); font-size: 13px; line-height: 1;
 }
-.search-clear:hover { color: var(--text); }
+.search-clear:hover { color: #fff; }
+.search-clear:active { transform: translateY(-50%) scale(0.96); }
 
 /* ---- Modal ---- */
 .modal-overlay {
