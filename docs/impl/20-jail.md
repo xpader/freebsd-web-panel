@@ -393,37 +393,47 @@ myjail {
 勾选 `vnet` 后，`vnet.interface` 设为 `auto`。保存时：
 1. 分配 epair_id（`ensure_epair_id`，≥100，扫描 jail.conf 已用 id + 系统 epair 接口，避免冲突）
 2. 若 `meta.interface` 非空：用于查找或创建网桥（`ensure_bridge_for_interface`）；若为空：跳过网桥，epair host 端不接入任何网桥（适用于 NAT 或外部管理的网络）
-3. 自动生成 epair 生命周期命令（`fwp-vnet` 脚本，host/jail 端均以 `epair<id>a`/`epair<id>b` 命名，**不做重命名**）
-4. 根据 `meta.ip4` 值生成 IP 配置命令
+3. 直接在 jail.conf 生成内联 exec 钩子（**不再使用 fwp-vnet 辅助脚本**），host/jail 端均以 `epair<id>a`/`epair<id>b` 命名，**不做重命名**
+4. 根据 `meta.ip4` 值在 `exec.start`（jail 环境）内联配置 IP
 
+epair 生命周期与 IP 配置全部内联到 jail.conf 的 exec 钩子，无外部脚本依赖。**每条 exec 行是一条单命令**（不嵌套 `/bin/sh -c`）：全局 `exec.clean` 使 jail(8) 自身已通过 `sh -c` 执行每条 exec.* 命令，再包一层 sh -c 会双重嵌套、破坏引用/quoting（如 `route add default` 报 `Invalid argument`）。多步操作（建 epair、配 IP）拆成多条独立 exec 行，jail(8) 按顺序执行：
+
+| 钩子 | 环境 | 动作 |
+|---|---|---|
+| `exec.prestart +=` | 主机 | `ifconfig epair<id>a destroy \|\| :`（忽略不存在时的非零退出码）<br>`ifconfig epair<id> create up`<br>`ifconfig <bridge> addm epair<id>a`（无 bridge 时省略） |
+| `exec.start =` | jail | IP 配置（override，见下）；随后独立一行 `exec.start += "/bin/sh /etc/rc"` |
+| `exec.poststop +=` | 主机 | `ifconfig epair<id>a destroy \|\| :` |
+
+`destroy` 命令必须带 `|| :`：接口不存在时 ifconfig 返回非零退出码，jail(8) 会将 prestart/poststop 的非零退出视为失败并**中止** jail 创建/移除，因此显式吞掉退出码。其余命令（create/addm/dhclient/ifconfig/route）成功时退出码为零，无需处理。
+
+DHCP（`meta.ip4 = "dhcp"`，需 `devfs_ruleset = "11"` 提供 `/dev/bpf*`）：
 ```
 myjail {
-    meta.description = "DHCP jail";
-    meta.interface = "bge1";
     meta.ip4 = "dhcp";
+    meta.interface = "bge1";
     meta.epair_id = "100";
     vnet;
     vnet.interface = "epair100b";
     devfs_ruleset = "11";
-    exec.prestart += "/usr/local/libexec/fwp-vnet up ${name} 100 bridge0";
-    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} 100 dhcp";
-    exec.poststop += "/usr/local/libexec/fwp-vnet down ${name} 100";
+    exec.prestart += "/sbin/ifconfig epair100a destroy || :";
+    exec.prestart += "/sbin/ifconfig epair100 create up";
+    exec.prestart += "/sbin/ifconfig bridge0 addm epair100a";
+    exec.start = "/sbin/dhclient epair100b";
+    exec.start += "/bin/sh /etc/rc";
+    exec.poststop += "/sbin/ifconfig epair100a destroy || :";
 }
 ```
+dhclient 默认前台阻塞至拿到 lease 再 daemonize，其父进程随即退出，jail(8) 继续执行下一条 `exec.start += /etc/rc`——此时 IP 已就绪（等价 SYNCDHCP 语义）。DHCP 服务器不可达时会拖慢启动，这是 DHCP 模式的固有代价。`exec.start =`（override）替换了全局默认的 `exec.start += /etc/rc`，故 fwp 在 override 后显式以独立 `+=` 行补回 `/etc/rc`。
 
-`meta.interface` 为空时（不接入网桥，省略 bridge 参数）：
-```
-    exec.prestart += "/usr/local/libexec/fwp-vnet up ${name} 100";
-```
-
-静态 IP 的 VNET jail，`meta.gateway` 非空时使用用户指定的网关：
+静态 IP（`meta.gateway` 非空时用用户指定网关，为空时自动取主机默认网关 `route -n get default`）：
 ```
     meta.ip4 = "192.168.1.10";
     meta.gateway = "192.168.1.1";
-    exec.poststart += "/usr/local/libexec/fwp-vnet init ${name} 100 static 192.168.1.10 192.168.1.1";
+    exec.start = "/sbin/ifconfig epair100b inet 192.168.1.10";
+    exec.start += "/sbin/route add default 192.168.1.1";
+    exec.start += "/bin/sh /etc/rc";
 ```
-
-`meta.gateway` 为空时自动使用主机默认网关（`route -n get default`）。
+`exec.start` 运行在 jail 环境，故直接用 jail 内的 `ifconfig`/`route`/`dhclient`，无需 `jexec`。所有 exec 钩子（prestart/start/poststop）的每条命令都独立成行，不嵌套 `/bin/sh -c`（全局 `exec.clean` 下 jail(8) 已用 `sh -c` 执行 exec.*，再包一层会双重嵌套破坏 quoting）。`destroy` 命令例外地带 `|| :` 后缀（吞掉接口不存在时的非零退出码，避免 jail(8) 中止创建）。`ip4` 为空或 `disable` 时不生成 `exec.start` override，沿用全局 `exec.start += /etc/rc`。
 
 `meta.epair_id` 在详情 API 响应中被剥离（内部字段，不暴露给前端）。
 
@@ -432,39 +442,35 @@ myjail {
 `ensure_bridge_for_interface(iface)`:
 1. 如果接口已是某网桥成员 → 返回该网桥（`find_bridge_for_interface`）
 2. 如果接口本身是网桥 → 返回它
-3. 否则 → 验证接口存在 → 创建新网桥，加入接口，全部 up
+3. 否则 → 验证接口存在 → 创建新网桥，加入接口，全部 up → **持久化到 rc.conf**
+
+**持久化**（仅新建网桥时）：复用网络接口管理的方法写入主机 rc.conf，使网桥在主机重启后自动重建：
+- `sysrc::list_add("cloned_interfaces", &bridge)` — 注册为克隆接口
+- `sysrc::set("ifconfig_<bridge>", "addm <iface> up")` — 只写指定的主机接口成员
+**不持久化 epair 成员**——epair 是 jail 启动时动态创建的，持久化 addm 成员无意义。这与决策一致：自动网桥只持久化指定的主机接口成员。
 
 **网桥判定**用 `crate::ifutil::is_bridge(iface)`，通过 sysctl `IFDATA_DRIVERNAME`（`net.link.generic.ifdata.<idx>.3`）读内核 `if_dname`+`if_dunit` 拼接得到驱动名（如 `"bridge0"`、`"bridge1"`）。**不依赖接口名字符串匹配**，因此对 `vm-public` 这类改名网桥（drivername 仍为 `"bridge0"`）也能正确识别。
 
 枚举所有网桥成员用 `crate::ifutil::list_group_members("bridge")`（SIOCGIFGMEMB ioctl），同样不依赖名字。
 
-#### fwp-vnet 辅助脚本
-
-`/usr/local/libexec/fwp-vnet`，带版本标记（`# fwp-vnet-version: N`），版本不匹配时自动覆盖：
-
-| 子命令 | 执行位置 | 作用 |
-|---|---|---|
-| `up <name> <id> <bridge>` | 主机（exec.prestart） | 创建 `epair<id>`，host 端 `epair<id>a` 加入指定 bridge（bridge 省略则跳过 addm） |
-| `up <name> <id>` | 主机（exec.prestart） | 同上但无 bridge（`meta.interface` 为空的 NAT/外部管理场景） |
-| `down <name> <id>` | 主机（exec.poststop） | 销毁 `epair<id>a`（对端 b 自动销毁） |
-| `init <name> <id> dhcp` | 主机（exec.poststart） | jexec 进 jail 对 `epair<id>b` 启动 dhclient |
-| `init <name> <id> static <ip> <gw>` | 主机（exec.poststart） | jexec 进 jail 对 `epair<id>b` 配置 ifconfig + 默认路由 |
-
 接口命名约定：`epair<id>a`（host 端）、`epair<id>b`（jail 端）。**不做重命名**——避免并行启动时的命名竞争、tmux 残留接口等问题。`<id>` 来自 `meta.epair_id`（≥100，持久化在 jail.conf）。
+
+**为何不重命名为统一名（如 vnet0）**：通过 `vnet.interface` 移入 jail 的接口，其 home vnet 仍是主机（jail(8) 明确记录「The interfaces will automatically be released when the jail is removed」）。jail 停止时——包括异常退出、未执行 `exec.poststop` 的情况——接口会被**归还到主机的网络栈**，而非销毁。若改名为统一名，多个 jail 异常停止后会在主机上累积同名接口（如多个 `vnet0`），导致下一个 jail 启动时主机侧 `ifconfig ... name vnet0` 报 `SIOCSIFNAME: File exists` 失败。接口名是内核对象属性，跨 vnet 移动后保留（在 host 改名和在 jail 内改名无差异，jail 销毁后残留在主机上的都是改后的名字）。改用 per-jail 唯一的 `epair<id>b` 命名，残留接口天然不重名，下次启动时 `exec.prestart` 开头的 `destroy || :` 自愈清理即可恢复。
 
 #### 编辑时的 exec 行管理
 
-所有含 `fwp-vnet` 的 exec.* 行由网络配置完全控制：
-- **保存时**：通用循环跳过所有含 `fwp-vnet` 的命令，由 VNET 块根据当前 `meta.*` 重新生成
-- **读取时**：exec.* 的 `+=` 和 `=` 行（包括 fwp-vnet 行）都被收集到多行文本框中显示
-- 不做隐藏——fwp-vnet 行在执行标签页的文本框中可见，但保存时不会重复写入
+VNET jail 的网络类 exec 行由 `meta.*` 配置完全控制，保存时根据当前网络配置重新生成。识别方式：对 VNET jail，凡含 `ifconfig`、`dhclient`、旧版 `fwp-vnet`，或 exec.start 上的 `/etc/rc` 行，均视为 fwp 生成（**不加注释标记**，按关键字匹配）：
+- **保存时**：通用循环跳过上述 fwp 生成的行，由 VNET 块根据当前 `meta.*` 重新生成；用户手动添加的非网络类行（不在上述关键字内）原样以 `+=` 保留，fwp 不触碰
+- **exec.start 的 `/bin/sh /etc/rc`**：因 VNET 块用 `exec.start =`（override）替换了全局默认的 `exec.start += /etc/rc`，fwp 在 override 行后显式补一行 `exec.start += "/bin/sh /etc/rc"` 恢复标准启动。为避免重复编辑时累积，该行在 exec.start 上也被 filter 剥离后由 VNET 块统一重新生成（只保留一份）
+- **exec.start override 顺序**：IP 配置（`=` override）→ `/etc/rc`（`+=）→ 用户其他 start 命令（`+=），保证 IP 先于服务启动
+- **读取时**：exec.* 的 `+=` 和 `=` 行都被收集到多行文本框中显示，不做隐藏
 
 #### Jail 编辑 API
 
 `PUT /api/jails/{name}` — 完整参数替换：
 - 请求体：`{params: HashMap<String, String>, auto_start?: bool}`
 - 后端用 `generate_jail_block_from_params()` 重新生成整个 jail 块
-- `meta.*` 直接写入，派生参数（interface/ip4 等）从 meta 生成，fwp-vnet 行自动管理
+- `meta.*` 直接写入，派生参数（interface/ip4 等）从 meta 生成，VNET exec 钩子（ifconfig/dhclient/fwp-vnet 行）自动管理
 
 ### fstab 管理
 
@@ -553,7 +559,6 @@ POST `/api/jails/bases` 请求体根据 `method` 不同：
 - **`/etc/jail.conf`** — Jail 配置文件（读取 + 备份 + 原子写入 + 初始化 + 全局段编辑）
 - **`/etc/devfs.rules`** — Devfs 规则文件（初始化 + 读写）
 - **`/var/db/fwp/jail-resolv.conf`** — 默认 jail DNS 配置（读写）
-- **`/usr/local/libexec/fwp-vnet`** — VNET epair 生命周期管理脚本（首次启用 VNET 时自动创建）
 - **`/sbin/ifconfig`** — epair 创建/销毁、bridge create/addm/up、成员查询回退（VNET 自动配置）
 - **`/sbin/route`** — 默认网关检测（VNET 自动配置，`meta.gateway` 为空时使用）
 - **`crate::ifutil`** — 网桥身份判定（`is_bridge()` via sysctl IFDATA_DRIVERNAME）、bridge 组成员枚举（`list_group_members` via SIOCGIFGMEMB ioctl）、epair 组成员枚举（epair_id 分配冲突检测）
