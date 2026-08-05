@@ -131,7 +131,7 @@ onMounted(load);
       <i class="fa-solid fa-plus"></i> {{ t('accounts.addGroup') }}
     </button>
   </div>
-  <div class="card table-wrap" style="padding:0;">
+  <div class="card" style="padding:0;">
     <table>
       <thead>
         <tr>

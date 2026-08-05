@@ -96,10 +96,6 @@ function doSelect() {
   emit('select', selected.value);
 }
 
-function onOverlayClick(e) {
-  if (e.target === e.currentTarget) emit('close');
-}
-
 onMounted(async () => {
   if (!parsed) {
     error.value = t('rsync.invalidTarget');
@@ -128,7 +124,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="modal-overlay fp-overlay" @click="onOverlayClick">
+  <div class="modal-overlay fp-overlay">
     <div class="modal fp-modal">
       <div class="fp-header">
         <h3>{{ t('rsync.selectRemoteDir') }}</h3>
@@ -190,7 +186,7 @@ onMounted(async () => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .fp-tree {
-  flex: 1; overflow: auto; background: var(--bg);
+  flex: 1; overflow: auto; background: var(--input-bg);
   border: 1px solid var(--border); border-radius: var(--radius);
   min-height: 200px; max-height: 50vh;
 }

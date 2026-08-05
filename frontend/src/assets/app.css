@@ -535,7 +535,7 @@ th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--bo
   box-shadow: -6px 0 10px -6px var(--shadow);
 }
 .table-wrap th.col-actions { z-index: 3; }
-.table-wrap tbody tr:hover td.col-actions { background: var(--bg-elev2); }
+.table-wrap tbody tr:hover td.col-actions { background: linear-gradient(var(--hover-bg), var(--hover-bg)), var(--bg-elev); }
 /* Prevent badge/button inner text from wrapping, but allow multiple buttons to wrap */
 .badge { white-space: nowrap; }
 td button { white-space: nowrap; }
@@ -664,7 +664,7 @@ tr.row-clickable { cursor: pointer; }
   font-size: 12px;
   vertical-align: middle;
 }
-.field-help:hover { color: var(--accent); }
+.field-help:hover { background: none; color: var(--accent); }
 .field-tooltip {
   position: absolute;
   z-index: 20;
@@ -1000,7 +1000,7 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .checkbox-row,
 .radio-pill {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  padding: 6px 10px; font-size: 13px; cursor: pointer;
   border-radius: var(--radius);
   transition: background 0.15s, color 0.15s;
 }
@@ -1010,7 +1010,7 @@ body.term-active .main .page-header { flex-shrink: 0; }
   border-radius: var(--radius);
   transition: background 0.15s, color 0.15s;
 }
-.checkbox-label { margin-left: -14px; white-space: nowrap; }
+.checkbox-label { margin-left: -10px; white-space: nowrap; }
 .checkbox-row { margin-bottom: 0; }
 .checkbox-label input[type="checkbox"],
 .checkbox-row input[type="checkbox"],

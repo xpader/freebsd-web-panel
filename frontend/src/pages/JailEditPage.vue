@@ -443,7 +443,7 @@ onMounted(async () => {
     />
 
     <!-- Fstab management modal -->
-    <div v-if="showFstabModal" class="modal-overlay" @click.self="showFstabModal = false">
+    <div v-if="showFstabModal" class="modal-overlay">
       <div class="modal" style="max-width:640px;">
         <h3>{{ t('jails.fstabManage') }}</h3>
         <div v-if="!fstabEntries.length && !fstabEditing" class="text-dim" style="margin-bottom:12px;">{{ t('jails.fstabEmpty') }}</div>
