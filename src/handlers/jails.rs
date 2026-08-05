@@ -616,10 +616,19 @@ pub async fn detail(Path(name): Path<String>) -> ApiResult<Json<JailInfo>> {
             .unwrap_or(0);
         jid = rt_jid;
         let dying = params.get("dying").map(|v| v == "true").unwrap_or(false);
+        let mut rt_map = params.clone();
+        // libjail exports the `vnet` parameter as a jailsys enum ("new" for a
+        // jail with its own network stack), but fwp's jail.conf parser
+        // represents an enabled vnet as "true". Coerce so the detail view's
+        // merged params show a consistent value whether the jail is running
+        // or stopped.
+        if rt_map.get("vnet").map(|v| v == "new").unwrap_or(false) {
+            rt_map.insert("vnet".to_string(), "true".to_string());
+        }
         runtime = Some(JailRuntime {
             jid: rt_jid,
             state: if dying { "dying".into() } else { "running".into() },
-            params: params.clone(),
+            params: rt_map,
         });
     }
 
