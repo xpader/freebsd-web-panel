@@ -21,6 +21,7 @@ const { expanded, treeChildren, toggleExpand, ensureAncestors, getChildren, inva
 
 const entries = ref([]);
 const loading = ref(true);
+const refreshing = ref(false);
 
 // Modals
 const showMkdir = ref(false);
@@ -52,6 +53,16 @@ async function loadListing(path) {
     entries.value = [];
   } finally {
     loading.value = false;
+  }
+}
+
+async function refresh() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  try {
+    await Promise.all([loadListing(currentDir.value), refreshTree()]);
+  } finally {
+    refreshing.value = false;
   }
 }
 
@@ -381,6 +392,7 @@ onMounted(async () => {
             </template>
           </div>
           <div class="fm-actions">
+            <button class="btn-secondary btn-sm" @click="refresh"><i class="fa-solid fa-rotate-right" :class="{ 'fa-spin': refreshing }"></i> {{ t('common.refresh') }}</button>
             <button class="btn-secondary btn-sm" @click="openUploadModal"><i class="fa-solid fa-upload"></i> {{ t('fm.upload') }}<span v-if="activeUploadCount" class="upload-badge">{{ activeUploadCount }}</span></button>
             <button class="btn-secondary btn-sm" @click="openMkdir"><i class="fa-solid fa-folder-plus"></i> {{ t('fm.mkdir') }}</button>
             <div class="fm-view-toggle">
@@ -407,7 +419,7 @@ onMounted(async () => {
                 <td class="mono">{{ e.is_dir ? '—' : fmtBytes(e.size) }}</td>
                 <td class="text-dim mono">{{ e.user }}</td>
                 <td class="text-dim mono">{{ e.group }}</td>
-                <td :class="['mono', (e.mode & 0o111) ? 'fm-perm-exec' : 'text-dim']">{{ e.permissions }}</td>
+                <td :class="['mono', (!e.is_dir && (e.mode & 0o111)) ? 'fm-perm-exec' : 'text-dim']">{{ e.permissions }}</td>
                 <td class="text-dim">{{ fmtDate(e.modified) }}</td>
                 <td>
                   <div class="fm-acts">
@@ -587,3 +599,112 @@ onMounted(async () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Layout */
+.fm-wrap { display: flex; gap: 16px; height: calc(100vh - 170px); min-height: 420px; }
+.fm-tree {
+  width: 260px; flex-shrink: 0;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.fm-tree-head { padding: 10px 14px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+.fm-tree-body { overflow-y: auto; flex: 1; padding: 6px 0; }
+.fm-tree-node { }
+.fm-tree-row { display: flex; align-items: center; gap: 2px; cursor: pointer; }
+.fm-tree-row:hover { background: var(--hover-bg); }
+.fm-tree-arrow { width: 14px; text-align: center; color: var(--text-dim); font-size: 10px; user-select: none; flex-shrink: 0; }
+.fm-tree-arrow:hover { color: var(--text); }
+.fm-tree-name { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); padding: 4px 6px; min-width: 0; }
+.fm-tree-name:hover { color: var(--text); }
+.fm-tree-row.active .fm-tree-name { color: var(--accent); font-weight: 600; }
+.fm-tree-ico { font-size: 13px; opacity: 0.8; }
+.fm-tree-ico i { font-size: 13px; }
+.fm-tree-arrow i { font-size: 11px; }
+.fm-tree-children { }
+
+.fm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fm-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.fm-breadcrumb { display: flex; align-items: center; gap: 2px; font-size: 13px; flex-wrap: wrap; min-width: 0; }
+.fm-crumb { color: var(--text-dim); cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.fm-crumb:hover { color: var(--accent); background: var(--hover-bg); }
+.fm-sep { color: var(--text-dim); opacity: 0.5; }
+.fm-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.fm-view-toggle { display: flex; gap: 4px; }
+
+/* List view */
+.fm-listing { flex: 1; overflow: auto; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); }
+.fm-table { border-collapse: separate; border-spacing: 0; }
+.fm-table td, .fm-table th { white-space: nowrap; }
+.fm-table .fm-name-cell { white-space: normal; }
+.fm-table th { position: sticky; top: 0; background: var(--bg-elev); z-index: 1; border-bottom: 1px solid var(--border); }
+.fm-name-cell { }
+.fm-cell-flex { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fm-row-ico { font-size: 15px; opacity: 0.85; flex-shrink: 0; }
+.fm-row-ico i { font-size: 15px; }
+.fm-name-link { color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fm-name-link:hover { color: var(--accent); }
+.fm-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fm-acts { display: flex; gap: 2px; white-space: nowrap; justify-content: flex-end; }
+.fm-act { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; background: transparent; border: none; color: var(--text-dim); border-radius: 4px; cursor: pointer; font-size: 13px; padding: 0; }
+.fm-act:hover { background: var(--hover-bg); color: var(--accent); }
+.fm-act-danger:hover { color: var(--danger); }
+.fm-perm-exec { color: var(--danger); }
+
+/* Grid view */
+.fm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding: 16px; }
+.fm-grid-item { background: var(--bg-elev2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 10px; text-align: center; transition: border-color 0.12s ease, background 0.12s ease; position: relative; }
+.fm-grid-item:hover { border-color: var(--accent); }
+.fm-grid-item.fm-openable { cursor: pointer; }
+.fm-grid-ico { font-size: 34px; opacity: 0.8; margin-bottom: 8px; }
+.fm-grid-ico i { font-size: 34px; }
+.fm-grid-name { font-size: 13px; word-break: break-all; line-height: 1.3; margin-bottom: 4px; max-height: 34px; overflow: hidden; }
+.fm-grid-meta { font-size: 11px; color: var(--text-dim); }
+.fm-grid-acts { display: flex; justify-content: center; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity 0.12s ease; }
+.fm-grid-item:hover .fm-grid-acts { opacity: 1; }
+
+/* Stat modal */
+.fm-stat-grid { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.fm-stat-row { display: grid; grid-template-columns: 90px 1fr; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); align-items: start; }
+.fm-stat-label { color: var(--text-dim); font-size: 12px; }
+.fm-stat-val { font-size: 13px; word-break: break-all; }
+
+/* Permission editor */
+.fm-perm-grid { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 16px; }
+.fm-perm-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.fm-perm-who { width: 56px; font-size: 13px; color: var(--text-dim); flex-shrink: 0; }
+.fm-perm-check { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
+.fm-perm-check input { width: auto; margin: 0; }
+.fm-perm-preview { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 10px 12px; background: var(--bg-elev2); border-radius: var(--radius); margin-bottom: 12px; flex-wrap: wrap; }
+
+/* Upload manager */
+.upload-modal { max-width: 560px; display: flex; flex-direction: column; max-height: 80vh; }
+.upload-target { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; word-break: break-all; }
+.upload-dropzone {
+  border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px 20px;
+  text-align: center; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+  color: var(--text-dim); font-size: 13px; margin-bottom: 12px;
+}
+.upload-dropzone:hover, .upload-dropzone.dragover { border-color: var(--accent); background: rgba(59,130,246,0.05); color: var(--text); }
+.upload-dropzone i { font-size: 28px; margin-bottom: 8px; display: block; }
+.upload-list { flex: 1; overflow-y: auto; max-height: 300px; margin-bottom: 12px; }
+.upload-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.upload-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-item-size { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.upload-item-status { font-size: 11px; flex-shrink: 0; width: 60px; text-align: right; }
+.upload-item-status.done { color: var(--success); }
+.upload-item-status.error { color: var(--danger); }
+.upload-item-status.pending { color: var(--text-dim); }
+.upload-item-status.uploading { color: var(--accent); }
+.upload-progress { width: 80px; height: 4px; background: var(--bg-elev2); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+.upload-progress-bar { height: 100%; background: var(--accent); transition: width 0.2s ease; }
+.upload-progress-bar.done { background: var(--success); }
+.upload-progress-bar.error { background: var(--danger); }
+.upload-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+.upload-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px;
+  font-size: 10px; font-weight: 700; color: #fff;
+  background: var(--accent-emphasis); border-radius: 8px;
+}
+</style>
