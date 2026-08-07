@@ -59,8 +59,8 @@ async function showForm(existing = null) {
       { key: 'name', label: t('common.name'), value: existing?.name || '', required: true, disabled: isEdit },
       { key: 'comment', label: t('common.description'), value: existing?.comment || '' },
       { key: 'path', label: t('smb.path'), value: existing?.path || '', placeholder: '/zroot/data/share', required: true, picker: 'dir' },
-      { key: 'create_mask', label: t('smb.createMask'), value: existing?.create_mask || '0664', half: true },
-      { key: 'directory_mask', label: t('smb.directoryMask'), value: existing?.directory_mask || '0775', half: true },
+      { key: 'create_mask', label: t('smb.createMask'), value: existing?.create_mask || '0664', permPicker: true, special: false, half: true },
+      { key: 'directory_mask', label: t('smb.directoryMask'), value: existing?.directory_mask || '0775', permPicker: true, special: false, half: true },
       {
         key: '_flags', label: t('common.options'), type: 'checkbox-group',
         options: [

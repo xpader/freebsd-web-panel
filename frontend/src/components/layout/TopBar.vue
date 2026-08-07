@@ -123,7 +123,7 @@ onUnmounted(() => {
 <template>
   <a class="brand" href="#/dashboard">
     <span class="brand-mark"><i class="fa-solid fa-bolt"></i></span>
-    <span class="brand-text">fwp</span>
+    <span class="brand-text">FWP</span>
   </a>
   <nav class="topnav">
     <div

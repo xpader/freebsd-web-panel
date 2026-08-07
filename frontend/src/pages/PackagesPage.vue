@@ -50,6 +50,7 @@ const installSearch = ref('');
 const installResults = ref(null);
 const installLoading = ref(false);
 const installedNames = ref(new Set());
+const analyzingName = ref('');
 
 async function doRemoteSearch() {
   const q = installSearch.value.trim();
@@ -69,12 +70,13 @@ async function doRemoteSearch() {
 }
 
 async function doInstall(name) {
-  showInstall.value = false;
+  analyzingName.value = name;
   // Preview + confirm
   let preview;
   try {
     preview = await api.post('/api/pkg/preview', { action: 'install', packages: [name] });
   } catch (e) {
+    analyzingName.value = '';
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
     return;
   }
@@ -87,7 +89,10 @@ async function doInstall(name) {
   } else {
     msg = t('pkg.noDepsToInstall');
   }
-  if (!await confirmDialogCustom(t('pkg.installConfirm', { name }), msg)) return;
+  if (!await confirmDialogCustom(t('pkg.installConfirm', { name }), msg)) {
+    analyzingName.value = '';
+    return;
+  }
 
   // Start task
   let taskId;
@@ -95,9 +100,12 @@ async function doInstall(name) {
     const res = await api.post('/api/pkg/install', { packages: [name] });
     taskId = res.task_id;
   } catch (e) {
+    analyzingName.value = '';
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));
     return;
   }
+  analyzingName.value = '';
+  showInstall.value = false;
   showTaskModal('install', [name], taskId);
 }
 
@@ -277,7 +285,7 @@ onMounted(load);
         <tr v-if="error"><td colspan="6" class="empty">{{ t('common.loadFailed', { msg: error }) }}</td></tr>
         <tr v-else-if="loading"><td colspan="6" class="empty"><span class="spinner"></span> {{ t('common.loading') }}</td></tr>
         <tr v-else-if="!filtered.length"><td colspan="6" class="empty">{{ t('pkg.noPackages') }}</td></tr>
-        <tr v-for="p in filtered" :key="p.name">
+        <tr v-for="p in filtered" :key="p.name" v-memo="[p, previewing]">
           <td class="mono"><strong><a :href="'#/pkg/' + p.name">{{ p.name }}</a></strong></td>
           <td class="mono text-dim">{{ p.version }}</td>
           <td><div class="cell-wrap">{{ p.comment || '—' }}</div></td>
@@ -321,14 +329,14 @@ onMounted(load);
               <td class="mono text-dim">{{ r.size }}</td>
               <td style="white-space:nowrap;">
                 <span v-if="installedNames.has(r.name)" class="badge badge-dim">{{ t('pkg.installedBadge') }}</span>
-                <button v-else class="btn-secondary btn-sm" @click="doInstall(r.name)">{{ t('pkg.installBtn') }}</button>
+                <button v-else class="btn-secondary btn-sm" :disabled="!!analyzingName" @click="doInstall(r.name)"><span v-if="analyzingName === r.name" class="spinner"></span>{{ analyzingName === r.name ? t('pkg.checking') : t('pkg.installBtn') }}</button>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
       <div class="modal-actions">
-        <button class="btn-secondary" @click="showInstall = false">{{ t('common.close') }}</button>
+        <button class="btn-secondary" :disabled="!!analyzingName" @click="showInstall = false">{{ t('common.close') }}</button>
       </div>
     </div>
   </div>

@@ -2,10 +2,11 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api, authFetch } from '../lib/api.js';
-import { fmtBytes, fmtDate, permStringFull, octStr } from '../lib/format.js';
+import { fmtBytes, fmtDate, octStr } from '../lib/format.js';
 import { useToast, useConfirm, useAlert } from '../composables/useDialog.js';
 import { ROOT, fileIcon, joinPath, createTreeState } from '../lib/fileTree.js';
 import FileTreeRow from '../components/ui/FileTreeRow.vue';
+import PermissionDialog from '../components/ui/PermissionDialog.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -32,7 +33,7 @@ const renameName = ref('');
 const statInfo = ref(null);
 const showChmod = ref(false);
 const chmodInfo = ref(null);
-const chmodMode = ref(0);
+const chmodMode = ref('0644');
 const showChown = ref(false);
 const chownInfo = ref(null);
 const chownAccounts = ref(null);
@@ -280,13 +281,13 @@ async function onStat(path) {
 function openChmod(info) {
   statInfo.value = null;
   chmodInfo.value = info;
-  chmodMode.value = info.mode & 0o7777;
+  chmodMode.value = octStr(info.mode & 0o7777);
   showChmod.value = true;
 }
 
-async function doChmod() {
+async function doChmod(mode) {
   try {
-    await api.put(`/api/files/chmod?path=${encodeURIComponent(chmodInfo.value.path)}`, { mode: chmodMode.value });
+    await api.put(`/api/files/chmod?path=${encodeURIComponent(chmodInfo.value.path)}`, { mode: parseInt(mode, 8) });
     toast.toast(t('fm.permSaved'));
     showChmod.value = false;
     await loadListing(currentDir.value);
@@ -325,10 +326,6 @@ function setView(mode) {
   localStorage.setItem('fwp_fm_view', mode);
 }
 
-function setBit(bit, checked) {
-  if (checked) chmodMode.value |= bit;
-  else chmodMode.value &= ~bit;
-}
 
 onMounted(async () => {
   expanded.add(ROOT);
@@ -545,34 +542,13 @@ onMounted(async () => {
   </div>
 
   <!-- Chmod modal -->
-  <div v-if="showChmod" class="modal-overlay">
-    <div class="modal">
-      <h3>{{ t('fm.editPermissions') }} — {{ chmodInfo?.name }}</h3>
-      <div class="fm-perm-grid">
-        <div v-for="row in [
-          { label: t('common.owner'), bits: { r: 0o400, w: 0o200, x: 0o100 }, special: { s: 0o4000, label: 'setuid' } },
-          { label: t('common.group'), bits: { r: 0o040, w: 0o020, x: 0o010 }, special: { s: 0o2000, label: 'setgid' } },
-          { label: t('fm.other'), bits: { r: 0o004, w: 0o002, x: 0o001 }, special: { s: 0o1000, label: 'sticky' } },
-        ]" :key="row.label" class="fm-perm-row">
-          <span class="fm-perm-who">{{ row.label }}</span>
-          <label class="fm-perm-check"><input type="checkbox" :checked="chmodMode & row.bits.r" @change="setBit(row.bits.r, $event.target.checked)" />{{ t('fm.read') }}</label>
-          <label class="fm-perm-check"><input type="checkbox" :checked="chmodMode & row.bits.w" @change="setBit(row.bits.w, $event.target.checked)" />{{ t('fm.write') }}</label>
-          <label class="fm-perm-check"><input type="checkbox" :checked="chmodMode & row.bits.x" @change="setBit(row.bits.x, $event.target.checked)" />{{ t('fm.execute') }}</label>
-          <label class="fm-perm-check"><input type="checkbox" :checked="chmodMode & row.special.s" @change="setBit(row.special.s, $event.target.checked)" />{{ row.special.label }}</label>
-        </div>
-      </div>
-      <div class="fm-perm-preview">
-        <span class="text-dim">{{ t('common.permissions') }}:</span>
-        <span class="mono">{{ permStringFull(chmodMode) }}</span>
-        <span class="text-dim">{{ t('fm.octalMode') }}:</span>
-        <span class="mono">{{ octStr(chmodMode) }}</span>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-secondary" @click="showChmod = false">{{ t('common.cancel') }}</button>
-        <button @click="doChmod">{{ t('common.ok') }}</button>
-      </div>
-    </div>
-  </div>
+  <PermissionDialog
+    v-if="showChmod"
+    :title="`${t('fm.editPermissions')} — ${chmodInfo?.name || ''}`"
+    :value="chmodMode"
+    @confirm="doChmod"
+    @close="showChmod = false"
+  />
 
   <!-- Chown modal -->
   <div v-if="showChown" class="modal-overlay">
@@ -669,13 +645,6 @@ onMounted(async () => {
 .fm-stat-label { color: var(--text-dim); font-size: 12px; }
 .fm-stat-val { font-size: 13px; word-break: break-all; }
 
-/* Permission editor */
-.fm-perm-grid { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 16px; }
-.fm-perm-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.fm-perm-who { width: 56px; font-size: 13px; color: var(--text-dim); flex-shrink: 0; }
-.fm-perm-check { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
-.fm-perm-check input { width: auto; margin: 0; }
-.fm-perm-preview { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 10px 12px; background: var(--bg-elev2); border-radius: var(--radius); margin-bottom: 12px; flex-wrap: wrap; }
 
 /* Upload manager */
 .upload-modal { max-width: 560px; display: flex; flex-direction: column; max-height: 80vh; }

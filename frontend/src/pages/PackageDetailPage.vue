@@ -105,6 +105,12 @@ onMounted(async () => {
         <tr><td>{{ t('pkg.installed') }}</td><td>{{ fmtDate(info.install_timestamp) }}</td></tr>
         </tbody>
       </table>
+      <div v-if="(info.messages || []).length" style="margin-top:16px;">
+        <div class="card-title" style="margin-bottom:8px;">{{ t('pkg.messages') }}</div>
+        <div v-for="(msg, i) in (info.messages || [])" :key="i" class="mono pkg-message">
+          <pre style="white-space:pre-wrap; margin:0; font-family:inherit;">{{ msg }}</pre>
+        </div>
+      </div>
     </div>
 
     <!-- Deps tab -->
@@ -161,3 +167,14 @@ onMounted(async () => {
     </div>
   </template>
 </template>
+
+<style scoped>
+.pkg-message {
+  background: var(--bg-elev2);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+</style>

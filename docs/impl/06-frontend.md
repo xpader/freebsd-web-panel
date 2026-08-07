@@ -64,7 +64,9 @@ frontend/
     │       ├── DialogHost.vue       # confirm/alert/formModal 渲染
     │       ├── SearchInput.vue     # 搜索输入框（v-model + 清除按钮）
     │       ├── TaskConsole.vue     # 后台任务输出（SSE 流式 + 自动滚动）
-    │       └── ProgressBar.vue    # 百分比进度条（统一封装 metric bar）
+    │       ├── ProgressBar.vue    # 百分比进度条（统一封装 metric bar）
+    │       ├── PermissionInput.vue # 八进制权限编辑器内核（复选框+八进制+预览，v-model=八进制串）
+    │       └── PermissionDialog.vue # 权限编辑对话框覆盖层（封装 PermissionInput，可叠在 form 对话框之上）
     └── pages/              # 各功能页面（35 个 .vue 文件）
 ```
 
@@ -135,7 +137,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 |---|---|---|
 | `key` | string | 字段标识，结果对象中的键名 |
 | `label` | string | 字段标题 |
-| `type` | string | `text`（默认）、`password`、`select`、`radio`、`checkbox`、`checkbox-group`、`textarea` |
+| `type` | string | `text`（默认）、`password`、`select`、`radio`、`checkbox`、`checkbox-group`、`textarea`、`cron` |
 | `value` | any | 初始值 |
 | `inputType` | string | 当 type 为通用 input 时，设置 `<input type>`（如 `password`） |
 | `placeholder` | string | 占位提示 |
@@ -148,6 +150,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 | `requiredIf` | `{key: val}` | 条件必填 |
 | `options` | array | `select`/`radio`：`{value, label}`；`checkbox-group`：`{key, label, value, help?}` |
 | `picker` | `'dir'`/`'file'` | 路径选择器：渲染 `.input-with-btn` + 按钮。按钮按字段值自动判定本地/远程——值形如 `user@host`（SSH 连接）时打开 `RemoteFilePicker`，否则打开本地 `FilePicker` |
+| `permPicker` | bool | 八进制权限选择器：渲染 `.input-with-btn`（八进制输入框 + 按钮），点击按钮弹出 `PermissionDialog` 覆盖层。配合 `special`（bool，默认 `true`）控制是否显示 setuid/setgid/sticky 特殊位 |
 
 `opts` 支持 `submitLabel`（提交按钮文字）和 `submitHandler`（异步提交函数，抛错时内联显示错误不关闭对话框）。
 
@@ -159,6 +162,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - **`select`** — 下拉框
 - **`textarea`** — 多行文本
 - **`picker`** — 输入框 + 单按钮，按钮行为按字段当前值自动判定：本地路径或空 → 打开 `FilePicker`（📁）；SSH 规格（`user@host`）→ 打开 `RemoteFilePicker`（🌐）。可选 `portKey` 属性指定另一字段名，远程选择器从中读取 SSH 端口
+- **`permPicker`** — 八进制输入框 + 按钮（`.input-with-btn`），点击按钮弹出 `PermissionDialog` 覆盖层（`z-index: 60`，可叠在 form 对话框之上）。对话框内为 `PermissionInput.vue` 复选框网格（owner/group/other × r/w/x，可选 setuid/setgid/sticky）+ 可编辑八进制输入框 + 实时 `ls` 风格权限串预览，确定后写回字段值（八进制字符串）。`special: false` 时隐藏特殊位、值掩码到 `0o777`（Samba 掩码场景）。与 `FilePicker` 同样作为 `DialogHost` 的兄弟覆盖层渲染，由 `permField` ref 控制——因 `ui.dialog` 单槽位限制，嵌套对话框必须走此兄弟覆盖层模式。文件管理器的 chmod 对话框（不在 form 内）也复用 `PermissionDialog`（特殊位启用）
 - **`half` + `row` 布局** — `groupedFields()` 将连续 `half` 字段两两配对为 flex 行；同 `row` 值的字段强制同组
 
 #### 示例
@@ -168,8 +172,8 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 const result = await formModal('创建共享', [
   { key: 'name', label: '名称', required: true },
   { key: 'path', label: '路径', required: true, picker: 'dir' },
-  { key: 'create_mask', label: '文件掩码', value: '0664', half: true },
-  { key: 'directory_mask', label: '目录掩码', value: '0775', half: true },
+  { key: 'create_mask', label: '文件掩码', value: '0664', permPicker: true, special: false, half: true },
+  { key: 'directory_mask', label: '目录掩码', value: '0775', permPicker: true, special: false, half: true },
   {
     key: '_flags', label: '选项', type: 'checkbox-group',
     options: [

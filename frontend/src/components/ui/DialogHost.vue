@@ -6,6 +6,7 @@ import FieldHelp from './FieldHelp.vue';
 import FilePicker from './FilePicker.vue';
 import RemoteFilePicker from './RemoteFilePicker.vue';
 import CronScheduleInput from './CronScheduleInput.vue';
+import PermissionDialog from './PermissionDialog.vue';
 const { t } = useI18n();
 const submitting = ref(false);
 const firstInput = ref(null);
@@ -13,6 +14,7 @@ const radioState = reactive({});
 const formValues = reactive({});
 const pickerField = ref(null);
 const pickerRemote = ref(false);
+const permField = ref(null);
 
 /// True when a path spec looks like an SSH connection (`user@host` or `host:`).
 function isRemoteSpec(v) {
@@ -267,6 +269,15 @@ function groupedFields(d) {
               </div>
               <!-- cron schedule (single cron_expr string) -->
               <CronScheduleInput v-else-if="f.type === 'cron'" v-model="formValues[f.key]" />
+              <!-- octal permission picker (input + button → opens PermissionDialog) -->
+              <div v-else-if="f.permPicker" class="input-with-btn">
+                <input :id="'field-' + f.key" v-model.trim="formValues[f.key]"
+                  :placeholder="f.placeholder || '0644'"
+                  :required="isFieldRequired(f)" :disabled="f.disabled" />
+                <button type="button" class="btn-secondary btn-sm" :title="t('fm.editPermissions')" @click="permField = f.key">
+                  <i class="fa-solid fa-sliders"></i>
+                </button>
+              </div>
               <!-- text input -->
               <input v-else :id="'field-' + f.key" v-model.trim="formValues[f.key]"
                 :type="f.inputType || 'text'"
@@ -299,6 +310,15 @@ function groupedFields(d) {
     :port="formValues[(ui.dialog.fields.find(f => f.key === pickerField)?.portKey)] || 22"
     @select="(p) => { formValues[pickerField] = p; pickerField = null; }"
     @close="pickerField = null"
+  />
+  <!-- Octal permission picker -->
+  <PermissionDialog
+    v-if="permField"
+    :title="ui.dialog.fields.find(f => f.key === permField)?.label || t('fm.editPermissions')"
+    :value="formValues[permField] || '0644'"
+    :special="ui.dialog.fields.find(f => f.key === permField)?.special !== false"
+    @confirm="(v) => { formValues[permField] = v; permField = null; }"
+    @close="permField = null"
   />
 </template>
 
