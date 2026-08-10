@@ -538,9 +538,7 @@ PUT `/api/jails/bases/{name}` 编辑基础系统，两个字段均可选、互�
 2. 失效快照以禁用+删除线+"已删除"标记单独展示（不可勾选），从提交列表中剔除；
 3. 保存时只提交仍存在的快照，从而在改名/保存的同时自动清理失效引用。
 
-前端编辑弹窗对**所有类型**显示（不再仅 ZFS）：ZFS 类型同时可改名称与快照，SharedFS 类型仅可改名称。
-
-POST `/api/jails/bases` 请求体根据 `method` 不同：
+前端编辑弹窗对**所有类型**显示（不再仅 ZFS）：ZFS 类型同时可改名称与快照，SharedFS 类型可改名称，两个路径（模板目录、SharedFS 目录）以只读形式展示不可编辑。
 
 - `method: "import"`: `{name, method, type, source_path, snapshots?, sharedfs_path?}`（与重构前兼容）
 - `method: "from-txz"` + ZFS: `{name, method, type, txz_path, dataset, snapshot_name}`

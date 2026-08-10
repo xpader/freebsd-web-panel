@@ -45,14 +45,18 @@ const editName = ref('');
 const allSnaps = ref([]);
 const staleSnaps = ref([]);
 const editSnapChecked = ref(new Set());
+const editSourcePath = ref('');
+const editSharedfsPath = ref('');
 
 // File picker
 const pickerTarget = ref(null);
 const pickerConfig = ref({ mode: 'dir', accept: [] });
-
 function openPicker(target, mode = 'dir', accept = []) {
   pickerTarget.value = target;
   pickerConfig.value = { mode, accept };
+}
+function pickerInitialPath() {
+  return form[pickerTarget.value] || '/';
 }
 function onPickerSelect(path) {
   if (pickerTarget.value) form[pickerTarget.value] = path;
@@ -227,6 +231,8 @@ async function openEdit(base) {
   allSnaps.value = [];
   staleSnaps.value = [];
   editSnapChecked.value = new Set();
+  editSourcePath.value = base.source_path || '';
+  editSharedfsPath.value = base.sharedfs_path || '';
   showEdit.value = true;
   if (base.type === 'zfs') {
     const registered = new Set(base.snapshots || []);
@@ -259,7 +265,10 @@ async function saveEdit() {
     }
     body.snapshots = snaps;
   }
-  if (!body.name && !body.snapshots) { showEdit.value = false; return; }
+  if (!body.name && !body.snapshots) {
+    showEdit.value = false;
+    return;
+  }
   try {
     await api.put(`/api/jails/bases/${encodeURIComponent(editBase.value.name)}`, body);
     toast.toast(t('common.saved'));
@@ -452,7 +461,7 @@ onMounted(load);
 
   <!-- Edit base system modal -->
   <div v-if="showEdit" class="modal-overlay">
-    <div class="modal" style="max-width:520px;">
+    <div class="modal" style="max-width:600px;">
       <h3>{{ t('common.edit') }} — {{ editBase?.name }}</h3>
       <form @submit.prevent="saveEdit">
         <div class="field">
@@ -477,6 +486,16 @@ onMounted(load);
             </div>
           </div>
         </template>
+        <template v-if="editBase?.type === 'sharedfs'">
+          <div class="field">
+            <label>{{ t('jails.templateDir') }}</label>
+            <input type="text" :value="editSourcePath" disabled />
+          </div>
+          <div class="field">
+            <label>{{ t('jails.sharedfsDir') }}</label>
+            <input type="text" :value="editSharedfsPath" disabled />
+          </div>
+        </template>
         <div class="modal-actions">
           <button type="button" class="btn-secondary" @click="showEdit = false">{{ t('common.cancel') }}</button>
           <button type="submit">{{ t('common.save') }}</button>
@@ -489,7 +508,7 @@ onMounted(load);
     v-if="pickerTarget"
     :mode="pickerConfig.mode"
     :accept="pickerConfig.accept"
-    :initial-path="form[pickerTarget] || '/'"
+    :initial-path="pickerInitialPath()"
     @select="onPickerSelect"
     @close="pickerTarget = null"
   />
