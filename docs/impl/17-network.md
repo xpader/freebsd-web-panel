@@ -135,21 +135,31 @@ IfaceRcConfConfig {
     lagg_proto: Option<String>, lagg_ports: Vec<String>,
     mtu: Option<u32>, description: Option<String>,
     options: String,                    // 扩展参数（media/mediaopt/vlan 等不在表单中的 ifconfig 参数）
+    name: Option<String>,               // 改名目标（None/空 → 沿用 driver 名）。来自 ifconfig_<driver>_name 或剥离的 name 指令
 }
 ```
 
 ### rc.conf 解析与写入
+**接口改名机制**：使用 FreeBSD rc.d 框架原生的 `ifconfig_<driver>_name` 语义，而非内嵌 `name` 指令。原因：rc.d 的 `ifconfig_up`（network.subr:167-172）执行 `eval ifconfig $1 $args` 时，若 `args` 含 `name vvswitch`，接口立即改名，但函数继续用原名 `$1` 做后续操作（`ipv4_up`/`ipv6_up`/`childif_create`/收尾 `ifconfig $1 up`），全部对已不存在的原名落空 → `interface bridge2 does not exist`。
 
-**接口改名处理**：FreeBSD 支持通过 `ifconfig_bridge3="name vvswitch"` 改名。改名后内核 driver name（`bridge3`）不变，可通过 `ifutil::get_drivername()`（sysctl `IFDATA_DRIVERNAME`）获取。rc.conf 中的配置可能存在两种写法：
-- **单键**：全部配置在 driver name 键下：`ifconfig_bridge3="inet ... name vvswitch up"`
-- **分键**：改名在 driver 键、配置在 live name 键：`ifconfig_bridge3="name vvswitch"` + `ifconfig_vvswitch="inet ... up"`
+`ifconfig_<driver>_name` 由 rc.d 的 `ifnet_rename()`（network.subr:1591）在 `ifn_start` **之前**、独立的一步执行改名，改完后 `list_net_interfaces` 枚举到的已是新名，后续配置天然地按新名走。
+
+**关键**：改名接口的配置必须写在 **live（改名后）名字键**下，不能写在 driver 键下。因为 `_ifconfig_getargs` → `get_if_var` 只按当前 live 名查 `ifconfig_<live>`，不解析 driver 名；启动改名后 `ifconfig_bridge2` 是死键、永远不会被应用。
+
+| 接口状态 | rc.conf 布局 |
+|---|---|
+| 未改名（live == driver == `bridge2`） | `ifconfig_bridge2="..."` + `_aliases` + `_ipv6`；无 `_name` |
+| 已改名（driver=`bridge2`, live=`vvswitch`） | `ifconfig_bridge2_name="vvswitch"` + `ifconfig_vvswitch="..."` + `_aliases` + `_ipv6` |
+
+改名后内核 driver name（`bridge2`）不变，可通过 `ifutil::get_drivername()`（sysctl `IFDATA_DRIVERNAME`）获取。
 
 **解析**（`parse_merged_rcconf(live_name)`）：
 1. 用 `resolve_driver_name(live_name)` 获取 driver name
 2. 调用 `sysrc::read_rcconf_files()` 直接读取 rc.conf 文件（无子进程，<1ms）
-3. 从中解析 driver name 的三个键（primary/aliases/ipv6）
-4. 若 driver ≠ live name，额外解析 live name 的三个键，合并字段（live name 的配置优先）
-4. 确保 `name <live>` 指令始终存在于 options 中
+3. **主配置来自 live name 键**（`parse_iface_rcconf(live_name)`）
+4. 兼容旧风格：若 driver ≠ live，额外解析 driver 键（旧内嵌 `name` 布局），仅填充 live 键为空的字段；`is_up` 取两者 OR
+5. **改名目标 `cfg.name`** 优先级：显式 `ifconfig_<driver>_name` 键 > 从主值剥离的 `name <X>` 指令 > 旧 driver 键剥离的 `name` > 推断（live 名不是该 driver 的默认名 → 改名）；若 name == driver 则归一化为 None。**epair 特例**：epair 的 driver 名是基名（如 `epair0`），live 名为 `epair0a`/`epair0b`（默认名，二者天然不同）；`is_default_iface_name()` 识别 `epairNa|b` 形式，避免把默认命名的 epair 误判为改名
+6. `parse_ifconfig_tokens` 遇到 `name` 时消费下一个 token 作为改名目标，**不**压入 options_tokens
 
 **IPv4 模式检测**：`ipv4` 为 `null` → `ipv4_mode = "none"`（不配置 IPv4）；主值包含 `DHCP` 或 `SYNCDHCP` → `ipv4_mode = "dhcp"`，前端隐藏 IP/掩码输入；否则为 `static`。
 
@@ -157,13 +167,13 @@ IfaceRcConfConfig {
 
 **写入**（`build_primary_value` / `build_ipv6_value`）：
 - IPv4 none → 主值不含 inet 字段
-- IPv4 DHCP → `ifconfig_<driver>="DHCP"`（或 `SYNCDHCP`）
-- IPv6 none → `ifconfig_<driver>_ipv6` 键被删除
-- IPv6 SLAAC → `ifconfig_<driver>_ipv6="inet6 accept_rtadv"`
+- IPv4 DHCP → `ifconfig_<name>="DHCP"`（或 `SYNCDHCP`）
+- IPv6 none → `ifconfig_<name>_ipv6` 键被删除
+- IPv6 SLAAC → `ifconfig_<name>_ipv6="inet6 accept_rtadv"`
 - IPv6 static → `build_ipv6_value("static", entries)` 拼接 `inet6 <addr> prefixlen <pl>` 条目
 - description 用单引号包裹（`description 'Hello World'`）以区分空格分隔的其他参数。
-- `options` 字段中的扩展参数原样追加到主值末尾（如 `media 1000baseTX mediaopt full-duplex`，改名接口含 `name vvswitch`）
-- **合并写入**：所有配置统一写入 driver name 键下，并删除 live name 的三个键，消除分键配置
+- `options` 字段中的扩展参数原样追加到主值末尾（如 `media 1000baseTX mediaopt full-duplex`）。`name` 指令已从 options 中剥离，由独立的 `ifconfig_<driver>_name` 键承载
+- **写入目标键**：配置写入 **live name 键**（`ifconfig_<target>`/`_aliases`/`_ipv6`）。改名时额外写 `ifconfig_<driver>_name=<target>`；撤销改名（target == driver）则删除该键。同时清理旧键（原 live 名键 + 旧 driver 名配置键），仅保留 target 名键
 
 **配置应用**（`apply_ifconfig`）：
 1. 先用 `read_interfaces()` 读取当前运行时状态
@@ -173,7 +183,7 @@ IfaceRcConfConfig {
 5. 应用 IPv4 别名（跳过已有地址）
 6. 应用 IPv6 条目（跳过已有地址）——仅 `static` 模式应用；`slaac` 和 `none` 模式跳过
 
-**PUT 流程**：先 ifconfig 应用（live name）→ 成功后写 rc.conf（driver name 键）→ 删除 live name 键（合并）。ifconfig 失败则不写 rc.conf，返回错误。
+**PUT 流程**：① 若 target ≠ live name，先 `ifconfig <live> name <target>` 独立改名（先校验目标名未被占用）→ ② `apply_ifconfig(<target>)` 应用配置 → ③ 写 rc.conf（target 名键 + `ifconfig_<driver>_name`）→ ④ 清理旧键 → ⑤ 用 target 名回读合并配置。ifconfig 改名或应用失败则不写 rc.conf，返回错误。改名后原 live 名已不存在，必须用 target 名回读（否则 `resolve_driver_name` 失败）。
 
 ### 默认网关设置
 
@@ -231,7 +241,7 @@ IfaceRcConfConfig {
 
 ### 配置弹窗
 
-- 接口属性：描述、MTU、扩展选项（Options，自由填写 media/mediaopt/vlan 等额外 ifconfig 参数）
+- 接口属性（`.config-grid` 两列）：第一行「名称 | 描述」（名称留空沿用 driver 名，由 `ifconfig_<driver>_name` 持久化；标签旁 `FieldHelp` 图标显示改名提示）；第二行「MTU | 扩展选项」（Options 自由填写 media/mediaopt/vlan 等额外 ifconfig 参数，`name` 指令会被自动剥离路由到名称字段）
 - UP 勾选框
 - IPv4 模式切换：无 / DHCP / Static 三选一药丸选择器（`.radio-pill-group`）；无 → 不配置 IPv4，DHCP → 使用 DHCP 获取地址，Static → 显示 IP + 子网掩码输入
 - IPv4 别名列表（可增删，`.form-table` 表格布局，无数据时不显示表头）
@@ -300,3 +310,5 @@ route_fwp_2="-6 -host 2001:db8::1 fe80::1%em0"
 - IPv6 SLAAC/none 配置在 ifconfig apply 时跳过（仅 static 模式应用 IPv6 地址）
 - 删除别名/成员需手动销毁后重建（ifconfig 无原子"替换"语义）
 - 部分边缘路由的 gateway 显示为空（IPv6 零长度网关地址）
+- 接口改名通过 `ifconfig_<driver>_name` 持久化（rc.d `ifnet_rename` 在配置前改名）；改名目标名校验未占用后执行，撤销改名只需清空名称字段
+- apply 端点（`POST .../apply`）仅重新应用配置，不触发改名；若 rc.conf 的 `_name` 与实际 live 名不一致（外部改名漂移），apply 不负责校正

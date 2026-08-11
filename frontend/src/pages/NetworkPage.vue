@@ -594,11 +594,13 @@ onMounted(load);
         <div class="config-section">
           <h4>{{ t('common.config') }}</h4>
           <div class="config-grid">
+            <div class="kv"><span class="kv-key">{{ t('common.name') }} <FieldHelp :text="t('net.ifaceNameHint', { driver: (configDriverName || configIfaceName) })" /></span>
+              <input type="text" class="input mono" v-model="configData.name" :placeholder="(configDriverName || configIfaceName)" maxlength="15"></div>
             <div class="kv"><span class="kv-key">{{ t('common.description') }}</span>
               <input type="text" class="input" v-model="configData.description" placeholder="e.g. WAN"></div>
             <div class="kv"><span class="kv-key">MTU</span>
               <input type="number" class="input" v-model.number="configData.mtu" placeholder="e.g. 1500"></div>
-            <div class="kv" style="grid-column:1/-1;"><span class="kv-key">{{ t('net.extraOptions') }}</span>
+            <div class="kv"><span class="kv-key">{{ t('net.extraOptions') }}</span>
               <input type="text" class="input mono" v-model="configData.options" :placeholder="t('net.extraOptionsPh')"></div>
           </div>
         </div>

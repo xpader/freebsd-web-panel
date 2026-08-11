@@ -264,6 +264,9 @@ pub struct IfaceRcConfConfig {
     pub mtu: Option<u32>,
     pub description: Option<String>,
     pub options: String,
+    /// Desired interface name (rename target). None/empty → keep driver name.
+    /// Populated from `ifconfig_<driver>_name` or a stripped `name <X>` directive.
+    pub name: Option<String>,
 }
 
 // ─── Interface reading via getifaddrs(3) ───────────────────────────────────
@@ -1035,51 +1038,66 @@ pub async fn interface_update(
         validate_str(p)?;
     }
 
-    // Resolve driver name for rc.conf keys (may differ from live name if renamed).
-    let driver = resolve_driver_name(&name);
-
-    let primary_key = format!("ifconfig_{driver}");
-    let aliases_key = format!("ifconfig_{driver}_aliases");
-    let ipv6_key = format!("ifconfig_{driver}_ipv6");
-
-    // Apply to live system + persist to rc.conf (all blocking subprocess work).
-    let save_name = name.clone();
-    let save_driver = driver.clone();
+    // Normalize the rename target (cfg.name) and strip any stray `name <X>`
+    // from options, which would re-introduce the rc.d rename-during-config bug.
     let mut save_cfg = cfg.clone();
-
-    // Ensure `name <live>` is in options when the interface is renamed,
-    // but only if options doesn't already contain a `name` directive.
-    if save_driver != save_name {
-        let tokens: Vec<&str> = save_cfg.options.split_whitespace().collect();
-        let has_name = tokens.iter().any(|t| *t == "name");
-        if !has_name {
-            save_cfg.options = if save_cfg.options.is_empty() {
-                format!("name {save_name}")
-            } else {
-                format!("name {save_name} {}", save_cfg.options)
-            };
-        }
+    let (clean_opts, opt_name) = strip_name_directive(&save_cfg.options);
+    save_cfg.options = clean_opts;
+    // Name field takes priority; fall back to a `name <X>` directive stripped from options.
+    if save_cfg.name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none() {
+        save_cfg.name = opt_name;
+    }
+    if let Some(dn) = save_cfg.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        validate_iface_name(dn)?;
     }
 
-    let result = tokio::task::spawn_blocking(move || -> ApiResult<IfaceRcConfConfig> {
-        // 1. Apply to live system first — if this fails, don't touch rc.conf.
-        apply_ifconfig(&save_name, &save_cfg).map_err(ApiError::Command)?;
+    // Resolve the driver name (current kernel driver name) and target live name.
+    let driver = resolve_driver_name(&name);
+    let target = save_cfg
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| name.clone());
 
-        // 2. Persist to rc.conf using the driver name as key.
+    let save_name = name.clone();
+    let save_driver = driver.clone();
+    let save_target = target.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<IfaceRcConfConfig> {
+        // 1. Rename as an isolated first step so all later ifconfig calls operate
+        //    on the final name (avoids the rename-during-config timing bug).
+        if save_name != save_target {
+            let ifaces = read_interfaces().map_err(ApiError::Io)?;
+            if ifaces.iter().any(|i| i.name == save_target) {
+                return Err(ApiError::Conflict(format!(
+                    "interface name '{save_target}' already exists"
+                )));
+            }
+            cmd::run_sync(IFCONFIG, &[&save_name, "name", &save_target])?;
+        }
+
+        // 2. Apply configuration under the (possibly new) live name.
+        apply_ifconfig(&save_target, &save_cfg).map_err(ApiError::Command)?;
+
+        // 3. Persist config under the target live-name keys.
+        let primary_key = format!("ifconfig_{save_target}");
+        let aliases_key = format!("ifconfig_{save_target}_aliases");
+        let ipv6_key = format!("ifconfig_{save_target}_ipv6");
+
         let primary_val = build_primary_value(&save_cfg);
         if primary_val.is_empty() {
             crate::sysrc::delete(&primary_key);
         } else {
             crate::sysrc::set(&primary_key, &primary_val).map_err(ApiError::Command)?;
         }
-
         let aliases_val = build_aliases_value(&save_cfg.ipv4_aliases);
         if aliases_val.is_empty() {
             crate::sysrc::delete(&aliases_key);
         } else {
             crate::sysrc::set(&aliases_key, &aliases_val).map_err(ApiError::Command)?;
         }
-
         let ipv6_val = build_ipv6_value(&save_cfg.ipv6_mode, &save_cfg.ipv6);
         if ipv6_val.is_empty() {
             crate::sysrc::delete(&ipv6_key);
@@ -1087,19 +1105,33 @@ pub async fn interface_update(
             crate::sysrc::set(&ipv6_key, &ipv6_val).map_err(ApiError::Command)?;
         }
 
-        // 3. If renamed, delete the live name's keys to consolidate into one key.
-        if save_driver != save_name {
+        // 4. Rename directive: write ifconfig_<driver>_name only when the target
+        //    is NOT a default name for the driver (covers renamed interfaces AND
+        //    default-named epair like epair0a, whose live != driver base "epair0").
+        let name_key = format!("ifconfig_{save_driver}_name");
+        if !is_default_iface_name(&save_driver, &save_target) {
+            crate::sysrc::set(&name_key, &save_target).map_err(ApiError::Command)?;
+        } else {
+            crate::sysrc::delete(&name_key);
+        }
+
+        // 5. Clean up stale keys (old live-name config + legacy driver-name config).
+        //    Keep only the target-name keys just written and the _name directive.
+        for n in [&save_name, &save_driver] {
+            if n.is_empty() || n == &save_target {
+                continue;
+            }
             for key in [
-                &format!("ifconfig_{save_name}"),
-                &format!("ifconfig_{save_name}_aliases"),
-                &format!("ifconfig_{save_name}_ipv6"),
+                format!("ifconfig_{n}"),
+                format!("ifconfig_{n}_aliases"),
+                format!("ifconfig_{n}_ipv6"),
             ] {
-                crate::sysrc::delete(key);
+                crate::sysrc::delete(&key);
             }
         }
 
-        // Re-read merged config.
-        Ok(parse_merged_rcconf(&save_name))
+        // 6. Re-read merged config under the final live name.
+        Ok(parse_merged_rcconf(&save_target))
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
@@ -1401,6 +1433,8 @@ pub async fn interface_destroy(
                 crate::sysrc::delete(key);
             }
         }
+        // Also remove the rename directive (ifconfig_<driver>_name).
+        crate::sysrc::delete(&format!("ifconfig_{driver}_name"));
         remove_cloned_interface(&driver);
         Ok(())
     })
@@ -1955,73 +1989,115 @@ fn resolve_driver_name(live_name: &str) -> String {
     crate::ifutil::get_drivername(live_name).unwrap_or_else(|| live_name.to_string())
 }
 
-/// Parse rc.conf config for an interface, merging keys under both the driver
-/// name and the live name when they differ (e.g. split config:
-/// `ifconfig_bridge3="name vvswitch"` + `ifconfig_vvswitch="inet ... up"`).
+/// Whether `live` is the natural default name for an interface whose driver
+/// (creation) name is `driver`. For most interfaces the default name equals
+/// the driver name (e.g. `bridge0`). For epair the driver name is the *base*
+/// (`epair0`) and the actual interfaces are `epair0a`/`epair0b`, so both are
+/// considered default. Used to avoid mis-detecting a default-named epair as
+/// renamed just because its live name differs from the driver base name.
+fn is_default_iface_name(driver: &str, live: &str) -> bool {
+    if driver == live {
+        return true;
+    }
+    // epair: driver name is the base (epair0); live is epair0a/epair0b.
+    if driver.starts_with("epair") {
+        if let Some(suffix) = live.strip_prefix(driver) {
+            return suffix == "a" || suffix == "b";
+        }
+    }
+    false
+}
+
+/// Parse rc.conf config for an interface, resolving the correct key layout.
 ///
-/// Fields from the live name key take precedence. The `name <live>`
-/// directive is preserved in `options` so the merged config can be written
-/// back as a single key.
+/// Renamed interfaces use two key families:
+/// - `ifconfig_<driver>_name="<live>"` — the rename itself, applied by rc.d's
+///   `ifnet_rename()` before configuration.
+/// - `ifconfig_<live>` (and `_aliases` / `_ipv6`) — the actual configuration,
+///   applied to the renamed interface.
+///
+/// The live-name key is authoritative. For backward compatibility with the
+/// legacy "driver key with embedded `name <live>`" layout, the driver key is
+/// also parsed and merged, filling only fields the live-name key leaves empty.
+/// The `name` directive is always stripped from `options` and routed to
+/// `cfg.name` (priority: explicit `ifconfig_<driver>_name`, then a stripped
+/// `name <X>` token, then inferred from driver != live).
 fn parse_merged_rcconf(live_name: &str) -> IfaceRcConfConfig {
     let driver = resolve_driver_name(live_name);
     let kv = crate::sysrc::read_rcconf_files();
-    let mut cfg = parse_iface_rcconf(&driver, &kv);
+
+    // Primary config comes from the live-name key.
+    let mut cfg = parse_iface_rcconf(live_name, &kv);
+    let mut legacy_name: Option<String> = None;
 
     if driver != live_name {
-        let live_cfg = parse_iface_rcconf(live_name, &kv);
+        // Legacy compat: parse the driver key (old layout stored everything
+        // under `ifconfig_<driver>` with an embedded `name <live>`).
+        let drv_cfg = parse_iface_rcconf(&driver, &kv);
+        legacy_name = drv_cfg.name.clone();
 
-        // Live name's config fields take precedence.
-        if live_cfg.ipv4.is_some() {
-            cfg.ipv4 = live_cfg.ipv4;
+        // Driver fills only fields the live-name key leaves empty.
+        if cfg.ipv4.is_none() && drv_cfg.ipv4.is_some() {
+            cfg.ipv4 = drv_cfg.ipv4;
         }
-        if live_cfg.ipv4_netmask.is_some() {
-            cfg.ipv4_netmask = live_cfg.ipv4_netmask;
+        if cfg.ipv4_netmask.is_none() && drv_cfg.ipv4_netmask.is_some() {
+            cfg.ipv4_netmask = drv_cfg.ipv4_netmask;
         }
-        if !live_cfg.ipv4_aliases.is_empty() {
-            cfg.ipv4_aliases.extend(live_cfg.ipv4_aliases);
+        if cfg.ipv4_aliases.is_empty() {
+            cfg.ipv4_aliases = drv_cfg.ipv4_aliases;
         }
-        if !live_cfg.ipv6_mode.is_empty() {
-            cfg.ipv6_mode = live_cfg.ipv6_mode.clone();
+        if cfg.ipv6_mode.is_empty() {
+            cfg.ipv6_mode = drv_cfg.ipv6_mode.clone();
         }
-        if !live_cfg.ipv6.is_empty() {
-            cfg.ipv6 = live_cfg.ipv6;
+        if cfg.ipv6.is_empty() {
+            cfg.ipv6 = drv_cfg.ipv6;
         }
-        if !live_cfg.bridge_members.is_empty() {
-            cfg.bridge_members = live_cfg.bridge_members;
+        if cfg.bridge_members.is_empty() {
+            cfg.bridge_members = drv_cfg.bridge_members;
         }
-        if live_cfg.lagg_proto.is_some() {
-            cfg.lagg_proto = live_cfg.lagg_proto;
+        if cfg.lagg_proto.is_none() {
+            cfg.lagg_proto = drv_cfg.lagg_proto;
         }
-        if !live_cfg.lagg_ports.is_empty() {
-            cfg.lagg_ports = live_cfg.lagg_ports;
+        if cfg.lagg_ports.is_empty() {
+            cfg.lagg_ports = drv_cfg.lagg_ports;
         }
-        if live_cfg.mtu.is_some() {
-            cfg.mtu = live_cfg.mtu;
+        if cfg.mtu.is_none() {
+            cfg.mtu = drv_cfg.mtu;
         }
-        if live_cfg.description.is_some() {
-            cfg.description = live_cfg.description;
+        if cfg.description.is_none() {
+            cfg.description = drv_cfg.description;
         }
-        if live_cfg.is_up {
-            cfg.is_up = true;
+        if cfg.options.is_empty() {
+            cfg.options = drv_cfg.options;
         }
-        // Merge options: combine driver + live, ensure `name <live>` is present.
-        if !live_cfg.options.is_empty() {
-            if cfg.options.is_empty() {
-                cfg.options = live_cfg.options;
+        cfg.is_up |= drv_cfg.is_up;
+    }
+
+    // Resolve the rename target. Priority:
+    //   1. explicit `ifconfig_<driver>_name` key
+    //   2. a `name <X>` directive stripped from the live-name value (cfg.name)
+    //   3. a `name <X>` directive stripped from the legacy driver value
+    //   4. inferred: live name is not a default name for the driver → renamed.
+    //      (epair default names epair0a/b differ from the driver base "epair0",
+    //      so they must NOT be treated as renames.)
+    let name_key = format!("ifconfig_{driver}_name");
+    let explicit_name = kv
+        .get(&name_key)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    cfg.name = explicit_name
+        .or(cfg.name.take())
+        .or(legacy_name)
+        .or_else(|| {
+            if !is_default_iface_name(&driver, live_name) {
+                Some(live_name.to_string())
             } else {
-                cfg.options = format!("{} {}", cfg.options, live_cfg.options);
+                None
             }
-        }
-        // Ensure `name <live>` is in options, unless options already has a `name` directive.
-        let tokens: Vec<&str> = cfg.options.split_whitespace().collect();
-        let has_name = tokens.iter().any(|t| *t == "name");
-        if !has_name {
-            if cfg.options.is_empty() {
-                cfg.options = format!("name {live_name}");
-            } else {
-                cfg.options = format!("name {live_name} {}", cfg.options);
-            }
-        }
+        });
+    // A name equal to the driver name means "no rename".
+    if cfg.name.as_deref() == Some(driver.as_str()) {
+        cfg.name = None;
     }
 
     cfg.interface = live_name.to_string();
@@ -2050,6 +2126,7 @@ fn parse_iface_rcconf(name: &str, kv: &std::collections::HashMap<String, String>
         cfg.mtu = parsed.mtu;
         cfg.description = parsed.description;
         cfg.options = parsed.options_tokens.join(" ");
+        cfg.name = parsed.name;
         // Additional inet entries beyond the first become aliases.
         if parsed.extra_inets.len() > 1 {
             for inet in parsed.extra_inets.iter().skip(1) {
@@ -2105,6 +2182,7 @@ struct ParsedIfConfig {
     mtu: Option<u32>,
     description: Option<String>,
     options_tokens: Vec<String>,
+    name: Option<String>,
 }
 
 struct InetEntry {
@@ -2132,6 +2210,7 @@ impl Default for ParsedIfConfig {
             mtu: None,
             description: None,
             options_tokens: Vec::new(),
+            name: None,
         }
     }
 }
@@ -2313,6 +2392,14 @@ fn parse_ifconfig_tokens(value: &str) -> ParsedIfConfig {
                     i += 1;
                 }
             }
+            "name" => {
+                // Interface rename directive — consume the target, do NOT push to options.
+                i += 1;
+                if i < tokens.len() {
+                    result.name = Some(tokens[i].to_string());
+                    i += 1;
+                }
+            }
             "DHCP" | "dhcp" => {
                 result.ipv4 = Some("DHCP".into());
                 i += 1;
@@ -2337,6 +2424,30 @@ fn parse_ifconfig_tokens(value: &str) -> ParsedIfConfig {
     }
 
     result
+}
+
+/// Remove a `name <X>` directive from an options string, returning the cleaned
+/// options and the extracted name (if any). Prevents a stray rename directive
+/// from re-introducing the rc.d rename-during-config timing bug when the value
+/// is applied to a live interface.
+fn strip_name_directive(options: &str) -> (String, Option<String>) {
+    let mut cleaned: Vec<&str> = Vec::new();
+    let mut name: Option<String> = None;
+    let tokens: Vec<&str> = options.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == "name" {
+            i += 1;
+            if i < tokens.len() {
+                name = Some(tokens[i].to_string());
+                i += 1;
+            }
+        } else {
+            cleaned.push(tokens[i]);
+            i += 1;
+        }
+    }
+    (cleaned.join(" "), name)
 }
 
 /// Convert CIDR prefix length to dotted-quad netmask.
@@ -2828,5 +2939,77 @@ mod tests {
         if let Some(phys) = ifaces.iter().find(|i| i.is_physical) {
             assert!(phys.members.is_empty(), "physical interface should not have bridge members");
         }
+    }
+
+    #[test]
+    fn parse_strips_name_directive() {
+        // The `name <X>` directive must be routed to `parsed.name`, not options.
+        let parsed = parse_ifconfig_tokens("inet 10.0.0.1/24 name vvswitch up");
+        assert_eq!(parsed.name.as_deref(), Some("vvswitch"));
+        assert!(!parsed.options_tokens.iter().any(|t| t == "name"),
+            "name must not leak into options_tokens");
+        assert!(parsed.is_up);
+        assert_eq!(parsed.ipv4.as_deref(), Some("10.0.0.1"));
+    }
+
+    #[test]
+    fn strip_name_directive_extracts_and_cleans() {
+        let (clean, name) = strip_name_directive("media 1000baseTX name wan0 mediaopt full-duplex");
+        assert_eq!(name.as_deref(), Some("wan0"));
+        assert_eq!(clean, "media 1000baseTX mediaopt full-duplex");
+    }
+
+    #[test]
+    fn strip_name_directive_no_name() {
+        let (clean, name) = strip_name_directive("media 1000baseTX mediaopt full-duplex");
+        assert!(name.is_none());
+        assert_eq!(clean, "media 1000baseTX mediaopt full-duplex");
+    }
+
+    #[test]
+    fn build_primary_value_omits_name() {
+        // With name routed to cfg.name and options clean, the built value must
+        // not contain a `name` token (avoids the rename-during-config bug).
+        let cfg = IfaceRcConfConfig {
+            ipv4: Some("10.0.0.1".into()),
+            ipv4_netmask: Some("255.255.255.0".into()),
+            is_up: true,
+            name: Some("wan0".into()),
+            ..Default::default()
+        };
+        let val = build_primary_value(&cfg);
+        assert!(!val.contains("name"), "built value must not contain 'name': {val}");
+        assert!(val.contains("inet 10.0.0.1"));
+        assert!(val.contains("up"));
+    }
+
+    #[test]
+    fn is_default_iface_name_bridge() {
+        assert!(is_default_iface_name("bridge0", "bridge0"));
+        assert!(!is_default_iface_name("bridge0", "vm-public"));
+    }
+
+    #[test]
+    fn is_default_iface_name_epair() {
+        // epair driver name is the base; both halves are default names.
+        assert!(is_default_iface_name("epair0", "epair0a"));
+        assert!(is_default_iface_name("epair0", "epair0b"));
+        assert!(is_default_iface_name("epair100", "epair100a"));
+        assert!(is_default_iface_name("epair100", "epair100b"));
+        // A different base or a custom name is a rename.
+        assert!(!is_default_iface_name("epair0", "epair5a"));
+        assert!(!is_default_iface_name("epair0", "myport"));
+    }
+
+    #[test]
+    fn parse_epair_default_name_is_none() {
+        // Live check: a default-named epair (epair100a) must NOT report a
+        // rename target, even though its driver base name ("epair100") differs.
+        let ifaces = read_interfaces().expect("getifaddrs should succeed");
+        if !ifaces.iter().any(|i| i.name == "epair100a") {
+            return; // epair100a not present on this host — skip.
+        }
+        let cfg = parse_merged_rcconf("epair100a");
+        assert_eq!(cfg.name, None, "default-named epair must not be treated as renamed: {cfg:?}");
     }
 }
