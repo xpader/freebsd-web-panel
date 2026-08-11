@@ -91,10 +91,11 @@ async function doInitialize() {
 
 function makeFields(rule = null) {
   const tableOptions = tables.value.map(tb => ({ value: tb.name, label: tb.name }));
+  const locked = !!rule?.managed_by;
   return [
     { key: 'description', label: t('common.description'), value: rule?.description || '', placeholder: 'Allow HTTP' },
     {
-      key: 'action', label: t('firewall.action'), type: 'radio', value: rule?.action || 'allow', half: true,
+      key: 'action', label: t('firewall.action'), type: 'radio', value: rule?.action || 'allow', half: true, disabled: locked,
       options: [
         { value: 'allow', label: t('firewall.allow') },
         { value: 'deny', label: t('firewall.deny') },
@@ -102,14 +103,14 @@ function makeFields(rule = null) {
       ],
     },
     {
-      key: 'direction', label: t('firewall.direction'), type: 'radio', value: rule?.direction || 'in', half: true,
+      key: 'direction', label: t('firewall.direction'), type: 'radio', value: rule?.direction || 'in', half: true, disabled: locked,
       options: [
         { value: 'in', label: t('firewall.inbound') },
         { value: 'out', label: t('firewall.outbound') },
       ],
     },
     {
-      key: 'protocol', label: t('firewall.protocol'), type: 'select', value: rule?.protocol || 'tcp', half: true, row: 'proto-log',
+      key: 'protocol', label: t('firewall.protocol'), type: 'select', value: rule?.protocol || 'tcp', half: true, row: 'proto-log', disabled: locked,
       options: [
         { value: 'tcp', label: 'TCP' },
         { value: 'udp', label: 'UDP' },
@@ -218,7 +219,7 @@ function makeFields(rule = null) {
       requiredIf: { dstKind: ['table'] },
     },
     {
-      key: 'dstPort', label: t('firewall.dstPort'), value: rule?.destination_port || '', half: true, row: 'dst-detail',
+      key: 'dstPort', label: t('firewall.dstPort'), value: rule?.destination_port || '', half: true, row: 'dst-detail', disabled: locked,
       placeholder: '80 or 443,8080 or 80,443,8080-8090',
       showIf: { protocol: ['tcp', 'udp'] },
     },
@@ -290,7 +291,8 @@ async function doEditRule(rule) {
 
 async function doCopyRule(rule) {
   if (tables.value.length === 0) await loadTables();
-  const result = await formModal(t('firewall.addRuleTitle'), makeFields({ ...rule, description: null }), {
+  const { managed_by, ...ruleCopy } = rule;
+  const result = await formModal(t('firewall.addRuleTitle'), makeFields({ ...ruleCopy, description: null }), {
     submitLabel: t('common.create'),
     submitHandler: async (r) => {
       await api.post('/api/firewall/rules', extractBody(r));
@@ -447,7 +449,12 @@ onMounted(loadAll);
             <td class="mono">
               {{ addrLabel(rule.destination) }}<span v-if="rule.destination_port" class="text-dim">:{{ rule.destination_port }}</span>
             </td>
-            <td><div class="cell-wrap">{{ rule.description || '\u2014' }}</div></td>
+            <td><div class="cell-wrap">
+              <span v-if="rule.managed_by" :class="['badge', 'badge-warn']" :title="t('firewall.managedHint')" style="margin-right:6px;">
+                {{ t('firewall.managedBy', { service: rule.managed_by }) }}
+              </span>
+              {{ rule.description || '\u2014' }}
+            </div></td>
             <td>
               <div class="btn-group">
                 <button class="btn-secondary btn-sm" @click="doMoveRule(idx, -1)" :disabled="idx === 0" title="Up">

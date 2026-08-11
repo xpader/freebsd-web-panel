@@ -587,6 +587,7 @@ pub async fn create_rule(
             interface: body.interface.clone(), log: body.log,
             icmp_type: body.icmp_type.clone(), description: body.description.clone(),
             created_at: now, updated_at: now,
+            managed_by: None,
         };
         rules.push(rule.clone());
         fw::write_staging(&rules, &tables, &nat_rules)?;
@@ -647,13 +648,11 @@ pub async fn update_rule(
             if had_staging {
                 fw::write_staging(&rules, &tables, &nat_rules)?;
             }
-            audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
-                Some(format!("updated disabled firewall rule {id} ({driver:?})")));
         } else {
             fw::write_staging(&rules, &tables, &nat_rules)?;
-            audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
-                Some(format!("updated firewall rule {id} ({driver:?}) [staging]")));
         }
+        audit::record(&state, Some(&auth.username), "PUT", &format!("/api/firewall/rules/{id}"), 200,
+            Some(format!("updated firewall rule {id} ({driver:?})")));
         Ok(Json(updated))
     } else {
         {

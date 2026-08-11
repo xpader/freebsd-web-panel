@@ -15,8 +15,8 @@ export function useConfirm() {
 }
 
 export function useAlert() {
-  return (title, message) =>
-    ui.showDialog({ type: 'alert', title, message });
+  return (title, message, opts = {}) =>
+    ui.showDialog({ type: 'alert', title, message, ...opts });
 }
 
 export function useCodePreview() {

@@ -209,11 +209,34 @@ CREATE TABLE firewall_table_entries (
 | set_mode | DB UPDATE mode + regen config | apply（含防锁死——备份+倒计时+回滚）|
 | 表 CRUD | 同上 | 同上 |
 
-**`effective_state()`**：读取规则/表时，优先返回 staging（若存在），否则返回 DB。所有 list_rules、list_tables、config 预览、apply 都使用此函数。
+**`effective_state()`**：读取规则/表时，优先返回 staging（若存在），否则返回 DB。所有 list_rules、list_tables、config 预览、apply 都使用此函数。staging 是完整快照（含受管理规则），无需额外合并。
 
 **`regen_config()`**：从 DB 读取规则 + 表，调用 `write_config_only()` 生成配置文件但不加载到内核。防火墙未启用时使用，确保配置文件始终与 DB 一致。PF 路径仅 `atomic_write` 不做 `pfctl -n` 校验（PF 模块可能未加载，`/dev/pf` 不存在时校验会卡住）；ipfw 路径同理只写文件。校验延迟到 apply/enable 时执行。
 
 > **DB 锁注意事项**：`regen_config()` 内部会 `state.db.lock().await`，因此调用方**必须先释放自己持有的 DB 锁**后再调用。由于 `tokio::sync::Mutex` 不可重入，如果调用方在持有锁时直接调用 `regen_config()`，会导致死锁。正确模式：`{ let conn = state.db.lock().await; /* DB ops */ }` 块作用域释放锁后再 `regen_config().await`。
+
+### 系统管理的规则（managed rules）
+
+**问题**：服务（如 SMB）在防火墙启用时启动后，其端口（SMB 139/445）会被默认拒绝策略拦截，导致无法访问。用户需要手动在防火墙规则中添加放行规则。
+
+**方案**：引入 `managed_by` 字段（DB v4 迁移新增 `firewall_rules.managed_by TEXT` 列）。当 `managed_by` 非 NULL 时，表示该规则由对应服务（如 `"smb"`）自动创建。**受管理规则与普通规则行为完全一致**——用户可编辑、切换、重排序、删除。`managed_by` 只是一个标签：UI 显示 badge，服务用 `has_managed_rules` 判断是否已插入过（避免重启时覆盖用户的修改）。服务**仅在首次启动时**插入规则，后续启动/停止/重启都不修改。
+
+**数据结构**：`FirewallRule.managed_by: Option<String>`（serde `#[serde(default)]` 向后兼容）。规则排序：`ORDER BY position ASC, id ASC`——与普通规则统一排序。
+
+**服务接口**（`firewall_gen.rs`）：
+- `ManagedRuleSpec`：服务声明端口放行需求的规格结构体（action/direction/protocol/source/destination/ports/description）
+- `sync_managed_rules(conn, managed_by, specs, now)`：删除该服务现有的所有受管理规则，再用 `next_position` 分配位置后插入新规格。幂等——多次调用产生相同的规则集
+- `has_managed_rules(conn, managed_by)`：检查该服务是否已有受管理规则
+
+**CRUD 行为**：受管理规则与普通规则走**完全相同**的 staging/confirm 流程，无任何特殊限制：
+- staging 是**完整规则快照**（含受管理规则），`write_staging` 直接写入所有规则，不过滤
+- `replace_all_rules`（staging confirm）：`DELETE FROM firewall_rules`（全删）后重新插入所有规则（含 `managed_by`）
+- `next_position`：统计所有规则的 `MAX(position)`，不再区分受管理/用户规则
+
+**前端展示**（`FirewallRulesPage.vue`）：
+- 受管理规则在描述列显示 `badge-warn` 样式的「系统管理: {服务名}」标记
+- 操作列：受管理规则显示**全部按钮**（上下移、编辑、复制、删除），与普通规则一致
+- 复制（`doCopyRule`）：副本通过 `extractBody` 构造请求体，不含 `managed_by` 字段，新规则为普通用户规则
 
 ### Apply 流程
 

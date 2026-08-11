@@ -19,6 +19,7 @@ use crate::auth::AuthUser;
 use crate::bgtask;
 use crate::cmd;
 use crate::error::{ApiError, ApiResult};
+use crate::firewall_gen as fw;
 use crate::state::AppState;
 
 const SAMBA_SMBD: &str = "/usr/local/sbin/smbd";
@@ -942,6 +943,117 @@ pub async fn change_password(
 #[derive(Debug, Deserialize)]
 pub struct ServiceActionReq {}
 
+/// Identifier under which SMB's managed firewall rules are stored.
+const FW_MANAGED_BY: &str = "smb";
+
+/// Managed firewall rule specs for SMB: allow inbound TCP 139, 445.
+fn smb_fw_specs() -> Vec<fw::ManagedRuleSpec> {
+    vec![fw::ManagedRuleSpec {
+        action: fw::RuleAction::Allow,
+        direction: fw::RuleDirection::In,
+        protocol: fw::RuleProtocol::Tcp,
+        source: fw::AddressSpec { kind: fw::AddressKind::Any, value: String::new() },
+        source_port: None,
+        destination: fw::AddressSpec { kind: fw::AddressKind::Me, value: String::new() },
+        destination_port: Some("139,445".into()),
+        description: Some("SMB / CIFS".into()),
+    }]
+}
+
+/// Sync SMB managed firewall rules on service start/restart.
+///
+/// Only inserts managed rules the **first time** — on subsequent starts the
+/// existing rules (and the user's edits to them) are left untouched.
+///
+/// Returns `true` when the firewall is enabled and new rules were just added,
+/// so the caller can remind the user to apply.
+async fn sync_smb_firewall_rules(state: &AppState, action: &str) -> bool {
+    if !matches!(action, "start" | "restart") {
+        return false;
+    }
+
+    // Check firewall init + whether managed rules already exist.
+    let (driver, is_new) = {
+        let conn = state.db.lock().await;
+        let d = fw::get_state(&conn, "active_driver")
+            .as_deref()
+            .and_then(fw::FirewallDriver::from_str);
+        let Some(d) = d else { return false };
+
+        let already_exists = fw::has_managed_rules(&conn, FW_MANAGED_BY);
+        if !already_exists {
+            if let Err(e) = fw::sync_managed_rules(
+                &conn, FW_MANAGED_BY, &smb_fw_specs(), state.now_ts(),
+            ) {
+                tracing::error!("failed to insert SMB managed firewall rules: {e}");
+                return false;
+            }
+        }
+        (d, !already_exists)
+    };
+
+    // Not the first time — rules already exist, nothing to do.
+    if !is_new {
+        return false;
+    }
+
+    let d = driver;
+    let fw_enabled = tokio::task::spawn_blocking(move || fw::is_firewall_enabled(d))
+        .await
+        .unwrap_or(false);
+
+    if fw_enabled {
+        // Firewall is running — managed rules are in DB but not in kernel.
+        // Merge them into staging (or create staging from DB) so pending_apply
+        // becomes true and the user sees "Apply Changes".
+        let conn = state.db.lock().await;
+        let db_rules = fw::list_rules(&conn).unwrap_or_default();
+        let tables = fw::list_tables(&conn).unwrap_or_default();
+        let nat_rules = fw::list_nat_rules(&conn).unwrap_or_default();
+        drop(conn);
+
+        let rules = if let Some((staging_rules, _, _)) = fw::read_staging() {
+            // Staging has user's pending changes — prepend managed rules from DB.
+            let mut managed: Vec<_> = db_rules.into_iter()
+                .filter(|r| r.managed_by.is_some()).collect();
+            managed.extend(staging_rules);
+            managed
+        } else {
+            // No staging — full DB snapshot (includes managed rules).
+            db_rules
+        };
+        if let Err(e) = fw::write_staging(&rules, &tables, &nat_rules) {
+            tracing::error!("failed to write firewall staging for SMB rules: {e}");
+        }
+        true
+    } else {
+        // Firewall disabled: regenerate the config file so managed rules are
+        // written to disk and will be loaded when the firewall is enabled.
+        let (rules, tables, nat_rules, mode) = {
+            let conn = state.db.lock().await;
+            let mode = fw::get_state(&conn, "mode")
+                .as_deref()
+                .and_then(fw::FirewallMode::from_str)
+                .unwrap_or(fw::FirewallMode::Whitelist);
+            (
+                fw::list_rules(&conn).unwrap_or_default(),
+                fw::list_tables(&conn).unwrap_or_default(),
+                fw::list_nat_rules(&conn).unwrap_or_default(),
+                mode,
+            )
+        };
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            fw::write_config_only(driver, &rules, mode, &tables, &nat_rules)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))
+        {
+            tracing::error!("failed to regenerate firewall config for SMB rules: {e}");
+        }
+        false
+    }
+}
+
 /// POST /api/smb/service/{action}
 /// action: start | stop | restart | reload
 /// start also sets samba_server_enable=YES, stop also sets samba_server_enable=NO.
@@ -987,6 +1099,9 @@ pub async fn service_control(
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
 
+    // Sync managed firewall rules for SMB ports (139, 445).
+    let firewall_needs_reload = sync_smb_firewall_rules(&state, &action).await;
+
     audit::record(
         &state,
         Some(&username),
@@ -995,5 +1110,8 @@ pub async fn service_control(
         200,
         Some(format!("Samba service {action}")),
     );
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "firewall_needs_reload": firewall_needs_reload,
+    })))
 }

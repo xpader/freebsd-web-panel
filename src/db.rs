@@ -152,6 +152,11 @@ mod migrations {
             desc: "rsync: create rsync_tasks table",
             func: m3,
         },
+        Migration {
+            version: 4,
+            desc: "firewall: add managed_by column to firewall_rules",
+            func: m4,
+        },
     ];
 
     /// v1: Create firewall tables (rules, state, tables, table entries).
@@ -278,6 +283,19 @@ mod migrations {
                 created_at  INTEGER NOT NULL,
                 updated_at  INTEGER NOT NULL
             )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// v4: Add `managed_by` column to firewall_rules.
+    ///
+    /// When non-NULL, the rule is system-managed by the identified service
+    /// (e.g. "smb").  Managed rules cannot be edited, deleted, or reordered by
+    /// the user — only the owning service controls them.
+    fn m4(conn: &Connection) -> ApiResult<()> {
+        conn.execute(
+            "ALTER TABLE firewall_rules ADD COLUMN managed_by TEXT",
             [],
         )?;
         Ok(())

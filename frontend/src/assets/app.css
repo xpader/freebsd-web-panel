@@ -925,6 +925,8 @@ body.term-active .main .page-header { flex-shrink: 0; }
 .radio-pill.active { color: var(--accent); }
 .modal > .text-dim { margin-bottom: 16px; }
 .radio-pill-group { display: flex; flex-direction: row; gap: 8px; }
+.radio-pill.disabled { opacity: 0.5; cursor: not-allowed; }
+.radio-pill.disabled:hover { background: transparent; }
 .badge-modified {
   display: inline-block; margin-left: 6px;
   padding: 1px 6px; border-radius: 3px;

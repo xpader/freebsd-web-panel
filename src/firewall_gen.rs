@@ -305,6 +305,8 @@ pub struct FirewallRule {
     pub description: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub managed_by: Option<String>,
 }
 
 /// Fields accepted when creating or updating a rule.
@@ -348,13 +350,13 @@ pub fn set_state(conn: &Connection, key: &str, value: &str) -> ApiResult<()> {
     )?;
     Ok(())
 }
-
 pub fn list_rules(conn: &Connection) -> ApiResult<Vec<FirewallRule>> {
     let mut stmt = conn.prepare(
         "SELECT id, position, enabled, action, direction, protocol, \
          src_kind, src_value, src_port, dst_kind, dst_value, dst_port, \
-         interface, log, icmp_type, description, created_at, updated_at \
-         FROM firewall_rules ORDER BY position ASC",
+         interface, log, icmp_type, description, created_at, updated_at, managed_by \
+         FROM firewall_rules \
+         ORDER BY position ASC, id ASC",
     )?;
     let rows = stmt
         .query_map([], |r| {
@@ -385,13 +387,18 @@ pub fn list_rules(conn: &Connection) -> ApiResult<Vec<FirewallRule>> {
                 description: r.get(15)?,
                 created_at: r.get(16)?,
                 updated_at: r.get(17)?,
+                managed_by: r.get(18)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
+
 /// Replace all rules in DB with the given list (for staging confirm).
+///
+/// Staging is a complete snapshot — managed rules are included and their
+/// `managed_by` marker is preserved on commit.
 pub fn replace_all_rules(conn: &Connection, rules: &[FirewallRule]) -> ApiResult<()> {
     conn.execute("DELETE FROM firewall_rules", [])?;
     for (i, rule) in rules.iter().enumerate() {
@@ -399,8 +406,8 @@ pub fn replace_all_rules(conn: &Connection, rules: &[FirewallRule]) -> ApiResult
             "INSERT INTO firewall_rules \
              (id, position, enabled, action, direction, protocol, \
               src_kind, src_value, src_port, dst_kind, dst_value, dst_port, \
-              interface, log, icmp_type, description, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
+              interface, log, icmp_type, description, created_at, updated_at, managed_by) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17, ?18)",
             params![
                 rule.id,
                 i as i64,
@@ -419,6 +426,7 @@ pub fn replace_all_rules(conn: &Connection, rules: &[FirewallRule]) -> ApiResult
                 rule.icmp_type,
                 rule.description,
                 rule.created_at,
+                rule.managed_by,
             ],
         )?;
     }
@@ -433,7 +441,6 @@ pub fn count_enabled_rules(conn: &Connection) -> ApiResult<i64> {
     )?;
     Ok(n)
 }
-
 pub fn next_position(conn: &Connection) -> ApiResult<u32> {
     let max: Option<i64> = conn
         .query_row(
@@ -478,6 +485,7 @@ pub fn create_rule(
     Ok(conn.last_insert_rowid())
 }
 
+
 pub fn update_rule(
     conn: &Connection,
     id: i64,
@@ -517,7 +525,7 @@ pub fn update_rule(
 
 pub fn delete_rule(conn: &Connection, id: i64) -> ApiResult<()> {
     let n = conn.execute(
-        "DELETE FROM firewall_rules WHERE id = ?1",
+        "DELETE FROM firewall_rules WHERE id = ?1 AND managed_by IS NULL",
         params![id],
     )?;
     if n == 0 {
@@ -544,7 +552,7 @@ pub fn reorder_rules(
     let tx = conn.unchecked_transaction()?;
     {
         let mut stmt =
-            tx.prepare("UPDATE firewall_rules SET position = ?1 WHERE id = ?2")?;
+            tx.prepare("UPDATE firewall_rules SET position = ?1 WHERE id = ?2 AND managed_by IS NULL")?;
         for (pos, id) in ordered_ids.iter().enumerate() {
             stmt.execute(params![pos as i64, id])?;
         }
@@ -885,6 +893,76 @@ pub fn validate_address(addr: &str) -> ApiResult<()> {
         return Err(ApiError::BadRequest("invalid IP/CIDR address".into()));
     }
     Ok(())
+}
+
+/// Specification for a system-managed firewall rule.
+///
+/// Services (e.g. SMB) use this to declare the ports they need opened.
+/// Managed rules behave like normal rules — users can edit, toggle, reorder,
+/// and delete them freely. The `managed_by` field is just a label so the UI
+/// can show a badge and the service knows not to re-insert on restart.
+#[derive(Debug, Clone)]
+pub struct ManagedRuleSpec {
+    pub action: RuleAction,
+    pub direction: RuleDirection,
+    pub protocol: RuleProtocol,
+    pub source: AddressSpec,
+    pub source_port: Option<String>,
+    pub destination: AddressSpec,
+    pub destination_port: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Synchronize managed rules for a service: delete existing rules owned by
+/// `managed_by`, then insert the provided specs.  This is idempotent — calling
+/// it twice produces the same set of rules.
+pub fn sync_managed_rules(
+    conn: &Connection,
+    managed_by: &str,
+    specs: &[ManagedRuleSpec],
+    now: i64,
+) -> ApiResult<()> {
+    conn.execute(
+        "DELETE FROM firewall_rules WHERE managed_by = ?1",
+        params![managed_by],
+    )?;
+    let base = next_position(conn)? as i64;
+    for (i, spec) in specs.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO firewall_rules \
+             (position, enabled, action, direction, protocol, \
+              src_kind, src_value, src_port, dst_kind, dst_value, dst_port, \
+              interface, log, icmp_type, description, managed_by, created_at, updated_at) \
+             VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, 0, NULL, ?11, ?12, ?13, ?13)",
+            params![
+                base + i as i64,
+                serde_json::to_string(&spec.action).unwrap_or_default(),
+                serde_json::to_string(&spec.direction).unwrap_or_default(),
+                serde_json::to_string(&spec.protocol).unwrap_or_default(),
+                serde_json::to_string(&spec.source.kind).unwrap_or_default(),
+                spec.source.value,
+                spec.source_port,
+                serde_json::to_string(&spec.destination.kind).unwrap_or_default(),
+                spec.destination.value,
+                spec.destination_port,
+                spec.description,
+                managed_by,
+                now,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn has_managed_rules(conn: &Connection, managed_by: &str) -> bool {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM firewall_rules WHERE managed_by = ?1",
+            params![managed_by],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    n > 0
 }
 
 // ── config generation ──────────────────────────────────────────────
@@ -2346,7 +2424,7 @@ struct StagingData {
     nat_rules: Vec<NatRule>,
 }
 
-/// Write staging file with proposed rules + tables + NAT rules.
+/// Write staging file — a complete snapshot of proposed rules + tables + NAT rules.
 pub fn write_staging(rules: &[FirewallRule], tables: &[IpTable], nat_rules: &[NatRule]) -> ApiResult<()> {
     let data = StagingData {
         rules: rules.to_vec(),
@@ -2493,6 +2571,7 @@ mod tests {
             destination_port: None,
             interface: None, log: false, icmp_type: None,
             description: Some("Block bad jail".into()),
+            managed_by: None,
             created_at: 0, updated_at: 0,
         };
         let pf = generate_pf(&[user_block], FirewallMode::Whitelist, &[], &[snat_rule()]);

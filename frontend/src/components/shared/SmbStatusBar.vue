@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { api } from '../../lib/api.js';
 import { useToast, useAlert } from '../../composables/useDialog.js';
 import StatusBar from './StatusBar.vue';
@@ -10,8 +11,8 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['refresh']);
-
 const { t } = useI18n();
+const router = useRouter();
 const toast = useToast();
 const alert = useAlert();
 const pendingAction = ref('');
@@ -31,8 +32,16 @@ const actionLabels = { start: 'common.start', stop: 'common.stop', restart: 'com
 async function serviceAction(action) {
   pendingAction.value = action;
   try {
-    await api.post(`/api/smb/service/${action}`, {});
-    toast.toast(t('smb.serviceActionDone', { action: t(actionLabels[action] || action) }));
+    const res = await api.post(`/api/smb/service/${action}`, {});
+    if (res.firewall_needs_reload) {
+      const goFirewall = await alert(t('smb.firewallReloadTitle'), t('smb.firewallReloadMsg'), {
+        dismissLabel: t('common.gotIt'),
+        actionLabel: t('smb.goToFirewall'),
+      });
+      if (goFirewall) {
+        router.push('/firewall/rules');
+      }
+    }
     emit('refresh');
   } catch (e) {
     await alert(t('common.operationFailed'), e.message || t('common.operationFailed'));

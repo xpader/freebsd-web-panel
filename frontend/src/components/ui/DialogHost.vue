@@ -165,7 +165,8 @@ function groupedFields(d) {
       <h3>{{ ui.dialog.title }}</h3>
       <p class="text-dim">{{ ui.dialog.message }}</p>
       <div class="modal-actions">
-        <button class="btn-secondary" @click="ui.resolveDialog()">{{ t('common.ok') }}</button>
+        <button class="btn-secondary" @click="ui.resolveDialog(false)">{{ ui.dialog.dismissLabel || t('common.ok') }}</button>
+        <button v-if="ui.dialog.actionLabel" @click="ui.resolveDialog(true)">{{ ui.dialog.actionLabel }}</button>
       </div>
     </div>
 
@@ -225,9 +226,9 @@ function groupedFields(d) {
                   v-for="opt in f.options"
                   :key="opt.value"
                   class="radio-pill"
-                  :class="{ active: radioState[f.key] === opt.value }"
+                  :class="{ active: radioState[f.key] === opt.value, disabled: f.disabled }"
                 >
-                  <input type="radio" :name="f.key" :value="opt.value" v-model="radioState[f.key]" />
+                  <input type="radio" :name="f.key" :value="opt.value" v-model="radioState[f.key]" :disabled="f.disabled" />
                   <span>{{ opt.label }}</span>
                 </label>
               </div>

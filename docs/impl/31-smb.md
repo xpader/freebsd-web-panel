@@ -51,6 +51,35 @@ pub struct SmbStatus {
 
 start/stop 操作后通过 `is_samba_running()` 验证服务确实到达了目标状态，未达预期时返回错误。
 
+### 防火墙集成（受管理规则）
+
+SMB 服务在启动/重启时自动添加防火墙规则，放行 SMB 端口（TCP 139、445）。受管理规则的 `managed_by` 字段为 `"smb"`——与普通规则行为一致，用户可编辑、切换、重排序、删除。`managed_by` 仅作标签，UI 显示 badge，服务用它判断是否已插入过。
+
+**`sync_smb_firewall_rules(state, action)`** 在 `service_control` 中调用：
+- **首次 start/restart**（`has_managed_rules` 返回 false）：`sync_managed_rules` 插入放行 TCP 139/445 入站的受管理规则
+- **后续 start/restart**（规则已存在）：**不修改防火墙规则**——避免覆盖用户对规则的修改
+- **stop/reload**：不修改防火墙规则
+
+规则规格（`smb_fw_specs()`）：
+```rust
+ManagedRuleSpec {
+    action: Allow, direction: In, protocol: Tcp,
+    source: Any, destination: Me,
+    destination_port: Some("139,445"),
+    description: Some("SMB / CIFS"),
+}
+```
+
+**首次添加 + 防火墙已启用**：受管理规则写入 DB 后，写入一份用户规则的 staging 快照（`write_staging`），使 `pending_apply` 变为 true。防火墙规则页显示「应用变更」按钮，用户点击后规则才加载到内核（含防锁死倒计时确认）。同时返回 `firewall_needs_reload: true`，前端弹出提醒对话框。
+
+**首次添加 + 防火墙未启用**：受管理规则写入 DB 后，自动调用 `write_config_only` 重生成配置文件（不加载到内核）。规则将在防火墙启用时自动生效。返回 `firewall_needs_reload: false`。
+
+**非首次添加**：返回 `firewall_needs_reload: false`，不创建 staging。
+
+**防火墙未初始化时**：`active_driver` 为 None，不操作防火墙规则，返回 `firewall_needs_reload: false`。
+
+详见 [27-firewall.md](27-firewall.md)「系统管理的规则」一节。
+
 ### smb4.conf 管理
 
 配置文件路径为 `/usr/local/etc/smb4.conf`。`parse_conf()` 逐行解析 INI 段：`[global]` 映射为 `GlobalConfig`，其余段映射为 `SmbShare`。空行、`#` 和 `;` 注释被忽略，键名转小写后匹配。
@@ -130,7 +159,7 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 | POST | `/api/smb/users` | 为已有系统用户设置 Samba 密码 |
 | PUT | `/api/smb/users/{name}/password` | 更新 Samba 密码 |
 | DELETE | `/api/smb/users/{name}` | 删除 Samba 用户数据库记录 |
-| POST | `/api/smb/service/{action}` | `start`（同时 enable）、`stop`（同时 disable）、`restart` 或 `reload` 服务 |
+| POST | `/api/smb/service/{action}` | `start`（同时 enable）、`stop`（同时 disable）、`restart` 或 `reload` 服务。返回 `{ ok, firewall_needs_reload }`——当防火墙已启用且规则已更新时 `firewall_needs_reload=true` |
 
 创建共享请求示例：
 
@@ -169,6 +198,7 @@ Samba 用户数据库独立于 `/etc/passwd`，但 Samba 用户必须先是系�
 | `/usr/sbin/service` | 管理 `samba_server`（含 `onestop` 强制停止） |
 | `bgtask.rs` | 初始化任务的后台执行与 SSE 输出 |
 | `libc` (`kill(pid, 0)`) | 检测 smbd/nmbd 进程是否存活 |
+| `firewall_gen.rs` | 受管理防火墙规则（`sync_managed_rules` / `has_managed_rules`），放行 SMB 端口 |
 
 ## 配置项
 

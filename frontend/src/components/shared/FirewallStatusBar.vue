@@ -132,7 +132,7 @@ onUnmounted(() => clearInterval(pollTimer));
       <button v-if="status.pending_apply" class="btn-sm" @click="doApply">
         <i class="fa-solid fa-check"></i> {{ t('firewall.applyRules') }}
       </button>
-      <button v-if="status.pending_apply" class="btn-secondary" @click="doDiscard">
+      <button v-if="status.pending_apply" class="btn-secondary btn-sm" @click="doDiscard">
         <i class="fa-solid fa-rotate-left"></i> {{ t('firewall.discard') }}
       </button>
       <button :class="['btn-sm', status.enabled ? 'btn-danger' : '']" @click="doToggleEnabled">

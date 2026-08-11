@@ -156,7 +156,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 
 #### 字段类型渲染细节
 
-- **`radio`** — pill 样式横排，选中高亮
+- **`radio`** — pill 样式横排，选中高亮。支持 `disabled`（灰化不可交互）
 - **`checkbox`** — 带描述文字的确认选项样式
 - **`checkbox-group`** — 多个 pill 样式 checkbox 内联排列，共用 `label` 作为组标题，每个 option 的值直接写入 `formValues[opt.key]`。每个 option 可选 `help` 属性，渲染为 pill 内的 FieldHelp 工具提示
 - **`select`** — 下拉框
