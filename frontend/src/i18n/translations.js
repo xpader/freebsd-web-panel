@@ -1789,6 +1789,7 @@ export const en = {
     lastRun: 'Last Run',
     nextRun: 'Next Run',
     pending: 'Pending',
+    ok: 'OK',
   },
 };
 
@@ -3548,5 +3549,6 @@ export const zh = {
     lastRun: '上次执行',
     nextRun: '下次执行',
     pending: '待执行',
+    ok: '正常',
   },
 };

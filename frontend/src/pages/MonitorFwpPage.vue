@@ -346,7 +346,7 @@ const fwpUptimeSec = computed(() => {
             <td class="text-dim">{{ fmtTs(job.next_run_ts) }}</td>
             <td>
               <span v-if="job.last_error" class="tag tag-error">{{ t('common.error') }}</span>
-              <span v-else-if="job.run_count > 0" class="tag tag-ok">{{ t('common.ok') }}</span>
+              <span v-else-if="job.run_count > 0" class="tag tag-ok">{{ t('tasks.ok') }}</span>
               <span v-else class="tag tag-dim">{{ t('tasks.pending') }}</span>
             </td>
           </tr>
