@@ -32,6 +32,7 @@ const routes = [
       { path: 'sysctl', name: 'sysctl', component: () => import('../pages/SysctlPage.vue') },
       { path: 'rcconf', name: 'rcconf', component: () => import('../pages/RcconfPage.vue') },
       { path: 'cron', name: 'cron', component: () => import('../pages/CronPage.vue') },
+      { path: 'time', name: 'time', component: () => import('../pages/TimePage.vue') },
       { path: 'network', name: 'network', component: () => import('../pages/NetworkPage.vue') },
       { path: 'network/dns', name: 'dns', component: () => import('../pages/DnsPage.vue') },
       { path: 'network/routes', name: 'static-routes', component: () => import('../pages/StaticRoutesPage.vue') },

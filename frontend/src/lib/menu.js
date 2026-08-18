@@ -20,6 +20,7 @@ export const MENU = [
       { path: '/rcconf', labelKey: 'nav.rcconf', icon: 'fa-solid fa-list-check' },
       { path: '/sysctl', labelKey: 'nav.sysctl', icon: 'fa-solid fa-microchip' },
       { path: '/cron', labelKey: 'nav.cron', icon: 'fa-solid fa-clock-rotate-left' },
+      { path: '/time', labelKey: 'nav.time', icon: 'fa-solid fa-clock' },
       {
         path: '/pkg',
         labelKey: 'nav.packages',

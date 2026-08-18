@@ -95,18 +95,18 @@ FreeBSD 默认 `/etc/crontab` 预装了一批基本系统维护任务。`is_free
 
 ### 写入安全：自动备份
 
-每次修改（增/改/删）前，`write_source` 先调用 `backup_source` 把**修改前**的文件内容拷贝到备份目录，再做实际写入：
+每次修改（增/改/删）前，`write_source` 先通过共享模块 `src/backup.rs` 的 `backup_content(state, name, content)` 把**修改前**的文件内容拷贝到统一备份目录，再做实际写入：
 
-- 备份目录 = DB 同级的 `cron-backup/`（即 `<db.parent>/cron-backup/`，默认 `/var/db/fwp/cron-backup/`），无需额外配置。
+- 备份目录 = DB 同级的 `conf_backup/`（即 `<db.parent>/conf_backup/`，默认 `/var/db/fwp/conf_backup/`）——resolv.conf / sysctl.conf / ntp.conf / jail.conf 共用同一目录，无需额外配置。
 - 系统文件读磁盘原文备份；用户 tab 读 `crontab -l` 的当前内容备份。
-- 备份文件名 `<source>.<毫秒时间戳>`（毫秒精度避免同秒多次编辑覆盖）。
-- 每个来源**最多保留 5 个**最新备份（`MAX_BACKUPS`），超出按时间戳删除最旧。
+- 备份文件名 `<name>.<unix-秒时间戳>`（系统 crontab 用其实际文件名 `crontab`，用户 tab 用用户名）。
+- 每个文件名**最多保留 5 个**最新备份（`MAX_BACKUPS`），超出按时间戳删除最旧，与其他配置互不影响。
 - 空 crontab（无内容）跳过备份。
 - 备份失败（如磁盘满）只记 `tracing::warn` 日志、不阻断写入——避免因备份故障导致无法管理 crontab。
 
 ### 写入（按来源分流，原子）
 
-`write_source(source, is_system, preamble, blocks, backup_dir)`：
+`write_source(state, source, is_system, preamble, blocks)`：
 
 - **系统**：`preamble 逐行 + serialize_body(blocks)` 拼成全文，`atomic_write` 写 `/etc/crontab`（写 `<path>.fwp.tmp` → chmod 0644 → rename，原子替换）。
 - **用户**：`serialize_body(blocks)` 得到正文（**不含 preamble**），管道给 `crontab -u <name> -`。cron 校验语法后才安装，并自行重生成 3 行文件头。正文为空时改用 `crontab -u <name> -r`（删除整个 tab，等价于无任务）。

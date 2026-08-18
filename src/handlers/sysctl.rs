@@ -8,8 +8,6 @@
 //! `/etc/sysctl.conf`.
 
 use std::collections::HashSet;
-use std::fs;
-use std::path::Path;
 
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
@@ -35,7 +33,6 @@ const CTLTYPE_NODE: c_uint = 1;
 const CTLFLAG_WR: c_uint = 0x4000_0000;
 const CTL_MAXNAME: usize = 24;
 const SYSCTL_CONF: &str = "/etc/sysctl.conf";
-const MAX_BACKUPS: usize = 5;
 
 // ---- Data model ----
 
@@ -471,53 +468,6 @@ fn encode_value(value: &str, typ: c_uint) -> ApiResult<Vec<u8>> {
     }
 }
 
-/// Derive the sysctl.conf backup directory (sibling `sysctl-backup/`).
-fn backup_dir(state: &AppState) -> std::path::PathBuf {
-    state
-        .config
-        .paths
-        .db
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("/var/db/fwp"))
-        .join("sysctl-backup")
-}
-
-/// Copy current /etc/sysctl.conf into `backup_dir`, then prune to newest 5.
-fn backup_sysctl_conf(state: &AppState) {
-    let dir = backup_dir(state);
-    let ts = state.now_ts();
-    let dest = dir.join(format!("sysctl.conf.{ts}"));
-    if let Err(e) = fs::create_dir_all(&dir)
-        .and_then(|_| fs::copy(SYSCTL_CONF, &dest).map(|_| ()))
-    {
-        tracing::warn!(error = %e, "sysctl.conf backup failed (non-blocking)");
-        return;
-    }
-    prune_backups(&dir, "sysctl.conf.", MAX_BACKUPS);
-}
-
-/// Keep at most `max` backup files matching `prefix` in `dir`.
-fn prune_backups(dir: &Path, prefix: &str, max: usize) {
-    let mut entries: Vec<(u64, std::path::PathBuf)> = Vec::new();
-    if let Ok(rd) = fs::read_dir(dir) {
-        for ent in rd.flatten() {
-            let name = ent.file_name();
-            let name = name.to_string_lossy();
-            if let Some(suffix) = name.strip_prefix(prefix) {
-                if let Ok(ts) = suffix.parse::<u64>() {
-                    entries.push((ts, ent.path()));
-                }
-            }
-        }
-    }
-    if entries.len() <= max {
-        return;
-    }
-    entries.sort_unstable_by_key(|(ts, _)| *ts);
-    for (_, path) in entries.iter().take(entries.len() - max) {
-        let _ = fs::remove_file(path);
-    }
-}
 
 #[derive(Debug, Deserialize)]
 pub struct SetBody {
@@ -567,7 +517,7 @@ pub async fn set(
     set_runtime_value(&mib, typ, &body.value)?;
 
     // Always persist to sysctl.conf so the change survives reboot.
-    backup_sysctl_conf(&state);
+    crate::backup::backup_file(&state, SYSCTL_CONF);
     crate::sysctl_conf::upsert(&name, &body.value)?;
 
     audit::record(
@@ -605,7 +555,7 @@ pub async fn reset(
 ) -> ApiResult<StatusCode> {
     validate_name(&name)?;
 
-    backup_sysctl_conf(&state);
+    crate::backup::backup_file(&state, SYSCTL_CONF);
     crate::sysctl_conf::remove(&name)?;
 
     audit::record(

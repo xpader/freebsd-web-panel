@@ -412,7 +412,7 @@ pub async fn put_global_conf(
 ) -> ApiResult<StatusCode> {
     let content = fs::read_to_string(JAIL_CONF)
         .map_err(|_| ApiError::NotFound("/etc/jail.conf not found".into()))?;
-    backup_jail_conf(&state)?;
+    crate::backup::backup_file(&state, JAIL_CONF);
     let new_content = replace_global_conf(&content, body.content.trim_end());
     write_jail_conf_atomic(&new_content)?;
     Ok(StatusCode::OK)
@@ -1621,21 +1621,6 @@ pub struct JailCreateBody {
     pub auto_start: Option<bool>,
 }
 
-/// Backup jail.conf to /var/db/fwp/backup/ with timestamp.
-fn backup_jail_conf(state: &AppState) -> ApiResult<()> {
-    let backup_dir = bases_file(state)
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("/var/db/fwp"))
-        .join("backup");
-    fs::create_dir_all(&backup_dir)?;
-    let ts = state.now_ts();
-    let backup_path = backup_dir.join(format!("jail.conf.{ts}"));
-    if std::path::Path::new(JAIL_CONF).exists() {
-        fs::copy(JAIL_CONF, &backup_path)?;
-    }
-    Ok(())
-}
-
 /// Write a new jail.conf (atomic: write tmp + rename).
 fn write_jail_conf_atomic(content: &str) -> ApiResult<()> {
     let tmp = format!("{JAIL_CONF}.fwp.tmp");
@@ -1795,7 +1780,7 @@ pub async fn jail_create(
     }
 
     // Backup and write jail.conf.
-    backup_jail_conf(&state)?;
+    crate::backup::backup_file(&state, JAIL_CONF);
 
     let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
 
@@ -2377,7 +2362,7 @@ pub async fn jail_delete(
     let jail_fstab = jail_entry.and_then(|e| e.params.get("mount.fstab").cloned());
 
     // Backup and remove from jail.conf.
-    backup_jail_conf(&state)?;
+    crate::backup::backup_file(&state, JAIL_CONF);
     let new_content = remove_jail_block(&conf_content, &name);
     write_jail_conf_atomic(&new_content)?;
 
@@ -2808,7 +2793,7 @@ pub async fn jail_update(
         return Err(ApiError::NotFound(format!("jail \"{name}\" not found")));
     }
 
-    backup_jail_conf(&state)?;
+    crate::backup::backup_file(&state, JAIL_CONF);
 
     let conf_content = fs::read_to_string(JAIL_CONF).unwrap_or_default();
     let globals = parse_global_params();

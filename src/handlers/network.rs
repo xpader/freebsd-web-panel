@@ -2604,57 +2604,16 @@ fn read_resolv_conf() -> ApiResult<String> {
         .map_err(|e| ApiError::Internal(format!("cannot read {RESOLV_CONF}: {e}")))
 }
 
-/// Write `/etc/resolv.conf` atomically with a timestamped backup.
-/// Backups are stored in a `dns-backup/` subdirectory under the configured DB
-/// path (e.g. `/var/db/fwp/dns-backup/`), not next to the original file.
+/// Write `/etc/resolv.conf` atomically, snapshotting the current copy into
+/// the unified `conf_backup/` directory first (non-blocking).
 fn write_resolv_conf(state: &AppState, content: &str) -> ApiResult<()> {
-    let backup_dir = state
-        .config
-        .paths
-        .db
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("/var/db/fwp"))
-        .join("dns-backup");
-
-    // Backup (non-blocking — a missing backup is better than a blocked edit).
-    let ts = state.now_ts();
-    let backup = backup_dir.join(format!("resolv.conf.{ts}"));
-    if let Err(e) = std::fs::create_dir_all(&backup_dir)
-        .and_then(|_| std::fs::copy(RESOLV_CONF, &backup).map(|_| ()))
-    {
-        tracing::warn!(error = %e, "resolv.conf backup failed (non-blocking)");
-    } else {
-        prune_backups(&backup_dir, "resolv.conf.", 5);
-    }
+    crate::backup::backup_file(state, RESOLV_CONF);
 
     // Atomic write: temp file + rename.
     let tmp = format!("{RESOLV_CONF}.fwp.tmp");
     std::fs::write(&tmp, content)?;
     std::fs::rename(&tmp, RESOLV_CONF)?;
     Ok(())
-}
-
-/// Keep at most `max` backup files matching `prefix` in `dir`.
-fn prune_backups(dir: &std::path::Path, prefix: &str, max: usize) {
-    let mut entries: Vec<(u64, std::path::PathBuf)> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for ent in rd.flatten() {
-            let name = ent.file_name();
-            let name = name.to_string_lossy();
-            if let Some(suffix) = name.strip_prefix(prefix) {
-                if let Ok(ts) = suffix.parse::<u64>() {
-                    entries.push((ts, ent.path()));
-                }
-            }
-        }
-    }
-    if entries.len() <= max {
-        return;
-    }
-    entries.sort_unstable_by_key(|(ts, _)| *ts);
-    for (_, path) in entries.iter().take(entries.len() - max) {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 /// Rebuild resolv.conf content from the original file (preserving comments and

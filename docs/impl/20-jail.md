@@ -95,7 +95,7 @@ fn main() {
 
 ### jail.conf 写入
 
-- `backup_jail_conf(state)` — 备份到 `/var/db/fwp/backup/jail.conf.<timestamp>`
+- 备份走共享模块 `src/backup.rs` — `backup_file(state, JAIL_CONF)` 写入统一目录 `/var/db/fwp/conf_backup/jail.conf.<unix-秒时间戳>`，保留最近 5 份，失败仅告警不阻断
 - `write_jail_conf_atomic(content)` — 写入临时文件 + rename（原子操作）
 - `generate_jail_block_from_params(name, params, globals)` — 从参数 map 生成 jail 块，**智能省略与全局默认相同的参数**（如 `path="/jails/${name}"` 匹配默认值时不写入）
 - `remove_jail_block(conf, name)` — 从内容中移除指定 jail 块
@@ -575,7 +575,7 @@ db = "/var/db/fwp/fwp.db"
 派生路径：
 - 注册表：`/var/db/fwp/jail-bases.json`
 - SharedFS fstab：`/var/db/fwp/jail-fstabs/<sanitized_target>.fstab`
-- jail.conf 备份：`/var/db/fwp/backup/jail.conf.<timestamp>`
+- jail.conf 备份：`/var/db/fwp/conf_backup/jail.conf.<unix-秒时间戳>`（统一备份目录，保留最近 5 份）
 - 默认 jail resolv.conf：`/var/db/fwp/jail-resolv.conf`
 
 ## 已知限制 / TODO

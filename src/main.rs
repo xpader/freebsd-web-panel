@@ -2,6 +2,7 @@
 
 mod app;
 mod audit;
+mod backup;
 mod auth;
 mod bgtask;
 mod bhyve;

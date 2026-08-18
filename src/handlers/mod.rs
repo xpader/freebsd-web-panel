@@ -16,6 +16,7 @@ pub mod rsync;
 pub mod services;
 pub mod smb;
 pub mod sysctl;
+pub mod time;
 pub mod system;
 pub mod users;
 pub mod zfs;

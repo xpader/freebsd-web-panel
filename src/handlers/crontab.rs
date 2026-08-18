@@ -525,19 +525,31 @@ fn serialize_body(blocks: &[Block]) -> String {
 }
 
 fn write_source(
+    state: &AppState,
     source: &str,
     is_system: bool,
     preamble: &[String],
     blocks: &[Block],
-    backup_dir: &Path,
 ) -> ApiResult<()> {
-    // Snapshot the current file before modifying. For the system crontab this
+    // Snapshot the current crontab before modifying. For the system crontab this
     // is the on-disk file; for user tabs it is what crontab currently has
-    // installed (read via `crontab -l`). Failures here are logged but never
-    // block the edit — a missing backup is preferable to a blocked write.
-    if let Err(e) = backup_source(source, is_system, backup_dir) {
-        tracing::warn!(error = %e, source = source, "crontab backup failed (non-blocking)");
-    }
+    // installed (read via `crontab -l`). Backup failures are logged inside
+    // backup_content and never block the edit.
+    let content = if is_system {
+        fs::read_to_string(ETC_CRONTAB).unwrap_or_default()
+    } else {
+        match read_raw(source) {
+            Ok((c, _)) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, source = source, "crontab backup read failed (non-blocking)");
+                String::new()
+            }
+        }
+    };
+    // The system crontab is backed up under the "crontab" prefix (its actual
+    // file name) rather than the internal "system" source label.
+    let name = if is_system { "crontab" } else { source };
+    crate::backup::backup_content(state, name, &content);
 
     if is_system {
         let mut full = String::new();
@@ -555,66 +567,6 @@ fn write_source(
             run_crontab_install(source, &body)
         }
     }
-}
-
-/// Maximum number of backup copies retained per crontab source.
-const MAX_BACKUPS: usize = 5;
-
-/// Derive the crontab backup directory from the configured DB path
-/// (sibling `cron-backup/` directory, e.g. `/var/db/fwp/cron-backup/`).
-fn backup_dir(state: &AppState) -> PathBuf {
-    state
-        .config
-        .paths
-        .db
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("/var/db/fwp"))
-        .join("cron-backup")
-}
-
-/// Copy the current crontab for `source` into `backup_dir`, then prune to
-/// the most recent `MAX_BACKUPS` copies. Backup files are named
-/// `<source>.<unix-timestamp>`. For the system crontab the source is read
-/// directly from disk; for user tabs `crontab -l` is used.
-fn backup_source(source: &str, is_system: bool, backup_dir: &Path) -> ApiResult<()> {
-    let content = if is_system {
-        fs::read_to_string(ETC_CRONTAB).unwrap_or_default()
-    } else {
-        // Reuse the existing read path which treats "no crontab" as empty.
-        read_raw(source)?.0
-    };
-    if content.is_empty() {
-        return Ok(()); // nothing to back up
-    }
-
-    fs::create_dir_all(backup_dir)?;
-
-    let ts: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    // The system crontab is backed up under the "crontab" prefix (its actual
-    // file name) rather than the internal "system" source label.
-    let name = if is_system { "crontab" } else { source };
-    let dest = backup_dir.join(format!("{name}.{ts}"));
-    fs::write(&dest, &content)?;
-
-    // Prune: keep only the newest MAX_BACKUPS for this source.
-    let prefix = format!("{name}.");
-    let mut entries: Vec<(u64, PathBuf)> = fs::read_dir(backup_dir)?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let ts = name.strip_prefix(&prefix)?.parse::<u64>().ok()?;
-            Some((ts, e.path()))
-        })
-        .collect();
-    entries.sort_unstable_by(|a, b| b.0.cmp(&a.0)); // newest first
-    for (_, path) in entries.into_iter().skip(MAX_BACKUPS) {
-        let _ = fs::remove_file(path);
-    }
-
-    Ok(())
 }
 
 /// Atomically replace a system file (tmp + rename), keeping mode 0644.
@@ -909,10 +861,10 @@ pub async fn create(
         disabled: req.entry.disabled.unwrap_or(false),
     }));
 
-    let backup = backup_dir(&state);
+    let state_for_write = state.clone();
     let source_for_write = req.source.clone();
     tokio::task::spawn_blocking(move || {
-        write_source(&source_for_write, is_system, &preamble, &blocks, &backup)
+        write_source(&state_for_write, &source_for_write, is_system, &preamble, &blocks)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
@@ -976,10 +928,10 @@ pub async fn update(
         task_idx: old.task_idx,
     });
 
-    let backup = backup_dir(&state);
+    let state_for_write = state.clone();
     let source_for_write = req.source.clone();
     tokio::task::spawn_blocking(move || {
-        write_source(&source_for_write, is_system, &preamble, &blocks, &backup)
+        write_source(&state_for_write, &source_for_write, is_system, &preamble, &blocks)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
@@ -1020,10 +972,10 @@ pub async fn delete(
     }
     blocks.remove(idx);
 
-    let backup = backup_dir(&state);
+    let state_for_write = state.clone();
     let source_for_write = q.source.clone();
     tokio::task::spawn_blocking(move || {
-        write_source(&source_for_write, is_system, &preamble, &blocks, &backup)
+        write_source(&state_for_write, &source_for_write, is_system, &preamble, &blocks)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;

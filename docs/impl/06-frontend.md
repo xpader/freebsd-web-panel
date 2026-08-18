@@ -124,7 +124,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 |---|---|---|
 | `toast` | ToastContainer | 右下角通知，自动消失 |
 | `confirm` | modal | 确认对话框，可选 checkbox 选项 |
-| `alert` | modal | 警告对话框，仅一个 OK 按钮 |
+| `alert` | modal | 警告对话框，仅一个 OK 按钮。消息支持 `\n\n` 换行分段（`white-space: pre-line`），用于较长的说明文字（如 RTC 模式说明） |
 | `form` | modal-wide | 表单对话框，支持多种字段类型 |
 | `code` | modal | 代码/文本预览（等宽字体） |
 | `countdown` | modal | 带倒计时进度条的确认/回滚对话框（防火墙 apply 用） |
@@ -137,7 +137,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 |---|---|---|
 | `key` | string | 字段标识，结果对象中的键名 |
 | `label` | string | 字段标题 |
-| `type` | string | `text`（默认）、`password`、`select`、`radio`、`checkbox`、`checkbox-group`、`textarea`、`cron` |
+| `type` | string | `text`（默认）、`password`、`select`、`radio`、`checkbox`、`checkbox-group`、`textarea`、`cron`、`list-select` |
 | `value` | any | 初始值 |
 | `inputType` | string | 当 type 为通用 input 时，设置 `<input type>`（如 `password`） |
 | `placeholder` | string | 占位提示 |
@@ -148,7 +148,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 | `row` | number/string | 将同 `row` 值的 `half` 字段强制放入同一行 |
 | `showIf` | `{key: val}` | 条件显示：当另一字段等于 `val`（或数组中任一值）时显示 |
 | `requiredIf` | `{key: val}` | 条件必填 |
-| `options` | array | `select`/`radio`：`{value, label}`；`checkbox-group`：`{key, label, value, help?}` |
+| `options` | array | `select`/`radio`/`list-select`：`{value, label}`（`list-select` 的 label/value 均参与搜索过滤）；`checkbox-group`：`{key, label, value, help?}` |
 | `picker` | `'dir'`/`'file'` | 路径选择器：渲染 `.input-with-btn` + 按钮。按钮按字段值自动判定本地/远程——值形如 `user@host`（SSH 连接）时打开 `RemoteFilePicker`，否则打开本地 `FilePicker` |
 | `permPicker` | bool | 八进制权限选择器：渲染 `.input-with-btn`（八进制输入框 + 按钮），点击按钮弹出 `PermissionDialog` 覆盖层。配合 `special`（bool，默认 `true`）控制是否显示 setuid/setgid/sticky 特殊位 |
 
@@ -161,6 +161,7 @@ api.get(path) / api.post(path, body) / api.put(path, body) / api.del(path)
 - **`checkbox-group`** — 多个 pill 样式 checkbox 内联排列，共用 `label` 作为组标题，每个 option 的值直接写入 `formValues[opt.key]`。每个 option 可选 `help` 属性，渲染为 pill 内的 FieldHelp 工具提示
 - **`select`** — 下拉框
 - **`textarea`** — 多行文本
+- **`list-select`** — 可搜索的可选列表：搜索框（按 label/value 不区分大小写过滤）+ 已选值条（显示选中项 label，点击清除）+ 固定高度（280px）列表。每项左侧勾选图标（未选占位）、右侧可选 `meta` 字段（灰色右对齐补充信息）；选中项高亮。适用于选项数量大到下拉框不适用的场景（如 IANA 时区 ~600 项）
 - **`picker`** — 输入框 + 单按钮，按钮行为按字段当前值自动判定：本地路径或空 → 打开 `FilePicker`（📁）；SSH 规格（`user@host`）→ 打开 `RemoteFilePicker`（🌐）。可选 `portKey` 属性指定另一字段名，远程选择器从中读取 SSH 端口
 - **`permPicker`** — 八进制输入框 + 按钮（`.input-with-btn`），点击按钮弹出 `PermissionDialog` 覆盖层（`z-index: 60`，可叠在 form 对话框之上）。对话框内为 `PermissionInput.vue` 复选框网格（owner/group/other × r/w/x，可选 setuid/setgid/sticky）+ 可编辑八进制输入框 + 实时 `ls` 风格权限串预览，确定后写回字段值（八进制字符串）。`special: false` 时隐藏特殊位、值掩码到 `0o777`（Samba 掩码场景）。与 `FilePicker` 同样作为 `DialogHost` 的兄弟覆盖层渲染，由 `permField` ref 控制——因 `ui.dialog` 单槽位限制，嵌套对话框必须走此兄弟覆盖层模式。文件管理器的 chmod 对话框（不在 form 内）也复用 `PermissionDialog`（特殊位启用）
 - **`half` + `row` 布局** — `groupedFields()` 将连续 `half` 字段两两配对为 flex 行；同 `row` 值的字段强制同组

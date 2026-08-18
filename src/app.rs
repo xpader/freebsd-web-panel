@@ -225,6 +225,18 @@ pub fn build(state: AppState) -> Router {
         .route("/api/rsync/tasks/{id}", put(handlers::rsync::update_task).delete(handlers::rsync::delete_task))
         .route("/api/rsync/tasks/{id}/run", post(handlers::rsync::run_task))
         .route("/api/rsync/browse", get(handlers::rsync::browse))
+        // --- Time management (system clock / timezone / NTP) ---
+        .route("/api/time/status", get(handlers::time::status))
+        .route("/api/time/datetime", put(handlers::time::set_datetime))
+        .route("/api/time/sync", post(handlers::time::sync_now))
+        .route("/api/time/timezone", put(handlers::time::set_timezone))
+        .route("/api/time/rtc-mode", put(handlers::time::set_rtc_mode))
+        .route("/api/time/zones", get(handlers::time::list_zones))
+        .route("/api/time/ntp/conf", get(handlers::time::get_ntp_conf).put(handlers::time::set_ntp_conf))
+        .route("/api/time/ntp/sync-on-start", put(handlers::time::set_sync_on_start))
+        .route("/api/time/ntp/enable", post(handlers::time::ntp_enable))
+        .route("/api/time/ntp/disable", post(handlers::time::ntp_disable))
+        .route("/api/time/ntp/restart", post(handlers::time::ntp_restart))
         .layer(from_fn_with_state(state.clone(), require_auth));
 
     // File upload sends raw bytes as the request body and can be large;

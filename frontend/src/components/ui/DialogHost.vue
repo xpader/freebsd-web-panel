@@ -12,6 +12,7 @@ const submitting = ref(false);
 const firstInput = ref(null);
 const radioState = reactive({});
 const formValues = reactive({});
+const listQuery = reactive({});
 const pickerField = ref(null);
 const pickerRemote = ref(false);
 const permField = ref(null);
@@ -32,11 +33,12 @@ function openPicker(f) {
 // Generic form-state reset when a form dialog opens.
 watch(() => ui.dialog, (d) => {
   if (!d || d.type !== 'form') return;
-  Object.keys(radioState).forEach(k => delete radioState[k]);
+  Object.keys(listQuery).forEach(k => delete listQuery[k]);
   Object.keys(formValues).forEach(k => delete formValues[k]);
   for (const f of (d.fields || [])) {
     formValues[f.key] = f.value ?? '';
     if (f.type === 'radio') radioState[f.key] = f.value ?? f.options?.[0]?.value ?? '';
+    if (f.type === 'list-select') listQuery[f.key] = '';
     if (f.type === 'checkbox-group') {
       for (const opt of (f.options || [])) {
         formValues[opt.key] = opt.value ?? false;
@@ -103,6 +105,20 @@ function isFieldRequired(f) {
   return false;
 }
 
+
+/// Filter list-select options by the current search query.
+function filterListOptions(f) {
+  const q = (listQuery[f.key] || '').toLowerCase();
+  if (!q) return f.options || [];
+  return (f.options || []).filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q));
+}
+
+/// Get the display label of the currently selected option in a list-select.
+function selectedListLabel(f) {
+  const opt = (f.options || []).find(o => o.value === formValues[f.key]);
+  return opt ? opt.label : formValues[f.key];
+}
+
 function groupedFields(d) {
   const groups = [];
   const rowMap = new Map();
@@ -163,7 +179,7 @@ function groupedFields(d) {
     <!-- Alert dialog -->
     <div v-else-if="ui.dialog.type === 'alert'" class="modal">
       <h3>{{ ui.dialog.title }}</h3>
-      <p class="text-dim">{{ ui.dialog.message }}</p>
+      <p class="text-dim" style="white-space:pre-line;">{{ ui.dialog.message }}</p>
       <div class="modal-actions">
         <button class="btn-secondary" @click="ui.resolveDialog(false)">{{ ui.dialog.dismissLabel || t('common.ok') }}</button>
         <button v-if="ui.dialog.actionLabel" @click="ui.resolveDialog(true)">{{ ui.dialog.actionLabel }}</button>
@@ -250,6 +266,26 @@ function groupedFields(d) {
                 <option value="" v-if="!f.required">{{ t('common.pleaseSelect') }}</option>
                 <option v-for="opt in f.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
+              <!-- list-select (search + pickable list) -->
+              <div v-else-if="f.type === 'list-select'">
+                <input type="text" v-model="listQuery[f.key]" class="list-select-search"
+                  :placeholder="t('common.search')" />
+                <div v-if="formValues[f.key]" class="list-select-chosen">
+                  <i class="fa-solid fa-check"></i> {{ selectedListLabel(f) }}
+                </div>
+                <div class="list-select-box">
+                  <div v-for="opt in filterListOptions(f)" :key="opt.value"
+                    class="list-select-item"
+                    :class="{ active: formValues[f.key] === opt.value }"
+                    @click="formValues[f.key] = opt.value">
+                    <i v-if="formValues[f.key] === opt.value" class="fa-solid fa-check list-select-check"></i>
+                    <i v-else class="list-select-check-placeholder"></i>
+                    <span>{{ opt.label }}</span>
+                    <span v-if="opt.meta" class="list-select-meta">{{ opt.meta }}</span>
+                  </div>
+                  <div v-if="!filterListOptions(f).length" class="list-select-empty">{{ t('common.noData') }}</div>
+                </div>
+              </div>
               <!-- checkbox -->
               <label v-else-if="f.type === 'checkbox'" class="confirm-opt">
                 <input type="checkbox" v-model="formValues[f.key]" />
@@ -349,5 +385,65 @@ function groupedFields(d) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.list-select-search {
+  width: 100%;
+  margin-bottom: .5rem;
+}
+.list-select-chosen {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .4rem .75rem;
+  margin-bottom: .5rem;
+  background: #e0f0ec;
+  border-radius: 4px;
+  font-size: .85rem;
+  font-weight: 600;
+  color: #2a7a6a;
+}
+.list-select-box {
+  height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-dim, rgba(0,0,0,.12));
+  border-radius: 6px;
+  background: #fff;
+}
+.list-select-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4rem .75rem;
+  cursor: pointer;
+  font-size: .85rem;
+  color: #333;
+}
+.list-select-item:hover {
+  background: #f0f0f0;
+}
+.list-select-item.active {
+  background: #e0f0ec;
+  color: #2a7a6a;
+  font-weight: 600;
+}
+.list-select-meta {
+  margin-left: auto;
+  color: #999;
+  font-size: .8rem;
+  font-weight: 400;
+}
+.list-select-check {
+  color: #2a7a6a;
+  width: 14px;
+  flex-shrink: 0;
+}
+.list-select-check-placeholder {
+  width: 14px;
+  flex-shrink: 0;
+}
+.list-select-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #999;
 }
 </style>

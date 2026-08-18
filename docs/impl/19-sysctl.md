@@ -92,9 +92,10 @@ struct SysctlEntry {
 
 ### 备份机制
 
-每次写入或删除 sysctl.conf 条目前，先备份当前 `/etc/sysctl.conf` 到
-`/var/db/fwp/sysctl-backup/sysctl.conf.<unix-timestamp>`，保留最近 5 份。
-与 crontab、resolv.conf 的备份机制一致。
+每次写入或删除 sysctl.conf 条目前，先通过共享模块 `src/backup.rs` 的
+`backup_file(state, path)` 备份当前 `/etc/sysctl.conf` 到统一备份目录
+`/var/db/fwp/conf_backup/sysctl.conf.<unix-秒时间戳>`，保留最近 5 份。
+与 crontab、resolv.conf、ntp.conf、jail.conf 的备份机制一致（同一模块、同一目录）。
 
 ### 运行时写入
 
