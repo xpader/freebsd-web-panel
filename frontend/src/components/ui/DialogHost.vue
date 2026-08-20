@@ -396,18 +396,18 @@ function groupedFields(d) {
   gap: .4rem;
   padding: .4rem .75rem;
   margin-bottom: .5rem;
-  background: #e0f0ec;
+  background: var(--accent-glow);
   border-radius: 4px;
   font-size: .85rem;
   font-weight: 600;
-  color: #2a7a6a;
+  color: var(--accent);
 }
 .list-select-box {
   height: 280px;
   overflow-y: auto;
-  border: 1px solid var(--border-dim, rgba(0,0,0,.12));
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-elev);
 }
 .list-select-item {
   display: flex;
@@ -416,24 +416,24 @@ function groupedFields(d) {
   padding: .4rem .75rem;
   cursor: pointer;
   font-size: .85rem;
-  color: #333;
+  color: var(--text);
 }
 .list-select-item:hover {
-  background: #f0f0f0;
+  background: var(--hover-bg);
 }
 .list-select-item.active {
-  background: #e0f0ec;
-  color: #2a7a6a;
+  background: var(--accent-glow);
+  color: var(--accent);
   font-weight: 600;
 }
 .list-select-meta {
   margin-left: auto;
-  color: #999;
+  color: var(--text-dim);
   font-size: .8rem;
   font-weight: 400;
 }
 .list-select-check {
-  color: #2a7a6a;
+  color: var(--accent);
   width: 14px;
   flex-shrink: 0;
 }
@@ -444,6 +444,6 @@ function groupedFields(d) {
 .list-select-empty {
   padding: 1rem;
   text-align: center;
-  color: #999;
+  color: var(--text-dim);
 }
 </style>
