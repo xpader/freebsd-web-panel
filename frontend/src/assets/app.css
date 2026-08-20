@@ -212,7 +212,14 @@ a:hover { color: var(--accent-hover); }
   height: calc(100vh - 52px);
   transition: width 0.2s ease, border-right-color 0.2s ease;
 }
-.sidebar-nav { padding: 12px 0; }
+.sidebar-nav {
+  padding: 12px 0;
+  /* Fixed width + right anchor: during the collapse animation the sidebar box
+     shrinks but the nav keeps its width, so it slides left and gets clipped
+     instead of being squeezed into wrapping. */
+  width: var(--sidebar-w);
+  margin-left: auto;
+}
 .sidebar-nav a {
   display: flex;
   align-items: center;

@@ -24,6 +24,13 @@ const configDriverName = ref(null);
 const configLoading = ref(false);
 const configSaving = ref(false);
 const configApplying = ref(false);
+// Configured (rc.conf) but not in effect on the live route — shown as a badge
+// so "looks right in the dialog but isn't applied" states are visible.
+const gw4Drift = computed(() =>
+  !!gateway.value?.configured && gateway.value.gateway !== gateway.value.configured);
+const gw6Drift = computed(() =>
+  !!gateway.value?.configured6 && gateway.value.gateway6 !== gateway.value.configured6);
+
 const createDialog = ref(false);
 const createType = ref('bridge');
 const createNum = ref(0);
@@ -320,14 +327,14 @@ async function setGateway() {
     {
       submitLabel: t('common.save'),
       submitHandler: async (values) => {
-        const payload = {};
-        if (values.gateway !== (gateway.value?.configured || '')) {
-          payload.gateway = values.gateway || '';
-        }
-        if (values.gateway6 !== (gateway.value?.configured6 || '')) {
-          payload.gateway6 = values.gateway6 || '';
-        }
-        await api.put('/api/network/gateway', payload);
+        // Always send both fields: PUT semantics are "converge rc.conf AND the
+        // live route to this value". Skipping unchanged values would leave a
+        // drifted live route (e.g. after an interface change dropped it)
+        // unrecoverable from this dialog.
+        await api.put('/api/network/gateway', {
+          gateway: values.gateway || '',
+          gateway6: values.gateway6 || '',
+        });
       },
     },
   );
@@ -479,11 +486,13 @@ onMounted(load);
         <div class="kv"><span class="kv-key">{{ t('net.gatewayIpv4') }}</span><span class="kv-val">
           <strong v-if="gateway.gateway" class="mono">{{ gateway.gateway }}</strong>
           <span v-else class="text-dim">{{ t('common.notConfigured') }}</span>
+          <span v-if="gw4Drift" class="badge badge-warn">{{ t('net.gatewayNotApplied') }}</span>
           {{ gateway.interface ? `(${gateway.interface})` : '' }}
         </span></div>
         <div class="kv"><span class="kv-key">{{ t('net.gatewayIpv6') }}</span><span class="kv-val">
           <strong v-if="gateway.gateway6" class="mono">{{ gateway.gateway6 }}</strong>
           <span v-else class="text-dim">{{ t('common.notConfigured') }}</span>
+          <span v-if="gw6Drift" class="badge badge-warn">{{ t('net.gatewayNotApplied') }}</span>
           {{ gateway.interface6 ? `(${gateway.interface6})` : '' }}
         </span></div>
         <div style="margin-top:0.75rem;">

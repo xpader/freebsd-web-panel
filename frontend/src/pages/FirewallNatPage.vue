@@ -267,10 +267,11 @@ onMounted(() => {
   </div>
 
   <template v-else-if="!initialized">
-    <div class="card empty">
+    <div class="card firewall-init">
+      <h3>{{ t('firewall.initTitle') }}</h3>
       <p class="text-dim">{{ t('firewall.initDesc') }}</p>
       <router-link to="/firewall/settings" class="btn-secondary" style="display:inline-flex;">
-        {{ t('firewall.settings') }}
+        <i class="fa-solid fa-gear"></i> {{ t('nav.firewallSettings') }}
       </router-link>
     </div>
   </template>
@@ -338,6 +339,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.firewall-init {
+  text-align: center;
+  padding: 32px;
+}
+.firewall-init h3 {
+  margin-bottom: 8px;
+}
+.firewall-init > p {
+  margin-bottom: 24px;
+}
 .row-disabled {
   opacity: 0.5;
 }

@@ -941,7 +941,9 @@ pub async fn interface_create(
         // the frontend's refresh sees the final state (e.g. a rename via
         // `name vvswitch`) without a timing race.
         let cfg = parse_merged_rcconf(&iface_name);
-        let _ = apply_ifconfig(&iface_name, &cfg);
+        // Freshly created interface: live state is empty, old config equals
+        // the new one (nothing to reconcile off).
+        let _ = apply_ifconfig(&iface_name, &cfg, &cfg);
 
         add_cloned_interface(&iface_name);
         Ok(())
@@ -1053,19 +1055,24 @@ pub async fn interface_update(
 
     // Resolve the driver name (current kernel driver name) and target live name.
     let driver = resolve_driver_name(&name);
-    let target = save_cfg
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| name.clone());
+    let target = resolve_target_name(save_cfg.name.as_deref(), &driver, &name, |candidate| {
+        // Only consulted on the epair half-revert path; getifaddrs is pure
+        // syscalls, cheap enough for at most two probes.
+        read_interfaces()
+            .map(|ifs| ifs.iter().any(|i| i.name == candidate))
+            .unwrap_or(false)
+    });
 
     let save_name = name.clone();
     let save_driver = driver.clone();
     let save_target = target.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> ApiResult<IfaceRcConfConfig> {
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<(IfaceRcConfConfig, Option<String>)> {
+        // 0. Snapshot the OLD rc.conf config (before any live change): drives
+        //    the removal reconciliation in apply_ifconfig. Must precede the
+        //    rename — parse_merged_rcconf resolves keys via the live name.
+        let old_cfg = parse_merged_rcconf(&save_name);
+
         // 1. Rename as an isolated first step so all later ifconfig calls operate
         //    on the final name (avoids the rename-during-config timing bug).
         if save_name != save_target {
@@ -1079,7 +1086,8 @@ pub async fn interface_update(
         }
 
         // 2. Apply configuration under the (possibly new) live name.
-        apply_ifconfig(&save_target, &save_cfg).map_err(ApiError::Command)?;
+        apply_ifconfig(&save_target, &old_cfg, &save_cfg).map_err(ApiError::Command)?;
+
 
         // 3. Persist config under the target live-name keys.
         let primary_key = format!("ifconfig_{save_target}");
@@ -1130,19 +1138,27 @@ pub async fn interface_update(
             }
         }
 
-        // 6. Re-read merged config under the final live name.
-        Ok(parse_merged_rcconf(&save_target))
+        // 6. Restore default routes dropped by address changes (the kernel
+        //    removes routes referencing a deleted address, mirroring netif →
+        //    routing boot order). Best-effort: failure is reported, not fatal.
+        let gw_note = restore_default_routes();
+
+        // 7. Re-read merged config under the final live name.
+        Ok((parse_merged_rcconf(&save_target), gw_note))
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
-
+    let (result, note) = result;
     audit::record(
         &state,
         Some(&auth.username),
         "PUT",
         &format!("/api/network/interfaces/{name}"),
         200,
-        Some(format!("updated ifconfig_{driver}")),
+        Some(format!(
+            "updated ifconfig_{driver}{}",
+            note.as_deref().map(|n| format!("; {n}")).unwrap_or_default()
+        )),
     );
 
     Ok(Json(result))
@@ -1215,11 +1231,67 @@ fn build_ifconfig_args(cfg: &IfaceRcConfConfig) -> Vec<String> {
 
     args
 }
+// ─── Config reconciliation helpers ─────────────────────────────────────────
+
+/// Whether the interface's IPv4 is DHCP-managed (address owned by dhclient).
+fn is_dhcp(cfg: &IfaceRcConfConfig) -> bool {
+    cfg.ipv4
+        .as_deref()
+        .map(str::trim)
+        .map(|s| s.eq_ignore_ascii_case("DHCP") || s.eq_ignore_ascii_case("SYNCDHCP"))
+        .unwrap_or(false)
+}
+
+/// IPv4 addresses this config manages: the static primary plus aliases.
+/// DHCP/SYNCDHCP primaries are excluded (not ours to manage).
+fn managed_v4(cfg: &IfaceRcConfConfig) -> Vec<String> {
+    let mut v = Vec::new();
+    if !is_dhcp(cfg) {
+        if let Some(ip) = cfg.ipv4.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            v.push(ip.to_string());
+        }
+    }
+    for a in &cfg.ipv4_aliases {
+        let addr = a.address.trim();
+        if !addr.is_empty() {
+            v.push(addr.to_string());
+        }
+    }
+    v
+}
+
+/// IPv6 addresses this config manages: static-mode entries only.
+/// SLAAC/auto addresses are kernel-managed; link-local (fe80::/10) never is.
+fn managed_v6(cfg: &IfaceRcConfConfig) -> Vec<String> {
+    if cfg.ipv6_mode != "static" {
+        return Vec::new();
+    }
+    cfg.ipv6
+        .iter()
+        .map(|e| e.address.trim().to_string())
+        .filter(|a| !a.is_empty() && !is_link_local_v6(a))
+        .collect()
+}
+
+/// Whether an IPv6 address string (with optional `%zone`) is link-local.
+fn is_link_local_v6(addr: &str) -> bool {
+    addr.split('%')
+        .next()
+        .unwrap_or(addr)
+        .parse::<Ipv6Addr>()
+        .map(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
+        .unwrap_or(false)
+}
+
 
 /// Apply an interface's structured config to the live system via ifconfig.
 /// Reads the current live state first and skips properties already in effect
 /// (existing bridge members, lagg ports, IP aliases) to avoid duplicate-add errors.
-fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String> {
+fn apply_ifconfig(
+    name: &str,
+    old: &IfaceRcConfConfig,
+    cfg: &IfaceRcConfConfig,
+) -> Result<String, String> {
     let mut output = String::new();
     let mut errors: Vec<String> = Vec::new();
 
@@ -1233,9 +1305,14 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
         .as_ref()
         .map(|i| i.members.iter().map(|m| m.name.clone()).collect())
         .unwrap_or_default();
-    let existing_v4: Vec<String> = live
+    let existing_v4: Vec<(String, Option<u8>)> = live
         .as_ref()
-        .map(|i| i.ipv4.iter().map(|ip| ip.address.clone()).collect())
+        .map(|i| {
+            i.ipv4
+                .iter()
+                .map(|ip| (ip.address.clone(), ip.prefix_len))
+                .collect()
+        })
         .unwrap_or_default();
     let existing_v6: Vec<String> = live
         .as_ref()
@@ -1243,6 +1320,8 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
         .unwrap_or_default();
 
     // 1. Apply primary non-structural config (IP, MTU, description, media, UP).
+    //    A plain `inet <addr>` replaces the current primary address, so primary
+    //    address/netmask changes converge here.
     let primary_args = build_ifconfig_args(cfg);
     if !primary_args.is_empty() {
         let refs: Vec<&str> = primary_args.iter().map(|s| s.as_str()).collect();
@@ -1287,13 +1366,32 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
         }
     }
 
-    // 5. Apply each IPv4 alias (skip existing).
+    // 5. Apply each IPv4 alias. An alias that exists with a different netmask
+    //    than desired is deleted and re-added (plain `alias` never updates it).
     for alias in &cfg.ipv4_aliases {
         let addr = alias.address.trim();
-        if addr.is_empty() || existing_v4.iter().any(|a| a == addr) {
+        if addr.is_empty() {
             continue;
         }
         let nm = alias.netmask.trim();
+        let want_prefix: Option<u8> = if nm.is_empty() {
+            None
+        } else {
+            Some(ipv4_mask_to_prefix(nm))
+        };
+        if let Some((_, cur_prefix)) = existing_v4.iter().find(|(a, _)| a == addr) {
+            match want_prefix {
+                Some(wp) if cur_prefix == &Some(wp) => continue, // already exact
+                Some(_) => {
+                    // Netmask drift: remove, then fall through to re-add.
+                    if let Err(e) = run_ifconfig(name, &["inet", addr, "delete"]) {
+                        errors.push(format!("alias {addr} netmask change: {e}"));
+                        continue;
+                    }
+                }
+                None => continue, // netmask unspecified; leave as-is
+            }
+        }
         let alias_args: Vec<&str> = if nm.is_empty() {
             vec!["alias", addr]
         } else {
@@ -1322,6 +1420,80 @@ fn apply_ifconfig(name: &str, cfg: &IfaceRcConfConfig) -> Result<String, String>
                 Ok(o) => output.push_str(&o),
                 Err(e) => errors.push(format!("inet6 {addr}: {e}")),
             }
+        }
+    }
+
+    // 7. Reconcile removals: delete addresses/members the OLD config managed
+    //    but the new one no longer lists. This is old-config driven on purpose —
+    //    deleting anything merely absent from the new config would also remove
+    //    DHCP-assigned or out-of-band addresses we do not own. Addresses
+    //    already gone from the live interface (e.g. a replaced primary) are
+    //    skipped, keeping the pass idempotent.
+    let live_now = read_interfaces()
+        .map_err(|e| format!("failed to read live interfaces: {e}"))?
+        .into_iter()
+        .find(|i| i.name == name);
+    let live_v4_now: Vec<String> = live_now
+        .as_ref()
+        .map(|i| i.ipv4.iter().map(|ip| ip.address.clone()).collect())
+        .unwrap_or_default();
+    let live_v6_now: Vec<String> = live_now
+        .as_ref()
+        .map(|i| i.ipv6.iter().map(|ip| ip.address.clone()).collect())
+        .unwrap_or_default();
+
+    // 7a. IPv4 removals (old primary + aliases minus new).
+    let new_v4 = managed_v4(cfg);
+    for addr in managed_v4(old) {
+        if new_v4.iter().any(|a| a == &addr) || !live_v4_now.contains(&addr) {
+            continue;
+        }
+        match run_ifconfig(name, &["inet", &addr, "delete"]) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("delete inet {addr}: {e}")),
+        }
+    }
+
+    // 7b. IPv6 removals (only entries the old config statically managed;
+    //     static→auto transitions drop the old static addresses).
+    let new_v6 = managed_v6(cfg);
+    for addr in managed_v6(old) {
+        if new_v6.iter().any(|a| a == &addr) || !live_v6_now.contains(&addr) {
+            continue;
+        }
+        match run_ifconfig(name, &["inet6", &addr, "delete"]) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("delete inet6 {addr}: {e}")),
+        }
+    }
+
+    // 7c. Bridge members removed from the config.
+    for m in &old.bridge_members {
+        let m = m.trim();
+        if m.is_empty()
+            || cfg.bridge_members.iter().any(|n| n.trim() == m)
+            || !existing_members.iter().any(|em| em == m)
+        {
+            continue;
+        }
+        match run_ifconfig(name, &["deletem", m]) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("deletem {m}: {e}")),
+        }
+    }
+
+    // 7d. LAGG ports removed from the config.
+    for p in &old.lagg_ports {
+        let p = p.trim();
+        if p.is_empty()
+            || cfg.lagg_ports.iter().any(|n| n.trim() == p)
+            || !existing_members.iter().any(|em| em == p)
+        {
+            continue;
+        }
+        match run_ifconfig(name, &["-laggport", p]) {
+            Ok(o) => output.push_str(&o),
+            Err(e) => errors.push(format!("-laggport {p}: {e}")),
         }
     }
 
@@ -1369,9 +1541,15 @@ pub async fn interface_apply(
     validate_iface_name(&name)?;
 
     let apply_name = name.clone();
-    let output = tokio::task::spawn_blocking(move || {
+    let output = tokio::task::spawn_blocking(move || -> ApiResult<String> {
         let cfg = parse_merged_rcconf(&apply_name);
-        apply_ifconfig(&apply_name, &cfg).map_err(ApiError::Command)
+        let mut out = apply_ifconfig(&apply_name, &cfg, &cfg).map_err(ApiError::Command)?;
+        // Re-apply ("apply" button) reconciles against the same config: only
+        // netmask drifts get fixed; removals are empty (old == new).
+        if let Some(note) = restore_default_routes() {
+            out.push_str(&note);
+        }
+        Ok(out)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
@@ -1511,27 +1689,24 @@ pub async fn set_default_gateway(
     if let Some(raw) = &body.gateway {
         let gw = raw.trim();
         if gw.is_empty() {
+            // Apply first (live route), then the persistent config.
+            tokio::task::spawn_blocking(|| delete_default_gateway(false))
+                .await
+                .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+                .map_err(ApiError::Command)?;
             crate::sysrc::delete_async("defaultrouter").await?;
-            tokio::task::spawn_blocking(|| {
-                cmd::run_forget_sync("/sbin/route", &["delete", "default"]);
-            })
-            .await
-            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
             audit::record(
                 &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
                 Some("cleared IPv4 default gateway".into()),
             );
         } else {
-            validate_ip(gw)?;
+            validate_ipv4(gw)?;
+            let g = gw.to_string();
+            tokio::task::spawn_blocking(move || apply_default_gateway(false, &g))
+                .await
+                .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+                .map_err(ApiError::Command)?;
             crate::sysrc::set_async("defaultrouter", gw).await?;
-            let gw_owned = gw.to_string();
-            tokio::task::spawn_blocking(move || {
-                if !cmd::status_sync("/sbin/route", &["change", "default", &gw_owned]) {
-                    cmd::run_forget_sync("/sbin/route", &["add", "default", &gw_owned]);
-                }
-            })
-            .await
-            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
             audit::record(
                 &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
                 Some(format!("set IPv4 default gateway to {gw}")),
@@ -1542,27 +1717,23 @@ pub async fn set_default_gateway(
     if let Some(raw) = &body.gateway6 {
         let gw = raw.trim();
         if gw.is_empty() {
+            tokio::task::spawn_blocking(|| delete_default_gateway(true))
+                .await
+                .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+                .map_err(ApiError::Command)?;
             crate::sysrc::delete_async("ipv6_defaultrouter").await?;
-            tokio::task::spawn_blocking(|| {
-                cmd::run_forget_sync("/sbin/route", &["-6", "delete", "default"]);
-            })
-            .await
-            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
             audit::record(
                 &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
                 Some("cleared IPv6 default gateway".into()),
             );
         } else {
-            validate_ip(gw)?;
+            validate_ipv6(gw)?;
+            let g = gw.to_string();
+            tokio::task::spawn_blocking(move || apply_default_gateway(true, &g))
+                .await
+                .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?
+                .map_err(ApiError::Command)?;
             crate::sysrc::set_async("ipv6_defaultrouter", gw).await?;
-            let gw_owned = gw.to_string();
-            tokio::task::spawn_blocking(move || {
-                if !cmd::status_sync("/sbin/route", &["-6", "change", "default", &gw_owned]) {
-                    cmd::run_forget_sync("/sbin/route", &["-6", "add", "default", &gw_owned]);
-                }
-            })
-            .await
-            .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))?;
             audit::record(
                 &state, Some(&auth.username), "PUT", "/api/network/gateway", 200,
                 Some(format!("set IPv6 default gateway to {gw}")),
@@ -1571,6 +1742,89 @@ pub async fn set_default_gateway(
     }
 
     default_gateway().await
+}
+
+// ─── Default gateway helpers ───────────────────────────────────────────────
+
+const ROUTE: &str = "/sbin/route";
+
+/// Set the live default route to `gw`: `route change default <gw>`, falling
+/// back to `route add` when no default route exists yet. The error carries
+/// route(8) stderr so callers can surface the real cause (typically
+/// "Network is unreachable" when the gateway is not on a connected subnet).
+fn apply_default_gateway(is_v6: bool, gw: &str) -> Result<(), String> {
+    let change_args: Vec<&str> = if is_v6 {
+        vec!["-6", "change", "default", gw]
+    } else {
+        vec!["change", "default", gw]
+    };
+    if cmd::run_sync_str(ROUTE, &change_args).is_ok() {
+        return Ok(());
+    }
+    let add_args: Vec<&str> = if is_v6 {
+        vec!["-6", "add", "default", gw]
+    } else {
+        vec!["add", "default", gw]
+    };
+    cmd::run_sync_str(ROUTE, &add_args).map(|_| ())
+}
+
+/// Delete the live default route. "not in table" is success (idempotent clear).
+fn delete_default_gateway(is_v6: bool) -> Result<(), String> {
+    let args: Vec<&str> = if is_v6 {
+        vec!["-6", "delete", "default"]
+    } else {
+        vec!["delete", "default"]
+    };
+    match cmd::run_sync_str(ROUTE, &args) {
+        Ok(_) => Ok(()),
+        Err(e) if e.contains("not in table") || e.contains("has not been found") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Current live default-route gateway for a family, or None if absent.
+fn live_default_gateway(is_v6: bool) -> Option<String> {
+    let family = if is_v6 { "Internet6" } else { "Internet" };
+    read_routes()
+        .ok()?
+        .into_iter()
+        .find(|r| r.destination == "default" && r.family == family)
+        .map(|r| r.gateway)
+}
+
+/// Compare gateway strings ignoring an IPv6 zone suffix (`fe80::1%em0`).
+fn same_gw(a: &str, b: &str) -> bool {
+    a.split('%').next().unwrap_or(a) == b.split('%').next().unwrap_or(b)
+}
+
+/// Ensure the live default routes match rc.conf (`defaultrouter` /
+/// `ipv6_defaultrouter`). Interface address changes drop routes that
+/// referenced a deleted address; this re-establishes them, mirroring the
+/// netif → routing boot order. Returns an error note on failure.
+fn restore_default_routes() -> Option<String> {
+    let mut errors: Vec<String> = Vec::new();
+
+    for (is_v6, want) in [(false, read_defaultrouter()), (true, read_ipv6_defaultrouter())] {
+        let want = match want {
+            Some(w) => w,
+            None => continue,
+        };
+        let have = live_default_gateway(is_v6);
+        if have.as_deref().map(|h| same_gw(&want, h)).unwrap_or(false) {
+            continue; // already in effect
+        }
+        if let Err(e) = apply_default_gateway(is_v6, &want) {
+            let fam = if is_v6 { "IPv6" } else { "IPv4" };
+            errors.push(format!("{fam} default route restore failed: {e}"));
+        }
+    }
+
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    }
 }
 
 /// GET `/api/network/dns` — DNS configuration from `/etc/resolv.conf`.
@@ -1685,10 +1939,12 @@ pub async fn create_static_route(
     };
     let args = build_route_args(dest, gw, is_ipv6, is_host);
 
+    // Apply to the live system first — on failure nothing is persisted.
+    apply_route_add(dest, gw, is_ipv6, is_host).map_err(ApiError::Command)?;
+
     crate::sysrc::set_async("static_routes", &add_to_list(&existing, &name)).await?;
     crate::sysrc::set_async(&format!("route_{name}"), &args).await?;
 
-    apply_route_add(dest, gw, is_ipv6, is_host);
 
     existing.push(StaticRoute {
         name: name.clone(),
@@ -1725,7 +1981,8 @@ pub async fn update_static_route(
     })?;
 
     // Remove old live route, then apply the new one.
-    apply_route_delete(&old.destination, old.family == "ipv6", old.is_host);
+    apply_route_delete(&old.destination, old.family == "ipv6", old.is_host)
+        .map_err(ApiError::Command)?;
 
     let is_ipv6 = gw.contains(':');
     let is_host = !dest.contains('/');
@@ -1733,7 +1990,8 @@ pub async fn update_static_route(
 
     crate::sysrc::set_async(&format!("route_{name}"), &args).await?;
 
-    apply_route_add(dest, gw, is_ipv6, is_host);
+    apply_route_add(dest, gw, is_ipv6, is_host).map_err(ApiError::Command)?;
+
 
     audit::record(
         &state, Some(&auth.username), "PUT", &format!("/api/network/static-routes/{name}"), 200,
@@ -1766,6 +2024,9 @@ pub async fn delete_static_route(
     let is_ipv6 = route.family == "ipv6";
     let is_host = route.is_host;
 
+    // Remove the live route first — on failure rc.conf is untouched.
+    apply_route_delete(&dest, is_ipv6, is_host).map_err(ApiError::Command)?;
+
     let remaining: Vec<&StaticRoute> = existing.iter().filter(|r| r.name != name).collect();
     if remaining.is_empty() {
         crate::sysrc::delete_async("static_routes").await?;
@@ -1773,9 +2034,8 @@ pub async fn delete_static_route(
         let list_str = remaining.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(" ");
         crate::sysrc::set_async("static_routes", &list_str).await?;
     }
-    crate::sysrc::delete_async(&format!("route_{name}")).await?;
 
-    apply_route_delete(&dest, is_ipv6, is_host);
+    crate::sysrc::delete_async(&format!("route_{name}")).await?;
 
     audit::record(
         &state, Some(&auth.username), "DELETE", &format!("/api/network/static-routes/{name}"), 200,
@@ -1941,26 +2201,32 @@ fn validate_route_name(name: &str) -> ApiResult<()> {
     Ok(())
 }
 
-/// Apply `route add` (or `route -6 add`) to the live system. Best-effort: errors are ignored.
-fn apply_route_add(dest: &str, gw: &str, is_ipv6: bool, is_host: bool) {
+/// Apply `route add` (or `route -6 add`) to the live system. Errors carry
+/// route(8) stderr and propagate to the caller.
+fn apply_route_add(dest: &str, gw: &str, is_ipv6: bool, is_host: bool) -> Result<(), String> {
     let route_type = if is_host { "-host" } else { "-net" };
     let mut args = Vec::new();
     if is_ipv6 {
         args.push("-6");
     }
     args.extend_from_slice(&["add", route_type, dest, gw]);
-    cmd::run_forget_sync("/sbin/route", &args);
+    cmd::run_sync_str(ROUTE, &args).map(|_| ())
 }
 
-/// Apply `route delete` (or `route -6 delete`) to the live system. Best-effort.
-fn apply_route_delete(dest: &str, is_ipv6: bool, is_host: bool) {
+/// Apply `route delete` (or `route -6 delete`) to the live system.
+/// An absent route is success (idempotent delete).
+fn apply_route_delete(dest: &str, is_ipv6: bool, is_host: bool) -> Result<(), String> {
     let route_type = if is_host { "-host" } else { "-net" };
     let mut args = Vec::new();
     if is_ipv6 {
         args.push("-6");
     }
     args.extend_from_slice(&["delete", route_type, dest]);
-    cmd::run_forget_sync("/sbin/route", &args);
+    match cmd::run_sync_str(ROUTE, &args) {
+        Ok(_) => Ok(()),
+        Err(e) if e.contains("not in table") || e.contains("has not been found") => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -2006,6 +2272,40 @@ fn is_default_iface_name(driver: &str, live: &str) -> bool {
         }
     }
     false
+}
+
+/// Resolve the effective live-name target for an interface save.
+///
+/// - Explicit non-empty `cfg_name` → that name (a rename).
+/// - Empty `cfg_name` means "use the default name" (the documented contract of
+///   the config dialog's name field): for a RENAMED interface this reverts the
+///   rename; for a default-named interface (including epair halves, whose
+///   live name is not the driver base) the live name is kept unchanged.
+/// - An unknown driver name (empty) cannot reveal the default → keep live.
+/// - epair: the driver name is the shared base of the a/b pair and does not
+///   say which half this was. The renamed half vacated its original name, so
+///   exactly one of `<base>a`/`<base>b` is free (`name_taken`) — revert there.
+fn resolve_target_name(
+    cfg_name: Option<&str>,
+    driver: &str,
+    live: &str,
+    name_taken: impl Fn(&str) -> bool,
+) -> String {
+    if let Some(n) = cfg_name.map(str::trim).filter(|s| !s.is_empty()) {
+        return n.to_string();
+    }
+    if driver.is_empty() || is_default_iface_name(driver, live) {
+        return live.to_string();
+    }
+    if driver.starts_with("epair") {
+        for suffix in ["a", "b"] {
+            let candidate = format!("{driver}{suffix}");
+            if !name_taken(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    driver.to_string()
 }
 
 /// Parse rc.conf config for an interface, resolving the correct key layout.
@@ -2624,6 +2924,7 @@ fn build_resolv_conf(original: &str, cfg: &DnsConfig) -> String {
     let mut wrote_search = false;
     let mut wrote_domain = false;
     let mut wrote_options = false;
+
     let mut wrote_sortlist = false;
 
     for line in original.lines() {
@@ -2707,6 +3008,43 @@ fn validate_ip(addr: &str) -> ApiResult<()> {
             "'{addr}' is not a valid IP address"
         )))
     }
+}
+/// Validate a strict IPv4 address (gateway fields must be family-correct).
+fn validate_ipv4(addr: &str) -> ApiResult<()> {
+    if addr.parse::<Ipv4Addr>().is_ok() {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(format!(
+            "'{addr}' is not a valid IPv4 address"
+        )))
+    }
+}
+
+/// Validate an IPv6 address with an optional zone suffix (`fe80::1%em0`).
+/// Link-local gateways require the zone and route(8) accepts it; std's
+/// `Ipv6Addr` parser rejects zones, so the suffix is checked separately.
+fn validate_ipv6(addr: &str) -> ApiResult<()> {
+    let (ip, zone) = match addr.split_once('%') {
+        Some((ip, zone)) => (ip, Some(zone)),
+        None => (addr, None),
+    };
+    if ip.parse::<Ipv6Addr>().is_err() {
+        return Err(ApiError::BadRequest(format!(
+            "'{addr}' is not a valid IPv6 address"
+        )));
+    }
+    if let Some(z) = zone {
+        if z.is_empty()
+            || z.len() > 15
+            || !z.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        {
+            return Err(ApiError::BadRequest(format!(
+                "invalid interface zone in '{addr}'"
+            )));
+        }
+    }
+    Ok(())
 }
 fn parse_resolv_conf(content: &str) -> DnsConfig {
     let mut cfg = DnsConfig {
@@ -2971,4 +3309,236 @@ mod tests {
         let cfg = parse_merged_rcconf("epair100a");
         assert_eq!(cfg.name, None, "default-named epair must not be treated as renamed: {cfg:?}");
     }
+
+    // ─── Reconciliation helpers ────────────────────────────────────────────
+
+    #[test]
+    fn managed_v4_excludes_dhcp_primary() {
+        let mut cfg = IfaceRcConfConfig::default();
+        cfg.ipv4 = Some("DHCP".into());
+        cfg.ipv4_aliases = vec![RcIpv4Alias {
+            address: "10.0.0.5".into(),
+            netmask: "255.255.255.0".into(),
+        }];
+        assert_eq!(managed_v4(&cfg), vec!["10.0.0.5"]);
+
+        cfg.ipv4 = Some("10.0.0.1".into());
+        assert_eq!(managed_v4(&cfg), vec!["10.0.0.1", "10.0.0.5"]);
+
+        cfg.ipv4 = Some("".into());
+        assert_eq!(managed_v4(&cfg), vec!["10.0.0.5"]);
+    }
+
+    #[test]
+    fn managed_v6_static_only_and_no_link_local() {
+        let mut cfg = IfaceRcConfConfig::default();
+        cfg.ipv6_mode = "slaac".into();
+        cfg.ipv6 = vec![RcIpv6Entry {
+            address: "2001:db8::1".into(),
+            prefixlen: "64".into(),
+        }];
+        assert!(managed_v6(&cfg).is_empty(), "slaac addresses are not ours");
+
+        cfg.ipv6_mode = "static".into();
+        cfg.ipv6.push(RcIpv6Entry {
+            address: "fe80::1".into(),
+            prefixlen: "64".into(),
+        });
+        assert_eq!(managed_v6(&cfg), vec!["2001:db8::1"]);
+    }
+
+    #[test]
+    fn validate_ipv6_accepts_zone_suffix() {
+        assert!(validate_ipv6("fe80::1%em0").is_ok());
+        assert!(validate_ipv6("2001:db8::1").is_ok());
+        assert!(validate_ipv6("fe80::1%").is_err());
+        assert!(validate_ipv6("fe80::1%em;0").is_err());
+        assert!(validate_ipv6("192.168.1.1").is_err());
+    }
+
+    #[test]
+    fn validate_ipv4_rejects_v6() {
+        assert!(validate_ipv4("192.168.1.1").is_ok());
+        assert!(validate_ipv4("fe80::1").is_err());
+        assert!(validate_ipv4(" DHCP").is_err());
+    }
+
+    #[test]
+    fn same_gw_ignores_zone() {
+        assert!(same_gw("fe80::1%em0", "fe80::1%em0"));
+        assert!(same_gw("fe80::1%em0", "fe80::1"));
+        assert!(!same_gw("fe80::1%em0", "fe80::2%em0"));
+        assert!(same_gw("192.168.1.1", "192.168.1.1"));
+    }
+
+    /// Destroy the interface on scope exit so a failed assertion does not
+    /// leak test interfaces.
+    struct IfaceGuard(String);
+    impl Drop for IfaceGuard {
+        fn drop(&mut self) {
+            let _ = run_ifconfig(&self.0, &["destroy"]);
+        }
+    }
+
+    /// Live test: apply_ifconfig must converge live state, including
+    /// REMOVING addresses that drop out of the config. Uses a throwaway
+    /// epair (getifaddrs filters loopback, so loN cannot be observed).
+    #[test]
+    fn apply_ifconfig_converges_live_state() {
+        let out = run_ifconfig("epair", &["create"]).expect("epair create");
+        let name = out.trim().to_string();
+        assert!(!name.is_empty(), "epair create should print the new name");
+        let _guard = IfaceGuard(name.clone());
+
+        let live = || {
+            read_interfaces()
+                .expect("getifaddrs")
+                .into_iter()
+                .find(|i| i.name == name)
+                .expect("epair visible via getifaddrs")
+        };
+
+        // Empty baseline.
+        let empty = IfaceRcConfConfig {
+            interface: name.clone(),
+            is_up: true,
+            ..Default::default()
+        };
+        apply_ifconfig(&name, &empty, &empty).expect("apply empty config");
+
+        // Add primary + alias + static v6.
+        let mut cfg = empty.clone();
+        cfg.ipv4 = Some("10.198.7.1".into());
+        cfg.ipv4_netmask = Some("255.255.255.0".into());
+        cfg.ipv4_aliases = vec![RcIpv4Alias {
+            address: "10.198.7.11".into(),
+            netmask: "255.255.255.0".into(),
+        }];
+        cfg.ipv6_mode = "static".into();
+        cfg.ipv6 = vec![RcIpv6Entry {
+            address: "2001:db8:198::1".into(),
+            prefixlen: "64".into(),
+        }];
+        apply_ifconfig(&name, &empty, &cfg).expect("apply cfg");
+
+        let l = live();
+        assert!(l.ipv4.iter().any(|ip| ip.address == "10.198.7.1"), "{:?}", l.ipv4);
+        assert!(l.ipv4.iter().any(|ip| ip.address == "10.198.7.11"), "{:?}", l.ipv4);
+        assert!(
+            l.ipv6.iter().any(|ip| ip.address == "2001:db8:198::1"),
+            "{:?}",
+            l.ipv6
+        );
+
+        // Remove the alias → must be deleted from the live interface.
+        let mut cfg2 = cfg.clone();
+        cfg2.ipv4_aliases.clear();
+        apply_ifconfig(&name, &cfg, &cfg2).expect("remove alias");
+        let l = live();
+        assert!(
+            !l.ipv4.iter().any(|ip| ip.address == "10.198.7.11"),
+            "alias must be gone: {:?}",
+            l.ipv4
+        );
+        assert!(l.ipv4.iter().any(|ip| ip.address == "10.198.7.1"));
+
+        // Clear the primary + static v6 → both must be deleted.
+        let mut cfg3 = cfg2.clone();
+        cfg3.ipv4 = None;
+        cfg3.ipv4_netmask = None;
+        cfg3.ipv6.clear();
+        apply_ifconfig(&name, &cfg2, &cfg3).expect("clear addresses");
+        let l = live();
+        assert!(l.ipv4.is_empty(), "primary must be gone: {:?}", l.ipv4);
+        assert!(
+            !l.ipv6.iter().any(|ip| ip.address == "2001:db8:198::1"),
+            "static v6 must be gone: {:?}",
+            l.ipv6
+        );
+    }
+
+    /// With the live default route already matching rc.conf (the common host
+    /// state), restore_default_routes must be a no-op (None). Live check in
+    /// the style of `read_routes_runs`.
+    #[test]
+    fn restore_default_routes_noop_when_in_effect() {
+        let configured = read_defaultrouter();
+        let live = live_default_gateway(false);
+        if configured.is_none() || live.is_none() {
+            return; // no v4 default route on this host — skip.
+        }
+        assert_eq!(
+            restore_default_routes(),
+            None,
+            "gateway in effect must not trigger a restore"
+        );
+    }
+
+    #[test]
+    fn resolve_target_name_matrix() {
+        // Explicit custom name → that name (rename).
+        assert_eq!(resolve_target_name(Some("wan0"), "em0", "em0", |_| false), "wan0");
+        // Explicit driver name → same, via the normal rename path.
+        assert_eq!(resolve_target_name(Some("em0"), "em0", "mgmt0", |_| false), "em0");
+        // Whitespace-only is treated as empty.
+        assert_eq!(resolve_target_name(Some("  "), "em0", "mgmt0", |_| false), "em0");
+        // Empty + default-named → keep live name (no rename).
+        assert_eq!(resolve_target_name(None, "em0", "em0", |_| false), "em0");
+        // Empty + unknown driver → keep live (cannot know the default).
+        assert_eq!(resolve_target_name(None, "", "em0", |_| false), "em0");
+        // Empty + renamed → revert to the driver name.
+        assert_eq!(resolve_target_name(None, "em0", "mgmt0", |_| false), "em0");
+        // Empty + epair half → default name, keep live (NOT the base "epair0").
+        assert_eq!(resolve_target_name(None, "epair0", "epair0a", |_| false), "epair0a");
+        assert_eq!(
+            resolve_target_name(None, "epair100", "epair100b", |_| false),
+            "epair100b"
+        );
+        // Empty + renamed epair half → the FREE half of the pair. The sibling
+        // keeps its name, so "taken" identifies which side to return.
+        assert_eq!(
+            resolve_target_name(None, "epair0", "left0", |n| n == "epair0a"),
+            "epair0b"
+        );
+        assert_eq!(
+            resolve_target_name(None, "epair0", "right0", |n| n == "epair0b"),
+            "epair0a"
+        );
+        // Both halves free → the a side.
+        assert_eq!(resolve_target_name(None, "epair0", "left0", |_| false), "epair0a");
+    }
+
+    /// Live round-trip: rename an epair half, then resolve a cleared name
+    /// field the way interface_update does — the target must be the ORIGINAL
+    /// half name (the free side of the pair), and renaming back must succeed.
+    #[test]
+    fn interface_rename_reverts_on_cleared_name() {
+        let out = run_ifconfig("epair", &["create"]).expect("epair create");
+        let half = out.trim().to_string(); // e.g. "epair1a" — the created half
+        assert!(half.ends_with('a'), "created epair half: {half}");
+        let _guard = IfaceGuard(half.clone());
+
+        // Rename the half away.
+        cmd::run_sync(IFCONFIG, &[&half, "name", "fwp-rev0"]).expect("rename");
+
+        // Resolve exactly as interface_update does.
+        let driver = crate::ifutil::get_drivername("fwp-rev0").expect("drivername");
+        let target = resolve_target_name(None, &driver, "fwp-rev0", |candidate| {
+            read_interfaces()
+                .map(|ifs| ifs.iter().any(|i| i.name == candidate))
+                .unwrap_or(false)
+        });
+        assert_eq!(target, half, "cleared name must revert to the original half");
+
+        // Perform the rename back and verify live state.
+        cmd::run_sync(IFCONFIG, &["fwp-rev0", "name", &half]).expect("rename back");
+        let names: Vec<String> = read_interfaces()
+            .expect("getifaddrs")
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+        assert!(names.contains(&half), "{names:?}");
+        assert!(!names.iter().any(|n| n == "fwp-rev0"), "{names:?}");
+    }
+
 }

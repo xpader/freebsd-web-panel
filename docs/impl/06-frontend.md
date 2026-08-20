@@ -219,7 +219,7 @@ const result = await formModal('添加仓库', fields, {
 - 支持深色（默认）与浅色两套 CSS 变量主题，通过 `:root[data-theme="light"]` 覆盖 `:root` 默认变量实现切换（详见 [32-theming.md](32-theming.md)）
 - 品牌标识：渐变方块 logo（闪电图标）+ “fwp” 缩写文字，点击跳转仪表盘
 - 所有 hover 态统一使用 `--hover-bg` 变量；选中态使用 `--accent-glow` 半透明辉光
-- 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.sidebar-toggle` 16px 收缩条 + `.main`）。侧栏收缩时 `.sidebar` 宽度动画到 0（`overflow: hidden` 裁切内容），收缩条箭头方向切换
+- 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.sidebar-toggle` 16px 收缩条 + `.main`）。侧栏收缩时 `.sidebar` 宽度动画到 0；`.sidebar-nav` 固定 `width: var(--sidebar-w)` 且 `margin-left: auto`（右锚定），动画期间内容保持原宽、整体向左滑出并被裁切，不随容器变窄而挤压换行。收缩条箭头方向切换
 - 表格横向滚动：在 `.card` 内的 `<table>` 外包一层 `<div class="table-wrap">`，容器设置 `overflow-x: auto`，内部 `th`/`td` 默认 `white-space: nowrap`（不挤压、不换行），仅 `.cell-wrap` 列允许换行吸收空间。视口缩窄时出现横向滚动条而非挤压内容。
 - 按钮组：相邻的多个按钮包裹在 `<div class="btn-group">`（`display: flex; flex-wrap: nowrap`），防止换行且消除按钮间多余间距。
 - 搜索输入框：使用 `SearchInput.vue` 组件（`v-model` + `placeholder`），有内容时右侧显示清除按钮。底层由 `.search-input`（`position: relative`）+ `.search-clear` 定位实现。

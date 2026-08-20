@@ -175,30 +175,38 @@ IfaceRcConfConfig {
 - `options` 字段中的扩展参数原样追加到主值末尾（如 `media 1000baseTX mediaopt full-duplex`）。`name` 指令已从 options 中剥离，由独立的 `ifconfig_<driver>_name` 键承载
 - **写入目标键**：配置写入 **live name 键**（`ifconfig_<target>`/`_aliases`/`_ipv6`）。改名时额外写 `ifconfig_<driver>_name=<target>`；撤销改名（target == driver）则删除该键。同时清理旧键（原 live 名键 + 旧 driver 名配置键），仅保留 target 名键
 
-**配置应用**（`apply_ifconfig`）：
+**配置应用**（`apply_ifconfig(name, old, cfg)`，`old` = 修改前 rc.conf 快照）：
 1. 先用 `read_interfaces()` 读取当前运行时状态
-2. 应用非结构性属性（IP/MTU/description/options/UP），使用 live name 调用 `ifconfig`
+2. 应用非结构性属性（IP/MTU/description/options/UP），使用 live name 调用 `ifconfig`。纯 `inet <addr>` 会替换当前主地址，因此主 IP/掩码变更在此收敛
 3. 应用 LAGG 协议和端口（跳过已有端口）
 4. 应用 bridge 成员（跳过已有成员、其他 bridge 的成员）
-5. 应用 IPv4 别名（跳过已有地址）
+5. 应用 IPv4 别名；已存在但掩码不符的别名先 `inet <addr> delete` 再重加（`alias` 不会更新掩码）
 6. 应用 IPv6 条目（跳过已有地址）——仅 `static` 模式应用；`slaac` 和 `none` 模式跳过
+7. **删除协调**（old 配置驱动）：重读 live 状态后，删除「old 配置管理过、新配置不再包含、live 仍存在」的地址与成员：
+   - IPv4：old 主 IP + 别名 − 新集合 → `ifconfig <if> inet <addr> delete`（切换到 DHCP 时旧静态主 IP 也会被删除）
+   - IPv6：old static 条目 − 新集合 → `inet6 <addr> delete`；永不删除 fe80::/10 链路本地地址
+   - bridge 成员 → `deletem`；lagg 端口 → `-laggport`
+   - **删除集合从 old rc.conf 推导而非 live 差集**——live 有但配置没有的地址可能是 dhclient 分配或管理员 out-of-band 添加的，不属于面板管理范围，误删可能把用户锁在面板外。已在 live 消失的条目自动跳过（幂等）
+   - `managed_v4`/`managed_v6` 定义「配置管理的地址集合」：DHCP 主 IP 排除、slaac 排除、fe80::/10 排除
 
-**PUT 流程**：① 若 target ≠ live name，先 `ifconfig <live> name <target>` 独立改名（先校验目标名未被占用）→ ② `apply_ifconfig(<target>)` 应用配置 → ③ 写 rc.conf（target 名键 + `ifconfig_<driver>_name`）→ ④ 清理旧键 → ⑤ 用 target 名回读合并配置。ifconfig 改名或应用失败则不写 rc.conf，返回错误。改名后原 live 名已不存在，必须用 target 名回读（否则 `resolve_driver_name` 失败）。
+**PUT 流程**：⓪ 先快照 old 配置（`parse_merged_rcconf`，必须在改名前，函数用 live 名解析键）→ ① 若 target ≠ live name，先 `ifconfig <live> name <target>` 独立改名（先校验目标名未被占用）→ ② `apply_ifconfig(<target>, old, new)` 应用配置 → ③ 写 rc.conf（target 名键 + `ifconfig_<driver>_name`）→ ④ 清理旧键 → ⑤ `restore_default_routes()` 恢复默认路由（见下）→ ⑥ 用 target 名回读合并配置。ifconfig 改名或应用失败则不写 rc.conf，返回错误。改名后原 live 名已不存在，必须用 target 名回读（否则 `resolve_driver_name` 失败）。
+
+**网关自动恢复**（`restore_default_routes`）：内核在删除接口地址时会一并删除引用该地址的路由（重新加回 IP 不会恢复路由），接口配置变更因此可能弄丢默认网关。PUT/apply 成功后，将 rc.conf 的 `defaultrouter`/`ipv6_defaultrouter` 与 live 默认路由比对（`same_gw` 忽略 IPv6 zone 后缀），不一致则 `route change`/`add` 恢复——对应系统启动 netif → routing 的顺序。失败记入审计日志备注，不中断操作。
 
 ### 默认网关设置
 
-`set_default_gateway()` → `PUT /api/network/gateway`
-
 请求体 `SetGatewayBody { gateway: Option<String>, gateway6: Option<String> }`。两个 family 独立处理，仅提供的字段被更新：
 
-| 场景 | rc.conf 操作 | 路由操作 |
-|---|---|---|
-| 设置 IPv4 | `sysrc defaultrouter=<gw>` | `route change default <gw>`（失败则 `route add`） |
-| 清除 IPv4 | `sysrc -x defaultrouter` | `route delete default` |
-| 设置 IPv6 | `sysrc ipv6_defaultrouter=<gw>` | `route -6 change default <gw>`（失败则 `route -6 add`） |
-| 清除 IPv6 | `sysrc -x ipv6_defaultrouter` | `route -6 delete default` |
+| 场景 | 校验 | 路由操作（先） | rc.conf 操作（后） |
+|---|---|---|---|
+| 设置 IPv4 | 严格 `Ipv4Addr` | `route change default <gw>`，失败回退 `route add`，仍失败 → 422 返回 route(8) stderr | `sysrc defaultrouter=<gw>` |
+| 清除 IPv4 | — | `route delete default`（"not in table"/"has not been found" 视为成功） | `sysrc -x defaultrouter` |
+| 设置 IPv6 | `Ipv6Addr` + 可选 `%zone` 后缀 | `route -6 change default <gw>`，失败回退 `-6 add`，仍失败 → 422 | `sysrc ipv6_defaultrouter=<gw>` |
+| 清除 IPv6 | — | `route -6 delete default`（同上幂等） | `sysrc -x ipv6_defaultrouter` |
 
-设置前用 `validate_ip` 校验 IP 地址格式。
+**先应用后持久化**：live 路由应用失败（典型：网关不在任何直连网段 → "Network is unreachable"）时返回 422，rc.conf 不动——避免「rc.conf 已写、live 未生效」的假成功。
+
+**静态路由**（create/update/delete）：同样改为先 `route add`/`delete`（错误带 route(8) stderr，传播为 422），成功后才写 rc.conf。删除不存在的路由视为成功（幂等）。
 
 ## 配置按钮可见性规则
 
@@ -237,11 +245,11 @@ IfaceRcConfConfig {
 
 ### 网关设置弹窗
 
-通过 `useFormModal` 实现，两个字段：IPv4 网关 + IPv6 网关。预填 rc.conf 中 `defaultrouter` / `ipv6_defaultrouter` 的值。仅修改的字段会包含在 PUT 请求中。
+通过 `useFormModal` 实现，两个字段：IPv4 网关 + IPv6 网关。预填 rc.conf 中 `defaultrouter` / `ipv6_defaultrouter` 的值。**两个字段始终随 PUT 提交**（值不变也发送）——PUT 语义是「把 rc.conf 和 live 路由都收敛到提交值」，跳过同值会让 live 与 rc.conf 漂移时（如接口变更弄丢网关后）无法通过原样保存修复。网关卡片上，configured 有值但 live 网关缺失/不一致时显示「未生效」徽标（`net.gatewayNotApplied`）。
 
 ### 配置弹窗
 
-- 接口属性（`.config-grid` 两列）：第一行「名称 | 描述」（名称留空沿用 driver 名，由 `ifconfig_<driver>_name` 持久化；标签旁 `FieldHelp` 图标显示改名提示）；第二行「MTU | 扩展选项」（Options 自由填写 media/mediaopt/vlan 等额外 ifconfig 参数，`name` 指令会被自动剥离路由到名称字段）
+- 接口属性（`.config-grid` 两列）：第一行「名称 | 描述」（名称留空 = 使用默认名：默认命名的接口保持不变；**已改名的接口清空名称即回退为 driver 名**，`resolve_target_name` 解析目标——epair 半边的 driver 名是基名不带 a/b，回退到 pair 中空闲的半边，由 `ifconfig_<driver>_name` 持久化改名指令，回退后指令被删除；标签旁 `FieldHelp` 图标显示改名提示）；第二行「MTU | 扩展选项」（Options 自由填写 media/mediaopt/vlan 等额外 ifconfig 参数，`name` 指令会被自动剥离路由到名称字段）
 - UP 勾选框
 - IPv4 模式切换：无 / DHCP / Static 三选一药丸选择器（`.radio-pill-group`）；无 → 不配置 IPv4，DHCP → 使用 DHCP 获取地址，Static → 显示 IP + 子网掩码输入
 - IPv4 别名列表（可增删，`.form-table` 表格布局，无数据时不显示表头）
