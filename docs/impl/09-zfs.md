@@ -55,7 +55,7 @@ Scan（scrub）多行解析：`scan:` 块可能跨多行（scrub 进行中时续
 | `dataset_create` | `zfs create [-o k=v]... <name>` | 创建（含可选属性），body: `{name, properties?}` |
 | `dataset_destroy` | `zfs destroy -r <name>` | 递归销毁，query: `?name=<dataset>` |
 | `dataset_set` | `zfs set k=v <name>` | 设置属性，query: `?name=`，body: `{properties: {k:v}}` |
-| `dataset_properties` | `zfs get -H -p -o property,value,source all <name>` | 全部属性，query: `?name=` |
+| `dataset_promote` | `zfs promote <clone>` | 提升克隆数据集为独立数据集，query: `?name=`。提升后克隆所依赖的快照移入克隆名下，原数据集反转为克隆；非克隆数据集由 `zfs` 自身报错透传 |
 
 数据集树构建：按 `/` 分割名称确定父子关系，`HashMap<String, Dataset>` + `parent_map` 递归组装。
 
@@ -81,6 +81,7 @@ ZFS 名称含 `/`（如 `zroot/vm/alpine@test`），axum 的 `{name}` 路径参�
 | 数据集属性 | `GET/PUT /api/zfs/dataset/properties?name=` | query param |
 | 快照销毁 | `DELETE /api/zfs/snapshot/destroy?name=&recursive=` | query param |
 | 快照回滚 | `POST /api/zfs/snapshot/rollback?name=` | query param |
+| 数据集提升 | `POST /api/zfs/dataset/promote?name=` | query param |
 
 `NameQuery` 结构体提取 `?name=`；快照销毁用 `SnapshotDestroyQuery`（含可选 `recursive`）。前端用 `encodeURIComponent()` 编码。
 
@@ -111,9 +112,9 @@ ZFS 名称含 `/`（如 `zroot/vm/alpine@test`），axum 的 `{name}` 路径参�
 **数据集管理**（`/zfs/datasets`）：
 - 树形表格（缩进表示层级）
 - 创建数据集（prompt 输入名称）
-- 创建快照（每行「快照」按钮，prompt 输入快照名）
 - 删除数据集（确认对话框，仅非顶层 pool 可删）
 - 查看属性（模态框表格）
+- 提升克隆（`ds.origin` 非空的行显示「提升」按钮 → `POST /api/zfs/dataset/promote`，二次确认说明依赖反转语义）
 
 **快照管理**（`/zfs/snapshots`）：
 - 快照表格（数据集/快照名/已用/引用/时间）
@@ -158,6 +159,7 @@ CSS：`.sub-group` / `.sub-group-header`（`cursor: pointer`，hover 高亮，�
 | DELETE | `/api/zfs/dataset/destroy?name=` | 销毁数据集 |
 | GET | `/api/zfs/dataset/properties?name=` | 属性列表 |
 | PUT | `/api/zfs/dataset/properties?name=` | 设置属性 |
+| POST | `/api/zfs/dataset/promote?name=` | 提升克隆数据集（依赖反转，原数据集变克隆） |
 | GET | `/api/zfs/snapshots?dataset=` | 快照列表 |
 | POST | `/api/zfs/snapshots` | 创建快照 |
 | DELETE | `/api/zfs/snapshot/destroy?name=&recursive=` | 销毁快照（recursive=true 连同依赖克隆） |

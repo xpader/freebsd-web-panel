@@ -1432,6 +1432,11 @@ export const en = {
     snapRollbackConfirm: 'Rollback to "{{name}}"?\n\nWarning: this will destroy all data and newer snapshots created after this snapshot!',
     snapRollbackDone: 'Rollback succeeded',
     snapRollbackFailed: 'Rollback failed',
+    promote: 'Promote',
+    promoteTitle: 'Promote Clone Dataset',
+    promoteConfirm: 'Promote "{{name}}" (cloned from {{origin}}) to an independent dataset?\n\nSnapshots it depends on will be moved into it, and the origin dataset will become its clone.',
+    promoteDone: 'Promoted: {{name}}',
+    promoteFailed: 'Promote failed',
     // --- Pool management ---
     poolCreateTitle: 'Create Storage Pool',
     poolNameLabel: 'Pool name',
@@ -3243,6 +3248,11 @@ export const zh = {
     snapRollbackConfirm: '确定回滚到 "{{name}}" 吗？\n\n警告：此操作将销毁该快照之后的所有数据和新快照！',
     snapRollbackDone: '回滚成功',
     snapRollbackFailed: '回滚失败',
+    promote: '提升',
+    promoteTitle: '提升克隆数据集',
+    promoteConfirm: '确定将 "{{name}}"（克隆自 {{origin}}）提升为独立数据集吗？\n\n其依赖的快照将从源数据集移动到该数据集名下，源数据集会反转为它的克隆。',
+    promoteDone: '提升成功: {{name}}',
+    promoteFailed: '提升失败',
     // --- 存储池管理 ---
     poolCreateTitle: '创建存储池',
     poolNameLabel: '存储池名称',

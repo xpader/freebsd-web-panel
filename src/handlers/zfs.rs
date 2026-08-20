@@ -508,6 +508,28 @@ pub async fn dataset_inherit(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Promote a clone dataset (`zfs promote <clone>`). The name must be a
+/// dataset, not a snapshot — `zfs` itself rejects non-clones with a clear
+/// "cannot promote ... not a clone" error that is passed through verbatim.
+pub async fn dataset_promote(
+    State(state): State<AppState>,
+    Query(q): Query<NameQuery>,
+) -> ApiResult<StatusCode> {
+    let name = &q.name;
+    validate_name(name)?;
+    if name.contains('@') {
+        return Err(ApiError::BadRequest(
+            "promote takes a clone dataset name, not a snapshot".into(),
+        ));
+    }
+    cmd::run(ZFS, &["promote", name]).await?;
+    crate::audit::record(
+        &state, None, "POST", "/api/zfs/dataset/promote", 200,
+        Some(format!("promoted clone dataset {name}")),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn dataset_properties(Query(q): Query<NameQuery>) -> ApiResult<Json<Vec<Property>>> {
     let name = &q.name;
     validate_name(name)?;

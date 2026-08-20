@@ -162,6 +162,17 @@ async function deleteDataset(name) {
   }
 }
 
+async function promoteDataset(ds) {
+  if (!await confirm(t('zfs.promoteTitle'), t('zfs.promoteConfirm', { name: ds.name, origin: ds.origin }))) return;
+  try {
+    await api.post(`/api/zfs/dataset/promote?name=${encodeURIComponent(ds.name)}`);
+    toast.toast(t('zfs.promoteDone', { name: ds.name }));
+    await load();
+  } catch (e) {
+    await alert(t('zfs.promoteFailed'), e.message || t('zfs.promoteFailed'));
+  }
+}
+
 async function refreshProps() {
   try {
     propsData.value = await api.get(`/api/zfs/dataset/properties?name=${encodeURIComponent(showPropsFor.value)}`);
@@ -224,6 +235,7 @@ onMounted(async () => {
             <div class="btn-group">
               <button class="btn-secondary btn-sm" @click="snapshotDataset(ds.name)">{{ t('zfs.snapshot') }}</button>
               <button class="btn-secondary btn-sm" @click="showProps(ds.name)">{{ t('zfs.properties') }}</button>
+              <button v-if="ds.origin" class="btn-secondary btn-sm" @click="promoteDataset(ds)">{{ t('zfs.promote') }}</button>
               <button v-if="ds.name.includes('/')" class="btn-danger btn-sm" @click="deleteDataset(ds.name)">{{ t('common.delete') }}</button>
             </div>
           </td>
