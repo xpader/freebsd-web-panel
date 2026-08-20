@@ -46,6 +46,15 @@ ASSET="target/fwp-nightly-${DATE}-${SHORT_SHA}-freebsd-amd64"
 
 echo "--- commit ${SHORT_SHA} (${DATE}) ---"
 
+# 生成自上次 nightly 以来的全部 commit 列表（差异间所有提交，非仅最新一条）。
+# 边界兜底：首次发布（LAST_NIGHTLY_SHA 为空）或该 commit 本地不存在（历史被改写）
+# 时退化为仅最新一条。
+if [ -n "$LAST_NIGHTLY_SHA" ] && git rev-parse -q --verify "${LAST_NIGHTLY_SHA}^{commit}" >/dev/null 2>&1; then
+    CHANGELOG="$(git log --format='- %h %s' "${LAST_NIGHTLY_SHA}..${CURRENT_SHA}")"
+else
+    CHANGELOG="$(git log -1 --format='- %h %s')"
+fi
+
 # 2) 前端：输出到 web/，供后端默认 embed-web feature 内嵌
 cd frontend
 npm ci
@@ -73,7 +82,9 @@ gh release create nightly "$ASSET" \
 - Built:  $(date)
 - Target: FreeBSD 15.x amd64 (single binary, web assets embedded)
 
-$(git log -1 --format='%h %s')"
+## Changes since last nightly
+
+${CHANGELOG}"
 
 # 清理本次临时产物（target/release/fwp 保留供本地使用）
 rm -f "$ASSET"
