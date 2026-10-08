@@ -169,11 +169,23 @@ add 65534 deny log ip from any to any
 
 ### ipfw_nat 模块加载与 one_pass 设置
 
-`apply_ipfw` 时若 NAT 规则非空：
-1. `ensure_ipfw_nat()` — 加载 `ipfw_nat.ko` 内核模块（`kldstat` 检查 + `kldload`）
+`Ipfw::apply` 时若 NAT 规则非空：
+1. `ensure_nat()` — 加载 `ipfw_nat.ko` 内核模块（`kldstat` 检查 + `kldload`）
 2. `sysctl net.inet.ip.fw.one_pass=0` — 设置运行时值，使 NAT 翻译后的包重新进入防火墙继续走过滤规则
 
-`init_ipfw` 持久化 `net.inet.ip.fw.one_pass=0` 到 `/etc/sysctl.conf`（通过 `upsert_sysctl_conf` 辅助函数）。
+`Ipfw::init` 持久化 `net.inet.ip.fw.one_pass=0` 到 `/etc/sysctl.conf`（通过 `upsert_sysctl_conf`），并设置 rc.conf `firewall_nat_enable=YES`。
+
+**ipfw_nat 的三条加载路径**——缺任何一条都会静默截断规则集：
+
+| 路径 | 机制 |
+|---|---|
+| apply（面板应用规则） | `Ipfw::apply` → `ensure_nat()`（运行时 kldload） |
+| enable（`service ipfw start`） | `Ipfw::enable` → 规则文件含 `nat N config` 时 `ensure_nat()` + upsert `firewall_nat_enable=YES` + `verify_nat_live()` |
+| 开机（rc.d/ipfw） | rc.conf `firewall_nat_enable=YES` → required_modules 在应用规则**之前** kldload |
+
+`Ipfw::reload_config`（回滚路径）同样在规则文件含 NAT 实例时先 `ensure_nat()`。`verify_nat_live()`：`rules_file_nat_ids()` 解析规则文件中的 `nat N config` 行，用 `ipfw nat show config` 输出断言每个实例已存在于内核——rc.firewall 不检查 ipfw 退出码，规则被拒时 `service ipfw start` 仍返回 0，只有事后断言能发现截断。
+
+> **故障实录（2026-10-08）**：主机重启后 `ipfw_nat.ko` 未加载（rc.conf 无 `firewall_nat_enable`）。开机 rc.firewall 与面板 enable 先后把 `nat 1 config` 行拒绝（内核 `ipfw_ctl3 invalid option 111v1`，opcode 111 = `IP_FW_NAT44_XCONFIG`），规则集在 `-f flush` 后第 12 行中止，NAT 规则从未进内核；jail 出站包以未 SNAT 的 192.168.1.105 源地址直接发出，上游不回包。面板 apply/enable/confirm 全程 200。
 
 > **为什么 one_pass=0**：`one_pass=1`（内核默认）下，包匹配 nat 规则后翻译完就退出防火墙。入站 de-NAT 规则 `add 11 nat 1 ip from any to any in via $iface` 匹配所有入站流量——包括发往主机自身的服务流量——如果翻译后直接退出，白名单模式的 deny（65534）被完全绕过。`one_pass=0` 让翻译后的包重新走防火墙，经过 `check-state` → auto-pass / 用户规则 / deny 正常过滤。
 

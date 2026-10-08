@@ -137,7 +137,7 @@ CREATE TABLE firewall_table_entries (
 ### 初始化流程
 
 **ipfw**（`Ipfw::init`，trait 方法）：
-1. `sysrc::set_multi` 一次性设置 `firewall_enable=YES`、`firewall_type=/etc/ipfw.rules`、`firewall_quiet=YES`、`firewall_logging=YES`（1 次 sysrc 调用）
+1. `sysrc::set_multi` 一次性设置 `firewall_enable=YES`、`firewall_type=/etc/ipfw.rules`、`firewall_quiet=YES`、`firewall_logging=YES`、`firewall_nat_enable=YES`（1 次 sysrc 调用；`firewall_nat_enable` 使 rc.d/ipfw 把 `ipfw_nat` 加入 required_modules，**开机时在应用规则前**加载 NAT 模块）
 2. sysrc 删除 `firewall_script`（回退到 `/etc/rc.firewall`，由其 `*)` 分支执行 `ipfw -q ${firewall_type}` 加载规则）
 3. `self.ensure_module()` → `kldload ipfw`（如未加载）
 4. **立即 `self.disable()`**——kldload 默认启用 ipfw 且默认规则为 deny，不显式禁用会断网
@@ -153,13 +153,13 @@ CREATE TABLE firewall_table_entries (
 ### 启用/禁用
 
 **enable**：确保当前驱动 `*_enable=YES`，对方 `*_enable=NO`，清除 staging，重生成配置文件，备份配置文件，创建 pending 记录，然后启用防火墙，最后 spawn 倒计时定时器。
-- ipfw: `service ipfw start`（rc.d 脚本自动 `kldload ipfw` + rc.firewall 执行 `ipfw -q /etc/ipfw.rules` + `sysctl net.inet.ip.fw.enable=1`）
+- ipfw: 规则文件含 NAT 实例（`nat N config` 行）时先 `ensure_nat()`（kldload ipfw_nat）+ upsert `firewall_nat_enable=YES`，再 `service ipfw start`，最后 `verify_nat_live()` 断言 NAT 实例确实进入内核
 - pf: `service pf start`（rc.d 脚本自动 `kldload pf` + `pfctl -F all` + `pfctl -f /etc/pf.conf` + `pfctl -eq`）
-- **两个引擎都通过 `service start`**：rc.subr 的 `required_modules` 自动加载内核模块，解决重启后模块未加载的问题
+- **`service start` 的退出码不可信（ipfw）**：rc.subr 的 `required_modules` 只覆盖防火墙本体（ipfw/pf）；ipfw 的 NAT 在独立的 `ipfw_nat.ko`，且 rc.firewall 应用规则文件时不检查 ipfw 退出码——模块缺失时 `nat N config` 行被内核拒绝、ipfw 中途退出、留下截断的规则集，而 `service ipfw start` 仍返回 0。因此 enable 前自行 `ensure_nat()`、enable 后 `verify_nat_live()` 断言结果
 - **防锁死**：enable 必定触发倒计时（`was_enabled=false`，回滚时禁用防火墙）
 
 **disable**：调用 `deactivate(driver)`（= trait `disable()` + rc.conf 设 NO），同时清除 staging 文件（若有未提交的变更则丢弃）。
-- ipfw: `service ipfw stop`（`sysctl net.inet.ip.fw.enable=0`）+ `sysrc::ensure_no("firewall_enable")`
+- ipfw: `service ipfw stop`（`sysctl net.inet.ip.fw.enable=0`）+ `sysrc::ensure_no("firewall_enable")` + `sysrc::delete("firewall_nat_enable")`（deactivate 对称清理；重新 enable 时会按需恢复）
 - pf: `pfctl -d`（fire-and-forget）+ `sysrc::ensure_no("pf_enable")`
 
 **status handler**：`is_firewall_enabled` / `module_loaded` 通过 `spawn_blocking` 调用，避免阻塞 async 线程。`pending_apply` 字段反映 staging 文件是否存在。

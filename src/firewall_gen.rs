@@ -2079,6 +2079,48 @@ impl Ipfw {
         cmd::run_sync(KLDLOAD, &["ipfw_nat"])?;
         Ok(())
     }
+
+    /// NAT instance ids declared in the rules file (`nat N config ...` lines).
+    /// Files containing such lines cannot be applied unless ipfw_nat is
+    /// loaded: the kernel rejects the nat config line, ipfw aborts loading
+    /// the rest of the file, and a truncated ruleset is left in the kernel.
+    fn rules_file_nat_ids() -> Vec<String> {
+        let content = fs::read_to_string(IPFW_RULES_PATH).unwrap_or_default();
+        content.lines().filter_map(|l| {
+            let t = l.trim_start();
+            if t.starts_with('#') {
+                return None;
+            }
+            let mut it = t.split_whitespace();
+            match (it.next(), it.next(), it.next()) {
+                (Some("nat"), Some(id), Some("config")) => Some(id.to_string()),
+                _ => None,
+            }
+        }).collect()
+    }
+
+    /// Verify every NAT instance declared in the rules file is live in the
+    /// kernel. `service ipfw start` reports success even when the kernel
+    /// rejected the ruleset: /etc/rc.firewall applies the file without
+    /// checking the exit status, and ipfw aborts on the first failing line
+    /// (e.g. `nat N config` with ipfw_nat not loaded). Assert the outcome
+    /// instead of trusting the service exit code.
+    fn verify_nat_live(&self) -> ApiResult<()> {
+        let ids = Self::rules_file_nat_ids();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let out = cmd::run_sync(IPFW, &["nat", "show", "config"])?;
+        for id in &ids {
+            if !out.contains(&format!("nat {id} config")) {
+                return Err(ApiError::Command(format!(
+                    "NAT instance {id} declared in rules file but missing in kernel \
+                     (is ipfw_nat loaded?)"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl FirewallBackend for Ipfw {
@@ -2131,6 +2173,11 @@ impl FirewallBackend for Ipfw {
             ("firewall_type", IPFW_RULES_PATH),
             ("firewall_quiet", "YES"),
             ("firewall_logging", "YES"),
+            // rc.d/ipfw adds ipfw_nat to required_modules when this is YES,
+            // loading it BEFORE the rules file is applied at boot. Without
+            // it, `nat N config` lines are rejected on every reboot and the
+            // ruleset is silently truncated.
+            ("firewall_nat_enable", "YES"),
         ]).map_err(|e| ApiError::Command(e))?;
         // Remove firewall_script so rc.d falls back to /etc/rc.firewall,
         // which loads our rules via `ipfw -q ${firewall_type}` (pathname mode).
@@ -2157,6 +2204,7 @@ impl FirewallBackend for Ipfw {
         use crate::sysrc;
         self.disable()?;
         sysrc::ensure_no("firewall_enable");
+        sysrc::delete("firewall_nat_enable");
         Ok(())
     }
 
@@ -2165,7 +2213,21 @@ impl FirewallBackend for Ipfw {
         //   1. kldload ipfw (required_modules — auto-loaded by rc.subr)
         //   2. ipfw -q /etc/ipfw.rules (pathname mode, loads our rules)
         //   3. sysctl net.inet.ip.fw.enable=1 (enable)
+        //
+        // Two gaps in that chain when NAT rules are in play:
+        //   - rc.d only kldloads ipfw_nat when rc.conf firewall_nat_enable=YES
+        //   - rc.firewall applies the file without checking the ipfw exit
+        //     status, so a rejected `nat N config` line leaves a truncated
+        //     ruleset while `service ipfw start` still exits 0.
+        // Load the module ourselves, keep the rc.conf knob in sync for the
+        // next boot, and verify the NAT instances actually landed.
+        if !Self::rules_file_nat_ids().is_empty() {
+            crate::sysrc::set("firewall_nat_enable", "YES")
+                .map_err(|e| ApiError::Command(e))?;
+            self.ensure_nat()?;
+        }
         cmd::run_sync(SERVICE, &["ipfw", "start"])?;
+        self.verify_nat_live()?;
         Ok(())
     }
 
@@ -2182,7 +2244,13 @@ impl FirewallBackend for Ipfw {
     }
 
     fn reload_config(&self) -> ApiResult<()> {
+        // Rollback path: the restored config may contain NAT instances, which
+        // need ipfw_nat loaded before the file can be applied whole.
+        if !Self::rules_file_nat_ids().is_empty() {
+            self.ensure_nat()?;
+        }
         cmd::run_sync(IPFW, &["-q", IPFW_RULES_PATH])?;
+        self.verify_nat_live()?;
         Ok(())
     }
 }
