@@ -111,7 +111,6 @@ struct NetworkInterface {
 struct IpConfig {
     address: IpAddr,
     prefix_len: u8,
-    is_alias: bool,
 }
 
 struct Route {

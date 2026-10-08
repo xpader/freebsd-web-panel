@@ -179,7 +179,6 @@ pub struct IpConfig {
     pub netmask: Option<String>,
     pub prefix_len: Option<u8>,
     pub broadcast: Option<String>,
-    pub is_alias: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -339,13 +338,11 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
                     None
                 };
 
-                let is_alias = !entry.ipv4.is_empty();
                 entry.ipv4.push(IpConfig {
                     address: addr.to_string(),
                     prefix_len: netmask.as_ref().map(|nm| ipv4_mask_to_prefix(nm)),
                     netmask,
                     broadcast,
-                    is_alias,
                 });
             }
             libc::AF_INET6 => {
@@ -359,13 +356,11 @@ fn read_interfaces() -> std::io::Result<Vec<NetworkInterface>> {
                     None
                 };
 
-                let is_alias = !entry.ipv6.is_empty();
                 entry.ipv6.push(IpConfig {
                     address: addr.to_string(),
                     netmask: None,
                     prefix_len,
                     broadcast: None,
-                    is_alias,
                 });
             }
             libc::AF_LINK => {

@@ -114,7 +114,7 @@ NetworkInterface {
     ipv4: Vec<IpConfig>, ipv6: Vec<IpConfig>,
 }
 BridgeMember { name: String, info: String }
-IpConfig { address, netmask, prefix_len, broadcast, is_alias }
+IpConfig { address, netmask, prefix_len, broadcast }
 Route { destination, gateway, flags, interface, expire }
 DefaultGateway {
     gateway: Option, interface: Option, configured: Option,         // IPv4

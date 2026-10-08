@@ -41,7 +41,6 @@ struct IpConfig {
     netmask: Option<String>,      // 来自 ifa_netmask（点分十进制，非十六进制）
     prefix_len: Option<u8>,       // v6 prefix len, 从 netmask 计算
     broadcast: Option<String>,    // v4 广播地址（来自 ifa_broadaddr）
-    is_alias: bool,               // 多个 IPv4 时第一个为主，其余为别名
 }
 
 /// 路由表条目。数据来源：sysctl(NET_RT_DUMP)

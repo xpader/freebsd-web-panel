@@ -379,16 +379,14 @@ onMounted(load);
           <div class="net-iface-body">
             <div v-if="iface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ iface.description }}</span></div>
             <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">
-              <div v-for="ip in iface.ipv4" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
+              <div v-for="ip in iface.ipv4" :key="ip.address">
                 {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
-                <span v-if="ip.is_alias" class="badge">{{ t('net.alias') }}</span>
               </div>
               <span v-if="!iface.ipv4.length" class="text-dim">—</span>
             </span></div>
             <div class="kv"><span class="kv-key">IPv6</span><span class="kv-val">
-              <div v-for="ip in iface.ipv6" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
+              <div v-for="ip in iface.ipv6" :key="ip.address">
                 {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
-                <span v-if="ip.is_alias" class="badge">{{ t('net.alias') }}</span>
               </div>
               <span v-if="!iface.ipv6.length" class="text-dim">—</span>
             </span></div>
@@ -422,9 +420,8 @@ onMounted(load);
           <div class="net-iface-body">
             <div v-if="iface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ iface.description }}</span></div>
             <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">
-              <div v-for="ip in iface.ipv4" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
+              <div v-for="ip in iface.ipv4" :key="ip.address">
                 {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
-                <span v-if="ip.is_alias" class="badge">{{ t('net.alias') }}</span>
               </div>
               <span v-if="!iface.ipv4.length" class="text-dim">—</span>
             </span></div>
@@ -458,7 +455,7 @@ onMounted(load);
           <div class="net-iface-body">
             <div v-if="iface.description" class="kv"><span class="kv-key">{{ t('common.description') }}</span><span class="kv-val">{{ iface.description }}</span></div>
             <div class="kv"><span class="kv-key">IPv4</span><span class="kv-val">
-              <div v-for="ip in iface.ipv4" :key="ip.address" :class="{ 'text-dim': ip.is_alias }">
+              <div v-for="ip in iface.ipv4" :key="ip.address">
                 {{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}
               </div>
               <span v-if="!iface.ipv4.length" class="text-dim">—</span>
@@ -560,13 +557,12 @@ onMounted(load);
       <div v-if="detailIface.ipv4.length" style="margin-top:1rem;">
         <h4>IPv4</h4>
         <table>
-          <thead><tr><th>{{ t('common.name') }}</th><th>Netmask</th><th>Broadcast</th><th>{{ t('common.type') }}</th></tr></thead>
+          <thead><tr><th>{{ t('common.name') }}</th><th>Netmask</th><th>Broadcast</th></tr></thead>
           <tbody>
             <tr v-for="(ip, i) in detailIface.ipv4" :key="i">
               <td class="mono">{{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}</td>
               <td class="mono">{{ ip.netmask || '—' }}</td>
               <td class="mono">{{ ip.broadcast || '—' }}</td>
-              <td>{{ ip.is_alias ? t('net.alias') : '—' }}</td>
             </tr>
           </tbody>
         </table>
@@ -574,11 +570,10 @@ onMounted(load);
       <div v-if="detailIface.ipv6.length" style="margin-top:1rem;">
         <h4>IPv6</h4>
         <table>
-          <thead><tr><th>{{ t('common.name') }}</th><th>{{ t('common.type') }}</th></tr></thead>
+          <thead><tr><th>{{ t('common.name') }}</th></tr></thead>
           <tbody>
             <tr v-for="(ip, i) in detailIface.ipv6" :key="i">
               <td class="mono">{{ ip.address }}{{ ip.prefix_len != null ? `/${ip.prefix_len}` : '' }}</td>
-              <td>{{ ip.is_alias ? t('net.alias') : '—' }}</td>
             </tr>
           </tbody>
         </table>
