@@ -1067,7 +1067,7 @@ pub async fn interface_update(
     let save_driver = driver.clone();
     let save_target = target.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> ApiResult<(IfaceRcConfConfig, Option<String>)> {
+    let result = tokio::task::spawn_blocking(move || -> ApiResult<(IfaceRcConfConfig, Option<String>, Vec<String>)> {
         // 0. Snapshot the OLD rc.conf config (before any live change): drives
         //    the removal reconciliation in apply_ifconfig. Must precede the
         //    rename — parse_merged_rcconf resolves keys via the live name.
@@ -1138,27 +1138,58 @@ pub async fn interface_update(
             }
         }
 
+        // 5b. Bridge member UP propagation (persistence side): when the bridge
+        //     is UP, ensure every member's rc.conf brings it UP at boot by
+        //     OR-ing an "up" token into its own ifconfig_<member> line. Live
+        //     state was already converged by apply_ifconfig (pass 4b); this
+        //     fixes the reboot path — rc.d's ifconfig_up() only runs each
+        //     interface's own configured args. One-directional: a bridge
+        //     without UP leaves member configs untouched. Members whose
+        //     config already contains "up" are skipped, so that token is the
+        //     only thing ever added.
+        let mut members_up: Vec<String> = Vec::new();
+        if crate::ifutil::is_bridge(&save_target) && save_cfg.is_up {
+            for m in &save_cfg.bridge_members {
+                let m = m.trim();
+                if m.is_empty() || m == &save_target {
+                    continue;
+                }
+                let mut mcfg = parse_merged_rcconf(m);
+                if mcfg.is_up {
+                    continue;
+                }
+                mcfg.is_up = true;
+                let val = build_primary_value(&mcfg);
+                crate::sysrc::set(&format!("ifconfig_{m}"), &val)
+                    .map_err(ApiError::Command)?;
+                members_up.push(m.to_string());
+            }
+        }
+
         // 6. Restore default routes dropped by address changes (the kernel
         //    removes routes referencing a deleted address, mirroring netif →
         //    routing boot order). Best-effort: failure is reported, not fatal.
         let gw_note = restore_default_routes();
 
-        // 7. Re-read merged config under the final live name.
-        Ok((parse_merged_rcconf(&save_target), gw_note))
+        Ok((parse_merged_rcconf(&save_target), gw_note, members_up))
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking: {e}")))??;
-    let (result, note) = result;
+    let (result, note, members_up) = result;
+    let mut detail = format!("updated ifconfig_{driver}");
+    if !members_up.is_empty() {
+        detail.push_str(&format!("; members up: {}", members_up.join(", ")));
+    }
+    if let Some(n) = note.as_deref() {
+        detail.push_str(&format!("; {n}"));
+    }
     audit::record(
         &state,
         Some(&auth.username),
         "PUT",
         &format!("/api/network/interfaces/{name}"),
         200,
-        Some(format!(
-            "updated ifconfig_{driver}{}",
-            note.as_deref().map(|n| format!("; {n}")).unwrap_or_default()
-        )),
+        Some(detail),
     );
 
     Ok(Json(result))
@@ -1295,11 +1326,12 @@ fn apply_ifconfig(
     let mut output = String::new();
     let mut errors: Vec<String> = Vec::new();
 
-    // Read current live state.
-    let live = read_interfaces()
-        .map_err(|e| format!("failed to read live interfaces: {e}"))?
-        .into_iter()
-        .find(|i| i.name == name);
+    // Read current live state. The full list is retained (not just this
+    // interface's own entry): bridge member UP propagation in pass 4b below
+    // needs each member's live IFF_UP flag.
+    let live_all = read_interfaces()
+        .map_err(|e| format!("failed to read live interfaces: {e}"))?;
+    let live = live_all.iter().find(|i| i.name == name);
 
     let existing_members: Vec<String> = live
         .as_ref()
@@ -1365,6 +1397,32 @@ fn apply_ifconfig(
             Err(e) => errors.push(format!("addm {m}: {e}")),
         }
     }
+
+    // 4b. Bridge member UP propagation: when the bridge itself is UP, bring
+    //     each configured member UP too. One-directional on purpose — a
+    //     bridge without UP leaves member flags untouched. Rationale: the
+    //     kernel's bridge(4) never sets IFF_UP on addm (unlike lagg(4),
+    //     whose init if_up()s every port), and rc.d's ifconfig_up() only
+    //     runs each interface's own configured args — so a member without
+    //     "up" stays DOWN both live and at boot, leaving the bridge dead.
+    if crate::ifutil::is_bridge(name) && cfg.is_up {
+        let mut seen = std::collections::HashSet::new();
+        for m in &cfg.bridge_members {
+            let m = m.trim();
+            if m.is_empty() || m == name || !seen.insert(m.to_string()) {
+                continue;
+            }
+            // Skip members already UP live (keeps re-apply quiet/idempotent).
+            if live_all.iter().any(|i| i.name == m && i.is_up) {
+                continue;
+            }
+            match run_ifconfig(m, &["up"]) {
+                Ok(o) => output.push_str(&o),
+                Err(e) => errors.push(format!("member up {m}: {e}")),
+            }
+        }
+    }
+
 
     // 5. Apply each IPv4 alias. An alias that exists with a different netmask
     //    than desired is deleted and re-added (plain `alias` never updates it).
@@ -3455,6 +3513,57 @@ mod tests {
             "static v6 must be gone: {:?}",
             l.ipv6
         );
+    }
+
+    /// Live test: bringing a bridge UP must propagate UP to its members
+    /// (the kernel's addm never sets IFF_UP), while a bridge without UP
+    /// must leave member flags untouched.
+    #[test]
+    fn apply_ifconfig_bridge_up_propagates_to_members() {
+        let out = run_ifconfig("bridge", &["create"]).expect("bridge create");
+        let br = out.trim().to_string();
+        assert!(!br.is_empty(), "bridge create should print the new name");
+        let _br_guard = IfaceGuard(br.clone());
+
+        let out = run_ifconfig("epair", &["create"]).expect("epair create");
+        let ep = out.trim().to_string();
+        assert!(!ep.is_empty(), "epair create should print the new name");
+        let _ep_guard = IfaceGuard(ep.clone());
+
+        let member_up = || {
+            read_interfaces()
+                .expect("getifaddrs")
+                .into_iter()
+                .find(|i| i.name == ep)
+                .expect("member visible via getifaddrs")
+                .is_up
+        };
+
+        // Start from a DOWN member so the propagation is observable.
+        run_ifconfig(&ep, &["down"]).expect("member down");
+        assert!(!member_up());
+
+        // Bridge UP + member list → member must come UP.
+        let cfg = IfaceRcConfConfig {
+            interface: br.clone(),
+            is_up: true,
+            bridge_members: vec![ep.clone()],
+            ..Default::default()
+        };
+        apply_ifconfig(&br, &Default::default(), &cfg).expect("apply bridge cfg");
+        assert!(member_up(), "member must be UP after bridge UP apply");
+
+        // Re-apply: idempotent (no duplicate-addm error, member stays UP).
+        apply_ifconfig(&br, &cfg, &cfg).expect("re-apply bridge cfg");
+        assert!(member_up());
+
+        // Bridge without UP must NOT touch member flags: member stays DOWN.
+        run_ifconfig(&ep, &["down"]).expect("member down again");
+        assert!(!member_up());
+        let mut no_up = cfg.clone();
+        no_up.is_up = false;
+        apply_ifconfig(&br, &cfg, &no_up).expect("apply bridge cfg without up");
+        assert!(!member_up(), "member must stay DOWN when bridge is not UP");
     }
 
     /// With the live default route already matching rc.conf (the common host

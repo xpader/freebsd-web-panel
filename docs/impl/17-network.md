@@ -180,6 +180,7 @@ IfaceRcConfConfig {
 2. 应用非结构性属性（IP/MTU/description/options/UP），使用 live name 调用 `ifconfig`。纯 `inet <addr>` 会替换当前主地址，因此主 IP/掩码变更在此收敛
 3. 应用 LAGG 协议和端口（跳过已有端口）
 4. 应用 bridge 成员（跳过已有成员、其他 bridge 的成员）
+4b. **bridge 成员 UP 传播**（live 层）：bridge 自身 UP 时，对配置中每个成员执行 `ifconfig <member> up`（跳过 live 已 UP 的成员，幂等）。动机：内核 `bridge_ioctl_add`（if_bridge.c）不会给成员置 IFF_UP——对照 lagg(4) 的 `lagg_if_updown` 会在 init 时 up 全部端口——且 rc.d 的 `ifconfig_up`（network.subr）只执行各接口自己配置的参数，成员自身 rc.conf 无 `up` 时 live 和开机都是 DOWN，bridge 形同虚设。**单向**：bridge 未 UP（含移除 UP）时不动成员标志。bridge 判定用 `ifutil::is_bridge(name)`（内核 driver 名），不信任客户端 payload 的 `is_bridge`
 5. 应用 IPv4 别名；已存在但掩码不符的别名先 `inet <addr> delete` 再重加（`alias` 不会更新掩码）
 6. 应用 IPv6 条目（跳过已有地址）——仅 `static` 模式应用；`slaac` 和 `none` 模式跳过
 7. **删除协调**（old 配置驱动）：重读 live 状态后，删除「old 配置管理过、新配置不再包含、live 仍存在」的地址与成员：
@@ -189,7 +190,7 @@ IfaceRcConfConfig {
    - **删除集合从 old rc.conf 推导而非 live 差集**——live 有但配置没有的地址可能是 dhclient 分配或管理员 out-of-band 添加的，不属于面板管理范围，误删可能把用户锁在面板外。已在 live 消失的条目自动跳过（幂等）
    - `managed_v4`/`managed_v6` 定义「配置管理的地址集合」：DHCP 主 IP 排除、slaac 排除、fe80::/10 排除
 
-**PUT 流程**：⓪ 先快照 old 配置（`parse_merged_rcconf`，必须在改名前，函数用 live 名解析键）→ ① 若 target ≠ live name，先 `ifconfig <live> name <target>` 独立改名（先校验目标名未被占用）→ ② `apply_ifconfig(<target>, old, new)` 应用配置 → ③ 写 rc.conf（target 名键 + `ifconfig_<driver>_name`）→ ④ 清理旧键 → ⑤ `restore_default_routes()` 恢复默认路由（见下）→ ⑥ 用 target 名回读合并配置。ifconfig 改名或应用失败则不写 rc.conf，返回错误。改名后原 live 名已不存在，必须用 target 名回读（否则 `resolve_driver_name` 失败）。
+**PUT 流程**：⓪ 先快照 old 配置（`parse_merged_rcconf`，必须在改名前，函数用 live 名解析键）→ ① 若 target ≠ live name，先 `ifconfig <live> name <target>` 独立改名（先校验目标名未被占用）→ ② `apply_ifconfig(<target>, old, new)` 应用配置（含 4b 成员 UP 传播）→ ③ 写 rc.conf（target 名键 + `ifconfig_<driver>_name`）→ ④ 清理旧键 → ④b **bridge 成员 UP 传播（持久化层）**：bridge UP 时对每个成员 `parse_merged_rcconf(member)`，其配置无 `up` 则置 `is_up=true` 后用 `build_primary_value` 写回 `ifconfig_<member>`（live 名键；legacy driver 键布局被 parse 合并后随之迁移为 live 键布局）；已含 `up` 的成员跳过——**只 OR 进 `up`，不改成员其他配置**；实际传播的成员记入审计备注（`members up: em0, ...`）→ ⑤ `restore_default_routes()` 恢复默认路由（见下）→ ⑥ 用 target 名回读合并配置。ifconfig 改名或应用失败则不写 rc.conf，返回错误。改名后原 live 名已不存在，必须用 target 名回读（否则 `resolve_driver_name` 失败）。
 
 **网关自动恢复**（`restore_default_routes`）：内核在删除接口地址时会一并删除引用该地址的路由（重新加回 IP 不会恢复路由），接口配置变更因此可能弄丢默认网关。PUT/apply 成功后，将 rc.conf 的 `defaultrouter`/`ipv6_defaultrouter` 与 live 默认路由比对（`same_gw` 忽略 IPv6 zone 后缀），不一致则 `route change`/`add` 恢复——对应系统启动 netif → routing 的顺序。失败记入审计日志备注，不中断操作。
 
