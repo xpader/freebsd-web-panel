@@ -92,7 +92,7 @@ const JAIL_READONLY = new Set([
 ]);
 
 const TABS = [
-  { key: 'basic', titleKey: 'jails.basicInfo' },
+  { key: 'basic', titleKey: 'common.basicInfo' },
   { key: 'network', titleKey: 'common.network' },
   { key: 'exec', titleKey: 'jails.editExec' },
   { key: 'mount', titleKey: 'jails.editMount' },

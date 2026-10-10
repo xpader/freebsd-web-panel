@@ -405,6 +405,51 @@ pub fn iface_rank(info: &NetIfaceInfo) -> u32 {
     r
 }
 
+/// Read a process start time (Unix seconds) via `kern.proc.pid.<pid>`.
+///
+/// Returns `None` when the process does not exist. Used by the supervisor
+/// to compute per-process uptime without spawning `ps`. The kern.proc tree
+/// has no static name entries, so the numeric MIB form of sysctl(3) is
+/// required (sysctlbyname returns ENOENT here).
+pub fn read_proc_start(pid: i32) -> Option<i64> {
+    let mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    let mut len: usize = 0;
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_ptr(),
+            mib.len() as u32,
+            std::ptr::null_mut(),
+            &mut len,
+            std::ptr::null(),
+            0,
+        )
+    };
+    if rc != 0 || len < std::mem::size_of::<libc::kinfo_proc>() {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_ptr(),
+            mib.len() as u32,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut len,
+            std::ptr::null(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    // Layout is provided by libc's kinfo_proc definition; ki_pid is verified
+    // to guard against a struct mismatch.
+    let info: libc::kinfo_proc = unsafe { std::ptr::read(buf.as_ptr() as *const _) };
+    if info.ki_pid != pid {
+        return None;
+    }
+    Some(info.ki_start.tv_sec as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +459,13 @@ mod tests {
         assert!(!read_string("kern.hostname").unwrap_or_default().is_empty());
         assert!(read_u64("hw.ncpu").unwrap_or(0) >= 1);
         assert!(read_u64("hw.physmem").unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn proc_start_reads_own_pid() {
+        let start = read_proc_start(std::process::id() as i32);
+        assert!(start.is_some(), "kern.proc.pid.<self> must resolve");
+        assert!(start.unwrap() > 1_700_000_000, "start time must be a sane unix ts");
     }
 
     #[test]

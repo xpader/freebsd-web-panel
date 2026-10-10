@@ -28,6 +28,9 @@ pub struct PathsConfig {
     pub db: PathBuf,
     #[serde(default = "default_audit")]
     pub audit: PathBuf,
+    /// Runtime dir for supervised processes (pidfiles + logs).
+    #[serde(default = "default_supervisor_dir")]
+    pub supervisor: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +90,7 @@ impl Default for Config {
             paths: PathsConfig {
                 db: default_db(),
                 audit: default_audit(),
+                supervisor: default_supervisor_dir(),
             },
             auth: AuthConfig {
                 session_ttl: default_session_ttl(),
@@ -111,6 +115,9 @@ fn default_db() -> PathBuf {
 }
 fn default_audit() -> PathBuf {
     PathBuf::from("/var/db/fwp/audit.log")
+}
+fn default_supervisor_dir() -> PathBuf {
+    PathBuf::from("/var/db/fwp/supervisor")
 }
 fn default_session_ttl() -> u64 {
     8 * 3600

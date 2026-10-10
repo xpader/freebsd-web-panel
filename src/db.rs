@@ -157,6 +157,11 @@ mod migrations {
             desc: "firewall: add managed_by column to firewall_rules",
             func: m4,
         },
+        Migration {
+            version: 5,
+            desc: "supervisor: create supervisor_procs table",
+            func: m5,
+        },
     ];
 
     /// v1: Create firewall tables (rules, state, tables, table entries).
@@ -301,6 +306,33 @@ mod migrations {
         Ok(())
     }
 
+    /// v5: Create supervisor_procs table (user-defined daemon(8)-guarded
+    /// processes — see docs/impl/ for the runtime model).
+    fn m5(conn: &Connection) -> ApiResult<()> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS supervisor_procs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT NOT NULL UNIQUE,
+                path          TEXT NOT NULL,
+                args          TEXT NOT NULL DEFAULT '[]',
+                workdir       TEXT,
+                user          TEXT,
+                env           TEXT NOT NULL DEFAULT '[]',
+                logging       INTEGER NOT NULL DEFAULT 1,   -- 0 = discard child output
+                log_file      TEXT,                         -- NULL = <dir>/<name>.log; custom paths are never auto-deleted
+                log_rotate    INTEGER NOT NULL DEFAULT 1,   -- 0 = never rotate
+                restart       INTEGER NOT NULL DEFAULT 1,
+                autostart     INTEGER NOT NULL DEFAULT 0,   -- start when fwp starts
+                restart_delay INTEGER NOT NULL DEFAULT 1,
+                restart_max   INTEGER,
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+
 }
 
 pub fn user_count(conn: &Connection) -> ApiResult<i64> {
@@ -309,7 +341,6 @@ pub fn user_count(conn: &Connection) -> ApiResult<i64> {
         .map_err(ApiError::Database)?;
     Ok(n)
 }
-
 pub fn create_user(
     conn: &Connection,
     username: &str,

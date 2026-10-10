@@ -17,6 +17,9 @@ pub struct AppState {
     pub audit: Option<Arc<AuditLog>>,
     pub web_root: Option<PathBuf>,
     pub scheduler_stats: SharedSchedulerStats,
+    /// Serializes supervisor start/stop/restart/delete operations (low rate —
+    /// a global lock is sufficient and avoids per-entry bookkeeping).
+    pub supervisor_lock: Arc<tokio::sync::Mutex<()>>,
     pub login_guard: LoginGuard,
 }
 

@@ -15,6 +15,7 @@ pub mod rcconf;
 pub mod rsync;
 pub mod services;
 pub mod smb;
+pub mod supervisor;
 pub mod sysctl;
 pub mod time;
 pub mod system;

@@ -148,6 +148,12 @@ pub fn spawn(state: AppState, stats: SharedSchedulerStats) {
         register_cron!("sample-purge", "0 0 * * * *", job_sample_purge);
     }
     register_cron!("session-purge", "0 5 * * * *", job_session_purge);
+    register_interval!(
+        "supervisor-log-rotate",
+        Duration::from_secs(3600),
+        Duration::from_secs(600),
+        job_supervisor_rotate
+    );
 
     {
         let mut s = stats.lock();
@@ -222,6 +228,20 @@ fn job_session_purge(state: AppState) -> BoxFuture {
         let now = state.now_ts();
         let conn = state.db.lock().await;
         crate::db::purge_expired_sessions(&conn, now)?;
+        Ok(())
+    })
+}
+
+fn job_supervisor_rotate(state: AppState) -> BoxFuture {
+    Box::pin(async move {
+        let defs = {
+            let conn = state.db.lock().await;
+            crate::supervisor::list_procs(&conn)?
+        };
+        let dir = state.config.paths.supervisor.clone();
+        tokio::task::spawn_blocking(move || crate::supervisor::rotate_logs(&dir, &defs))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {e}"))?;
         Ok(())
     })
 }

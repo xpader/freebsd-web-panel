@@ -37,6 +37,8 @@ const routes = [
       { path: 'network/dns', name: 'dns', component: () => import('../pages/DnsPage.vue') },
       { path: 'network/routes', name: 'static-routes', component: () => import('../pages/StaticRoutesPage.vue') },
       { path: 'services', name: 'services', component: () => import('../pages/ServicesPage.vue') },
+      { path: 'supervisor', name: 'supervisor', component: () => import('../pages/SupervisorPage.vue') },
+      { path: 'supervisor/:id(\\d+)', name: 'supervisor-detail', component: () => import('../pages/SupervisorDetailPage.vue') },
       { path: 'pf', redirect: '/firewall/rules' },
       { path: 'firewall', redirect: '/firewall/rules' },
       { path: 'firewall/rules', name: 'firewall-rules', component: () => import('../pages/FirewallRulesPage.vue') },

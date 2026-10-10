@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-一个基于 Web 的 FreeBSD 系统管理面板。通过浏览器管理 sysctl、rc.conf、网络、服务、SMB 文件共享、防火墙、Jail 容器、Bhyve 虚拟机、ZFS 文件系统等，全部集成在一个自带 Web UI 的单二进制文件中。
+一个基于 Web 的 FreeBSD 系统管理面板。通过浏览器管理 sysctl、rc.conf、网络、服务、SMB 文件共享、防火墙、Jail 容器、Bhyve 虚拟机、ZFS 文件系统、进程守护等，全部集成在一个自带 Web UI 的单二进制文件中。
 
 > 目标平台：**FreeBSD 15.x amd64**。以 root 运行。
 
@@ -30,6 +30,7 @@
 | **Jail 容器** | 通过原生 libjail FFI 实现完整生命周期管理——**不依赖任何第三方 jail 工具**（jail.conf 解析器 + 创建/启动/停止/删除、基础镜像管理） |
 | **Bhyve 虚拟机** | 通过 vm-bhyve 实现完整虚拟机生命周期——创建/启动/停止/销毁、VNC 控制台、串口控制台、磁盘、网络、ISO、镜像、交换机、数据存储 |
 | **软件包** | 搜索、安装、卸载（pkg）、包详情与文件列表、仓库管理 |
+| **进程守护** | 用 daemon(8) 看护自定义进程——崩溃自动拉起、日志采集/轮转、随面板启动——**守护独立于面板运行，面板重启不中断** |
 | **Web 终端** | 基于 WebSocket 的浏览器内 Shell 访问 |
 | **用户与认证** | 自带用户体系（Argon2id 密码哈希）、会话令牌、首启引导 |
 | **审计日志** | 所有写操作均记录（谁/何时/做了什么/结果） |
@@ -92,6 +93,7 @@ web_root = "/usr/local/share/fwp/web"      # Web 资源磁盘覆盖路径
 [paths]
 db = "/var/db/fwp/fwp.db"                  # SQLite 数据库
 audit = "/var/db/fwp/audit.log"            # 审计日志
+supervisor = "/var/db/fwp/supervisor"      # 受管进程运行目录（pidfile/日志）
 
 [auth]
 session_ttl = 28800                         # 会话有效期（秒）
@@ -173,6 +175,7 @@ src/
 ├── jail.rs           # libjail FFI + jail.conf 解析器
 ├── bhyve.rs          # vm-bhyve 封装（虚拟机生命周期、交换机、数据存储）
 ├── cmd.rs            # 类型化 Command 构建器 + 运行辅助
+├── supervisor.rs     # daemon(8) 进程守护（定义、启停、日志、轮转）
 ├── ifutil.rs         # 网络接口辅助（getifaddrs、路由 sysctl）
 ├── terminal.rs       # WebSocket Shell（PTY）+ VNC 代理
 ├── sysinfo.rs        # 通过 sysctl 获取系统信息

@@ -58,7 +58,7 @@ function ipPlaceholder(key) {
 }
 
 const sections = computed(() => [
-  { key: 'basic', label: t('jails.basicInfo') },
+  { key: 'basic', label: t('common.basicInfo') },
   { key: 'location', label: t('jails.locationType') },
   { key: 'network', label: t('common.network') },
 ]);

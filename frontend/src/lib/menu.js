@@ -60,6 +60,7 @@ export const MENU = [
         ],
       },
       { path: '/rsync', labelKey: 'nav.rsync', icon: 'fa-solid fa-arrows-rotate' },
+      { path: '/supervisor', labelKey: 'nav.processGuard', icon: 'fa-solid fa-heart-pulse' },
     ],
   },
   {

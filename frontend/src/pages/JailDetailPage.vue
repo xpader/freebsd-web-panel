@@ -57,7 +57,7 @@ const otherEntries = computed(() => Object.entries(merged.value).filter(([k]) =>
 
 const tabItems = computed(() => {
   const tabs = [
-    { key: 'overview', label: t('jails.basicInfo') },
+    { key: 'overview', label: t('common.basicInfo') },
     { key: 'network', label: t('common.network') },
     { key: 'exec', label: t('jails.editExec') },
     { key: 'security', label: t('jails.security') },

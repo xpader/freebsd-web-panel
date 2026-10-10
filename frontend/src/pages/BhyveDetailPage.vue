@@ -289,7 +289,7 @@ onMounted(reload);
 
     <!-- Basic info -->
     <div class="card">
-      <h3>{{ t('jails.basicInfo') }}</h3>
+      <h3>{{ t('common.basicInfo') }}</h3>
       <table class="kv-table four-col">
         <tbody>
         <tr>

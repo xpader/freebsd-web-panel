@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, network, services, SMB file sharing, firewalls, Jails, Bhyve VMs, ZFS, and more from a single self-contained binary with a built-in web UI.
+A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, network, services, SMB file sharing, firewalls, Jails, Bhyve VMs, ZFS, process supervision, and more from a single self-contained binary with a built-in web UI.
 
 > Target platform: **FreeBSD 15.x amd64**. Runs as root.
 
@@ -30,6 +30,7 @@ A web-based system administration panel for FreeBSD. Manage sysctl, rc.conf, net
 | **Jails** | Full lifecycle via native libjail FFI — **no third-party jail tools** (jail.conf parser + create/start/stop/delete, base image management) |
 | **Bhyve VMs** | Full VM lifecycle via vm-bhyve — create/start/stop/destroy, VNC console, serial console, disks, networks, ISOs, images, switches, datastores |
 | **Packages** | Search, install, remove (pkg), package details & file lists, repository management |
+| **Process Supervisor** | Guard custom processes with daemon(8) — crash restart, log capture/rotation, start with panel — **supervision survives panel restarts** |
 | **Web Terminal** | WebSocket-based shell access directly in the browser |
 | **Users & Auth** | Built-in user system (Argon2id), session tokens, first-run bootstrap |
 | **Audit Log** | All write operations logged (who/when/what/result) |
@@ -89,8 +90,8 @@ listen = "127.0.0.1:8080"                  # bind address
 web_root = "/usr/local/share/fwp/web"      # disk override for web assets
 
 [paths]
-db = "/var/db/fwp/fwp.db"                  # SQLite database
 audit = "/var/db/fwp/audit.log"            # audit log
+supervisor = "/var/db/fwp/supervisor"      # supervised-process runtime dir (pidfiles/logs)
 
 [auth]
 session_ttl = 28800                         # session lifetime (seconds)
@@ -172,6 +173,7 @@ src/
 ├── jail.rs           # libjail FFI + jail.conf parser
 ├── bhyve.rs          # vm-bhyve wrapper (VM lifecycle, switches, datastores)
 ├── cmd.rs            # Typed Command builder + run helper
+├── supervisor.rs     # daemon(8) process guarding (defs, start/stop, logs, rotation)
 ├── ifutil.rs         # Network interface helpers (getifaddrs, route sysctls)
 ├── terminal.rs       # WebSocket shell (PTY) + VNC proxy
 ├── sysinfo.rs        # System info via sysctl

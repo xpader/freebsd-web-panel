@@ -43,6 +43,7 @@
 | [34-power-management.md](34-power-management.md) | 系统电源管理：关机/重启（`/sbin/shutdown`）、设置菜单入口、二次确认、审计日志 | `handlers/system.rs`, `frontend/src/components/layout/TopBar.vue` |
 | [35-scheduler.md](35-scheduler.md) | 中央调度器：统一管理周期任务（监控采集、样本清理、Session 清理）、内置轻量 cron 解析器、sleep-until-next 精确调度、运行时统计 | `scheduler.rs`, `cron.rs`, `monitor.rs`, `state.rs` |
 | [36-time.md](36-time.md) | 时间管理：系统时钟（手动设置/一次性同步）、时区（tzsetup）、RTC 模式切换、NTP（ntpd 状态/配置/服务控制） | `handlers/time.rs`, `frontend/src/pages/TimePage.vue` |
+| [37-supervisor.md](37-supervisor.md) | 进程守护：daemon(8) 崩溃拉起监护、定义 CRUD、启停协议（精确 PID 信号）、状态判定（pidfile+kill(0)）、日志读取/清理/轮转 | `supervisor.rs`, `handlers/supervisor.rs`, `sysinfo.rs`, `frontend/src/pages/SupervisorPage.vue` |
 
 ## 文档规范
 

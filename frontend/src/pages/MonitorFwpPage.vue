@@ -123,7 +123,7 @@ const fwpUptimeSec = computed(() => {
     </div>
     <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
       <span v-if="lastUpdate" class="text-dim" style="font-size:12px;">
-        {{ t('debug.updatedAt') }} {{ lastUpdate.toLocaleTimeString() }}
+        {{ t('common.updatedAt') }} {{ lastUpdate.toLocaleTimeString() }}
       </span>
       <button class="btn-secondary btn-sm" @click="load" :disabled="loading">
         <i class="fa-solid fa-rotate-right"></i> {{ t('common.refresh') }}

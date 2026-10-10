@@ -71,6 +71,13 @@ pub fn build(state: AppState) -> Router {
         .route("/api/network/dns/nameservers", put(handlers::network::set_nameservers))
         .route("/api/services", get(handlers::services::list))
         .route("/api/services/{name}/{action}", post(handlers::services::control))
+        // --- Process supervisor (daemon(8) guards) ---
+        .route("/api/supervisor", get(handlers::supervisor::list).post(handlers::supervisor::create))
+        .route("/api/supervisor/{id}", get(handlers::supervisor::get_one).put(handlers::supervisor::update).delete(handlers::supervisor::delete))
+        .route("/api/supervisor/{id}/start", post(handlers::supervisor::start))
+        .route("/api/supervisor/{id}/stop", post(handlers::supervisor::stop))
+        .route("/api/supervisor/{id}/restart", post(handlers::supervisor::restart))
+        .route("/api/supervisor/{id}/log", get(handlers::supervisor::read_log).delete(handlers::supervisor::clear_log))
         // --- Firewall (ipfw / pf dual-driver) ---
         .route("/api/firewall/status", get(handlers::firewall::status))
         .route("/api/firewall/initialize", post(handlers::firewall::initialize))
