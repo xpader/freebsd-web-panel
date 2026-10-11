@@ -59,9 +59,9 @@ async function load() {
 }
 
 async function doEdit(entry) {
-  const result = await formModal(t('sysctl.editTitle', { key: entry.name }), [
-    { key: 'value', label: t('common.value'), value: entry.value || '', placeholder: '' },
-  ], t('common.save'));
+  const result = await formModal(t('sysctl.editTitle', { name: entry.name }), [
+    { key: 'value', label: entry.description || t('common.value'), value: entry.value || '', placeholder: '' },
+  ], { submitLabel: t('common.save') });
   if (!result) return;
   try {
     await api.put(`/api/sysctl/${encodeURIComponent(entry.name)}`, { value: result.value });
@@ -73,7 +73,7 @@ async function doEdit(entry) {
 }
 
 async function doReset(entry) {
-  if (!await confirm(t('sysctl.resetTitle'), t('sysctl.resetConfirm', { key: entry.name }))) return;
+  if (!await confirm(t('sysctl.resetTitle'), t('sysctl.resetConfirm', { name: entry.name }))) return;
   try {
     await api.del(`/api/sysctl/${encodeURIComponent(entry.name)}`);
     toast.toast(t('sysctl.resetDone'));

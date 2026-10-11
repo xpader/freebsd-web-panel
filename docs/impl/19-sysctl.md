@@ -77,10 +77,10 @@ struct SysctlEntry {
 - 修改项：橙色 "Modified" 徽章 + 行高亮
 - 可写项：蓝色 "Writable" 徽章
 - 可写参数显示「编辑」按钮；已持久化参数显示「重置」按钮
-- 编辑流程：formModal 输入新值 → PUT API（运行时生效 + 持久化到 sysctl.conf）
+- 编辑流程：formModal 输入新值 → PUT API（运行时生效 + 持久化到 sysctl.conf）；值字段的 label 在有描述时直接用描述文本，无描述时用「值」（common.value）
 - 重置流程：确认对话框 → DELETE API（从 sysctl.conf 移除）
 
-源码：`web/js/pages/sysctl.js`
+源码：`frontend/src/pages/SysctlPage.vue`
 
 ## API
 
