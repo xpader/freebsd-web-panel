@@ -112,7 +112,7 @@ onUnmounted(() => {
   <div class="toolbar">
     <SearchInput v-model="filter" :placeholder="t('common.search')" />
     <span class="text-dim">{{ t('supv.count', { n: filtered.length }) }}</span>
-    <div class="btn-group" style="margin-left:auto;">
+    <div class="flex" style="margin-left:auto;">
       <button class="btn-secondary" @click="load" :disabled="loading">
         <i :class="['fa-solid fa-rotate-right', { 'fa-spin': loading }]"></i> {{ t('common.refresh') }}
       </button>

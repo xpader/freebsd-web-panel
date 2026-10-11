@@ -6,7 +6,7 @@ import { api } from './api.js';
 export function openSupervisorForm(formModal, t, toast, existing = null, onSaved = null) {
   const isEdit = !!existing;
   return formModal(
-    isEdit ? t('common.edit') : t('common.create'),
+    isEdit ? t('supv.editTitle') : t('supv.createTitle'),
     [
       { key: 'name', label: t('common.name'), value: existing?.name || '', required: true, placeholder: 'my-daemon' },
       { key: 'path', label: t('supv.path'), value: existing?.path || '', required: true, placeholder: '/usr/local/bin/myapp', picker: 'file' },

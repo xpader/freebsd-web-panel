@@ -729,7 +729,9 @@ export const en = {
     invalidTarget: 'Invalid target — use [user@]host or [user@]host:/path',
   },
   supv: {
-    subtitle: 'Guard custom processes with daemon(8) — restarted on any exit, independent of the panel',
+    subtitle: 'Start and guard custom processes with daemon(8)',
+    createTitle: 'Create Guarded Process',
+    editTitle: 'Edit Guarded Process',
     path: 'Command path',
     args: 'Arguments',
     argsHint: 'One per line, passed to the process as-is (no shell)',
@@ -2589,7 +2591,9 @@ export const zh = {
     invalidTarget: '目标无效——请用 [user@]host 或 [user@]host:/path',
   },
   supv: {
-    subtitle: '用 daemon(8) 看护自定义进程 — 任何退出都会重新拉起，且独立于面板运行',
+    subtitle: '用 daemon(8) 启动和看护自定义进程',
+    createTitle: '创建守护进程',
+    editTitle: '编辑守护进程',
     path: '命令路径',
     args: '参数',
     argsHint: '每行一个，原样传给进程（不经过 shell）',
