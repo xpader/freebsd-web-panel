@@ -25,7 +25,7 @@ const statusItems = computed(() => {
   return [
     { title: t('common.status'), value: state.text, type: 'badge', status: state.status },
     ...(d.value.memory_resident ? [{ title: t('bhyve.memoryResident'), value: fmtBytesStr(d.value.memory_resident) }] : []),
-    ...(d.value.uptime ? [{ title: t('dash.uptime'), value: fmtUptime(d.value.uptime) }] : []),
+    ...(d.value.uptime ? [{ title: t('common.uptime'), value: fmtUptime(d.value.uptime) }] : []),
     ...(d.value.vnc_port ? [{ title: 'VNC', value: `:${d.value.vnc_port}` }] : []),
     ...(d.value.console_port ? [{ title: t('common.console'), value: d.value.console_port }] : []),
   ];

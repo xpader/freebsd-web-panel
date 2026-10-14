@@ -137,7 +137,7 @@ onUnmounted(() => {
           <th>{{ t('supv.command') }}</th>
           <th>{{ t('common.status') }}</th>
           <th>PID</th>
-          <th>{{ t('supv.uptime') }}</th>
+          <th>{{ t('common.uptime') }}</th>
           <th>{{ t('supv.restartPolicy') }}</th>
           <th>{{ t('supv.autostart') }}</th>
           <th>{{ t('common.actions') }}</th>

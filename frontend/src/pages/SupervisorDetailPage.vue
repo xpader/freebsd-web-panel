@@ -32,7 +32,7 @@ const statusItems = computed(() => {
     { title: t('common.status'), value: stateLabel(p.value.state), type: 'badge', status: stateStatus(p.value.state) },
     { title: 'PID', value: p.value.pid ?? '—' },
     { title: 'Supervisor PID', value: p.value.sup_pid ?? '—' },
-    { title: t('supv.uptime'), value: p.value.uptime != null ? fmtUptime(p.value.uptime) : '—' },
+    { title: t('common.uptime'), value: p.value.uptime != null ? fmtUptime(p.value.uptime) : '—' },
   ];
 });
 

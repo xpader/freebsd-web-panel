@@ -84,7 +84,7 @@ onUnmounted(() => {
       </div>
       <div class="card stat-card">
         <div class="card-title"><i class="fa-solid fa-gauge-high"></i> {{ t('dash.runtimeStatus') }}</div>
-        <div class="stat-row"><span class="stat-label">{{ t('dash.uptime') }}</span><span class="stat-val">{{ fmtUptime(m.uptime_seconds) }}</span></div>
+        <div class="stat-row"><span class="stat-label">{{ t('common.uptime') }}</span><span class="stat-val">{{ fmtUptime(m.uptime_seconds) }}</span></div>
         <div class="stat-row"><span class="stat-label">{{ t('dash.loadavg') }}</span><span class="stat-val">{{ m.loadavg[0].toFixed(2) }} / {{ m.loadavg[1].toFixed(2) }} / {{ m.loadavg[2].toFixed(2) }}</span></div>
       </div>
     </div>

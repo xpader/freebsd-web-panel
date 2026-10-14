@@ -152,7 +152,7 @@ const fwpUptimeSec = computed(() => {
         <div class="debug-rss-hint">{{ t('debug.totalRssHint') }}</div>
       </div>
       <div class="card debug-rss-total">
-        <div class="debug-rss-label">{{ t('dash.uptime') }}</div>
+        <div class="debug-rss-label">{{ t('common.uptime') }}</div>
         <div class="debug-rss-value">{{ fwpUptimeSec == null ? '—' : fmtUptime(fwpUptimeSec) }}</div>
         <div class="debug-rss-hint">{{ t('debug.uptimeHint') }}</div>
       </div>
@@ -324,7 +324,7 @@ const fwpUptimeSec = computed(() => {
       <div class="debug-details-title">
         <i class="fa-solid fa-clock-rotate-left"></i> {{ t('tasks.subtitle') }}
         <span v-if="tasks.started_at" class="text-dim" style="margin-left:auto; font-size:12px; font-weight:normal;">
-          {{ t('dash.uptime') }}: {{ fmtUptime(fwpUptimeSec) }}
+          {{ t('common.uptime') }}: {{ fmtUptime(fwpUptimeSec) }}
         </span>
       </div>
       <table>
