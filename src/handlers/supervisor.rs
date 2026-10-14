@@ -135,7 +135,7 @@ pub async fn create(
     ))
 }
 
-/// PUT /api/supervisor/{id} — update a definition (only while stopped).
+/// PUT /api/supervisor/{id} — update a definition (rename requires stopped).
 pub async fn update(
     State(state): State<AppState>,
     user: AuthUser,
@@ -150,14 +150,17 @@ pub async fn update(
     let dir = state.config.paths.supervisor.clone();
     let st_name = old_name.clone();
     let st = run_blocking(move || Ok(supervisor::status(&dir, &st_name))).await?;
-    if st.state != "stopped" {
+    // Editing while running is allowed: stored fields only take effect on the
+    // next start. Renaming is not — runtime files (pidfiles, default log) are
+    // keyed by name, and a rename mid-run would break stop/cleanup.
+    let renamed = old_name != input.name;
+    if renamed && st.state != "stopped" {
         return Err(ApiError::Conflict(format!(
-            "process '{old_name}' must be stopped before editing"
+            "process '{old_name}' cannot be renamed while running"
         )));
     }
 
     let now = state.now_ts();
-    let renamed = old_name != input.name;
     let def = {
         let conn = state.db.lock().await;
         if renamed && supervisor::get_proc_by_name(&conn, &input.name)?.is_some() {
@@ -183,11 +186,11 @@ pub async fn update(
     );
     Ok(Json(ProcInfo {
         def,
-        state: "stopped",
-        sup_pid: None,
-        pid: None,
-        started_at: None,
-        uptime: None,
+        state: st.state,
+        sup_pid: st.sup_pid,
+        pid: st.pid,
+        started_at: st.started_at,
+        uptime: st.started_at.map(|s| (state.now_ts() - s).max(0)),
     }))
 }
 

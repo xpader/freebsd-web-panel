@@ -56,6 +56,7 @@ export function openSupervisorForm(formModal, t, toast, existing = null, onSaved
           log_file: r.log_file?.trim() || '',
           log_rotate: !!r.log_rotate,
           autostart: !!r.autostart,
+          restart: !!r.restart,
           restart_delay: r.restart ? (parseInt(r.restart_delay, 10) || 1) : 1,
           restart_max: r.restart && r.restart_max !== '' && r.restart_max != null
             ? parseInt(r.restart_max, 10)
@@ -63,7 +64,16 @@ export function openSupervisorForm(formModal, t, toast, existing = null, onSaved
         };
         if (isEdit) {
           await api.put(`/api/supervisor/${encodeURIComponent(existing.id)}`, body);
-          toast.toast(t('supv.updated', { name: body.name }));
+          // Fields that only shape the next spawn; changing them mid-run needs a restart.
+          const cmdChanged = ['path', 'workdir', 'user', 'restart', 'restart_delay'].some((k) => body[k] !== existing[k])
+            || JSON.stringify(body.args) !== JSON.stringify(existing.args)
+            || JSON.stringify(body.env) !== JSON.stringify(existing.env)
+            || (body.restart_max ?? null) !== (existing.restart_max ?? null);
+          if (existing.state && existing.state !== 'stopped' && cmdChanged) {
+            toast.toast(t('supv.pendingRestart', { name: body.name }));
+          } else {
+            toast.toast(t('supv.updated', { name: body.name }));
+          }
         } else {
           await api.post('/api/supervisor', body);
           toast.toast(t('supv.created', { name: body.name }));

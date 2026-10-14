@@ -93,7 +93,7 @@ CREATE TABLE supervisor_procs (
 
 - `SupervisorPage.vue`（列表）：搜索框 + 计数 + 刷新/创建（`.toolbar`，左侧有内容）→ 表格（**整行点击进详情**（`row-clickable`，操作列 `@click.stop` 阻止冒泡）/命令/PID/状态徽标/运行时长/自启/重启策略/操作 btn-group：启动｜停止｜重启｜编辑｜删除）→ 5s 轮询（onUnmounted 清理）。**列表不展示日志**——日志在详情页
 - `SupervisorDetailPage.vue`（详情，`GET /api/supervisor/{id}` 单条 + 5s 轮询）：
-  - 页头：BackButton + 名称 + 状态徽标 + 操作按钮（启动/停止/重启/编辑/删除，运行中禁用编辑/删除）
+  - 页头：BackButton + 名称 + 状态徽标 + 操作按钮（启动/停止/重启/编辑/删除；**运行中可编辑**（命令相关修改提示重启后生效），删除仍需先停止）
   - StatusBar：状态 / PID / Supervisor PID / 运行时长 + 刷新
   - 基础信息卡：命令、工作目录、运行用户、环境变量、重启策略、随面板启动、日志文件（自定义时显示）、日志/轮转开关、创建/更新时间（`kv-table four-col`）
   - 日志卡：自定义路径（mono 小字）+ 尺寸 + 刷新/清空按钮 + `<pre>` 尾部 500 行（随轮询自动刷新）；`logging=0` 时按钮禁用并提示
@@ -116,7 +116,7 @@ CREATE TABLE supervisor_procs (
 | GET | `/api/supervisor` | 定义 + 运行态（state/sup_pid/pid/started_at/uptime） |
 | GET | `/api/supervisor/{id}` | 单条定义 + 运行态（详情页用；404 处理不存在） |
 | POST | `/api/supervisor` | 创建（201） |
-| PUT | `/api/supervisor/{id}` | 更新（仅 stopped；改名时清理旧名运行时文件） |
+| PUT | `/api/supervisor/{id}` | 更新（任意状态可改，改动下次 start 生效；**运行中禁止改名**（pidfile/日志按名寻址）；停止态改名时清理旧名运行时文件） |
 | DELETE | `/api/supervisor/{id}` | 删除（仅 stopped；清理 pidfile/日志） |
 | POST | `/api/supervisor/{id}/start` `…/stop` `…/restart` | 生命周期 |
 | GET | `/api/supervisor/{id}/log?lines=200` | 日志尾部 `{size, content}` |
@@ -146,7 +146,7 @@ supervisor = "/var/db/fwp/supervisor"   # 运行时目录，启动时自动创�
 - `-C 1` + 快退进程 → 共运行 2 次（首次+1 重启）后 supervisor 放弃退出 → stopped
 - 停止 → supervisor/child 双退、pidfile 消失
 - `-u nobody` 降权（实测 uid=65534）+ `env` 传递（实测 `FWP_DEMO=yes`）
-- 运行中 PUT → 409；改名更新 → 旧名运行时文件清理；清日志 → size 0；删除 → 列表空
+- 运行中 PUT 改 path/args → 200（库更新、运行进程不受影响，下次 start 生效）；运行中改名 → 409；运行中 PUT 响应携带真实 state/uptime；改名更新 → 旧名运行时文件清理；清日志 → size 0；删除 → 列表空
 - `cargo test` 75/75 通过（含 `read_proc_start` 单测）；前端 `npm run build` 通过
 
 ## 7. 已知限制 / TODO

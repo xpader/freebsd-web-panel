@@ -148,7 +148,7 @@ onUnmounted(() => {
               <strong>{{ p.name }}</strong>
               <div class="text-dim" style="font-size:12px;">{{ p.user || 'root' }}</div>
             </td>
-            <td><code class="mono" style="font-size:12px;">{{ p.path }}<template v-if="p.args && p.args.length"> {{ p.args.join(' ') }}</template></code></td>
+            <td><code class="mono" style="font-size:12px;">{{ p.path }}</code></td>
             <td><span :class="stateBadge(p.state)">{{ stateLabel(p.state) }}</span></td>
             <td>{{ p.pid != null ? p.pid : '—' }}</td>
             <td>{{ p.uptime != null ? fmtUptime(p.uptime) : '—' }}</td>
@@ -159,7 +159,7 @@ onUnmounted(() => {
                 <button class="btn-secondary btn-sm" :disabled="busy || p.state !== 'stopped'" @click="control(p, 'start')" :title="t('common.start')"><i class="fa-solid fa-play"></i></button>
                 <button class="btn-secondary btn-sm" :disabled="busy || p.state === 'stopped'" @click="control(p, 'stop')" :title="t('common.stop')"><i class="fa-solid fa-stop"></i></button>
                 <button class="btn-secondary btn-sm" :disabled="busy || p.state === 'stopped'" @click="control(p, 'restart')" :title="t('common.restart')"><i class="fa-solid fa-rotate-right"></i></button>
-                <button class="btn-secondary btn-sm" :disabled="p.state !== 'stopped'" @click="showForm(p)" :title="p.state !== 'stopped' ? t('supv.stopFirst') : t('common.edit')"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn-secondary btn-sm" @click="showForm(p)" :title="t('common.edit')"><i class="fa-solid fa-pen"></i></button>
                 <button class="btn-danger btn-sm" :disabled="p.state !== 'stopped'" @click="removeProc(p)" :title="p.state !== 'stopped' ? t('supv.stopFirst') : t('common.delete')"><i class="fa-solid fa-trash"></i></button>
               </div>
             </td>

@@ -103,12 +103,7 @@ async function control(action) {
 }
 
 function showForm() {
-  const d = p.value;
-  if (d.state !== 'stopped') {
-    toast.toast(t('supv.stopFirst'));
-    return;
-  }
-  openSupervisorForm(formModal, t, toast, d, refreshAll);
+  openSupervisorForm(formModal, t, toast, p.value, refreshAll);
 }
 
 async function removeProc() {
@@ -161,7 +156,7 @@ onUnmounted(() => {
       <button class="btn-secondary btn-sm" :disabled="busy || p.state === 'stopped'" @click="control('restart')">
         <i class="fa-solid fa-rotate-right"></i> {{ t('common.restart') }}
       </button>
-      <button class="btn-secondary btn-sm" :disabled="p.state !== 'stopped'" :title="p.state !== 'stopped' ? t('supv.stopFirst') : ''" @click="showForm">
+      <button class="btn-secondary btn-sm" :disabled="busy" @click="showForm">
         <i class="fa-solid fa-pen-to-square"></i> {{ t('common.edit') }}
       </button>
       <button class="btn-danger btn-sm" :disabled="p.state !== 'stopped'" :title="p.state !== 'stopped' ? t('supv.stopFirst') : ''" @click="removeProc">
@@ -193,7 +188,7 @@ onUnmounted(() => {
         <tbody>
         <tr>
           <td>{{ t('supv.command') }}</td>
-          <td class="mono" colspan="3">{{ p.path }}<template v-if="p.args?.length"> {{ p.args.join(' ') }}</template></td>
+          <td class="mono" colspan="3">{{ p.path }}<span v-if="p.args?.length" class="text-dim">&nbsp;{{ p.args.join(' ') }}</span></td>
         </tr>
         <tr>
           <td>{{ t('supv.workdir') }}</td>
