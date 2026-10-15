@@ -221,6 +221,7 @@ const result = await formModal('添加仓库', fields, {
 - 所有 hover 态统一使用 `--hover-bg` 变量；选中态使用 `--accent-glow` 半透明辉光
 - 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.sidebar-toggle` 16px 收缩条 + `.main`）。侧栏收缩时 `.sidebar` 宽度动画到 0；`.sidebar-nav` 固定 `width: var(--sidebar-w)` 且 `margin-left: auto`（右锚定），动画期间内容保持原宽、整体向左滑出并被裁切，不随容器变窄而挤压换行。收缩条箭头方向切换
 - 表格横向滚动：在 `.card` 内的 `<table>` 外包一层 `<div class="table-wrap">`，容器设置 `overflow-x: auto`，内部 `th`/`td` 默认 `white-space: nowrap`（不挤压、不换行），仅 `.cell-wrap` 列允许换行吸收空间。视口缩窄时出现横向滚动条而非挤压内容。
+- 滚动容器边界（强制）：可滚动的内容区域必须有**可见边界**——滚动内容只能在有分界的地方截断，不允许在无明显分界处凭空消失（体验确定性）。实现方式三选一：外层容器边框（如 `.card`/`.term-host` 的 `1px solid var(--border)`）、头部栏分界线 + 背景区分、或独立深色滚动区。日志/文本类滚动视图参照终端式结构：`.card.log-card`（`padding:0; overflow:hidden`）→ `.log-header`（工具行，`border-bottom: 1px solid var(--border)` 全宽分界）→ `.log-view`（`max-height` 限高 + `overflow:auto`，背景用 `var(--term-bg)` 与头部区分、跟随明暗主题）。范例：SupervisorDetailPage 日志卡。
 - 按钮组：相邻的多个按钮包裹在 `<div class="btn-group">`（`display: flex; flex-wrap: nowrap`），防止换行且消除按钮间多余间距。
 - 搜索输入框：使用 `SearchInput.vue` 组件（`v-model` + `placeholder`），有内容时右侧显示清除按钮。底层由 `.search-input`（`position: relative`）+ `.search-clear` 定位实现。
 - 后台任务输出：使用 `TaskConsole.vue` 组件（prop: `task-id`，event: `done`），封装 SSE 连接管理、输出累积、自动滚动到底部、`[完成]` 后缀、错误回退轮询。PackagesPage、JailBasesPage、SmbInitPage、BhyveInitPage 共用。

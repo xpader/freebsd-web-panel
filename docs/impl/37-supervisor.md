@@ -96,7 +96,7 @@ CREATE TABLE supervisor_procs (
   - 页头：BackButton + 名称 + 状态徽标 + 操作按钮（启动/停止/重启/编辑/删除；**运行中可编辑**（命令相关修改提示重启后生效），删除仍需先停止）
   - StatusBar：状态 / PID / Supervisor PID / 运行时长 + 刷新
   - 基础信息卡：命令、工作目录、运行用户、环境变量、重启策略、随面板启动、日志文件（自定义时显示）、日志/轮转开关、创建/更新时间（`kv-table four-col`）
-  - 日志卡：自定义路径（mono 小字）+ 尺寸 + 刷新/清空按钮 + `<pre>` 尾部 500 行（随轮询自动刷新）；`logging=0` 时按钮禁用并提示
+  - 日志卡（终端式 `.card.log-card`）：`.log-header` 工具行（标题 + 自定义路径 mono 小字 + 尺寸 + 刷新/清空按钮）下 `border-bottom` 全宽分界线；`.log-view` 滚动区（`max-height:420px`、背景 `var(--term-bg)` 跟随明暗主题）显示尾部 500 行（随轮询自动刷新）。滚动边界准则见 [06-frontend.md](06-frontend.md)。`logging=0` 时按钮禁用并显示提示
 - 表单共享：`lib/supervisorForm.js` 的 `openSupervisorForm(formModal, t, toast, existing, onSaved)`——列表/详情两处共用同一字段集与提交映射。布局按归属分组：名称/可执行路径（`picker:'file'`）/参数 textarea/工作目录+运行用户（half 一行，`picker:'dir'`）/环境变量 textarea（参数/用户/环境变量的说明收进 label 旁 FieldHelp 问号）→ **记录日志** pill → 日志文件（`picker:'file'`）与 **自动轮转** pill（均 `showIf` 记录日志）→ **随面板启动** pill → **自动重启** pill → 重启延迟+上限（half 一行，`showIf` 自动重启）。开关均为 checkbox-group pill 风格（同 rsync 表单，选项级 FieldHelp），值存 formValues 故 `showIf` 联动不受影响
 
 ### 2.9 开机自启

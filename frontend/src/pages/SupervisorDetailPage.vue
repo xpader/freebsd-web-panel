@@ -70,7 +70,6 @@ async function load() {
     error.value = e.message || '';
   }
 }
-
 async function fetchLog() {
   if (!p.value || !p.value.logging) return;
   try {
@@ -225,11 +224,9 @@ onUnmounted(() => {
         </tbody>
       </table>
     </div>
-
-    <!-- Log -->
-    <div class="card">
-      <div class="flex" style="align-items:center;gap:8px;margin-bottom:8px;">
-        <h3 style="margin:0;">{{ t('supv.log') }}</h3>
+    <div class="card log-card">
+      <div class="log-header">
+        <h3>{{ t('supv.log') }}</h3>
         <span v-if="p.log_file" class="text-dim mono" style="font-size:12px;">{{ p.log_file }}</span>
         <span v-if="p.logging" class="text-dim" style="font-size:12px;">{{ fmtBytes(logSize) }}</span>
         <div class="btn-group" style="margin-left:auto;">
@@ -244,7 +241,7 @@ onUnmounted(() => {
       <div v-if="!p.logging" class="text-dim" style="padding:16px 0;text-align:center;">
         {{ t('supv.logDisabledTitle') }}
       </div>
-      <pre v-else class="mono" style="max-height:420px;overflow:auto;margin:0;white-space:pre-wrap;">{{ logContent || t('supv.logEmpty') }}</pre>
+      <pre v-else class="mono log-view">{{ logContent || t('supv.logEmpty') }}</pre>
     </div>
   </template>
 </template>
