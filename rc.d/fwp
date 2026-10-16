@@ -27,20 +27,11 @@ load_rc_config $name
 
 command=/usr/local/sbin/${name}
 command_args="--config ${fwp_config}"
-command_interpreter=
 pidfile=/var/run/${name}.pid
-
-start_cmd="${name}_start"
-
-fwp_start()
-{
-    check_process
-    if [ $? -eq 0 ]; then
-        echo "${name} already running (pid $(cat ${pidfile}))."
-        return 1
-    fi
-    echo "Starting ${name}."
-    /usr/sbin/daemon -f -p ${pidfile} -u ${fwp_user} ${command} ${command_args}
-}
+# fwp runs in the foreground; daemon(8) detaches it and owns the pidfile.
+# rc.subr's default start/stop/status resolve liveness via check_pidfile()
+# on ${pidfile} and refuse a second start while the recorded pid is alive,
+# so no custom start_cmd is needed.
+fwp_prepend="/usr/sbin/daemon -t freebsd-web-panel -f -p ${pidfile} -u ${fwp_user}"
 
 run_rc_command "$1"
