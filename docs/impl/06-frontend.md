@@ -217,6 +217,7 @@ const result = await formModal('添加仓库', fields, {
 ### CSS `src/assets/app.css`
 
 - 支持深色（默认）与浅色两套 CSS 变量主题，通过 `:root[data-theme="light"]` 覆盖 `:root` 默认变量实现切换（详见 [32-theming.md](32-theming.md)）
+- 字体（强制）：全站字体由 `:root` 的两个变量统一，不硬编码字体栈——`--font-sans`（`"Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif`，命名英文字体优先于系统默认，`body` 引用）与 `--font-mono`（`"SF Mono", "Cascadia Code", Menlo, Consolas, "DejaVu Sans Mono", monospace`，等宽场景与 `.mono` 类引用；组件内用 `var(--font-mono, monospace)` 带兜底）。只用各平台预装字体，不内嵌字体文件，逐字符回退（中文字形自动落到系统 CJK 字体）。
 - 品牌标识：渐变方块 logo（闪电图标）+ “fwp” 缩写文字，点击跳转仪表盘
 - 所有 hover 态统一使用 `--hover-bg` 变量；选中态使用 `--accent-glow` 半透明辉光
 - 布局：`#app` flex column → `.topbar`（52px sticky）+ `.body-wrap`（flex row：`.sidebar` 240px + `.sidebar-toggle` 16px 收缩条 + `.main`）。侧栏收缩时 `.sidebar` 宽度动画到 0；`.sidebar-nav` 固定 `width: var(--sidebar-w)` 且 `margin-left: auto`（右锚定），动画期间内容保持原宽、整体向左滑出并被裁切，不随容器变窄而挤压换行。收缩条箭头方向切换

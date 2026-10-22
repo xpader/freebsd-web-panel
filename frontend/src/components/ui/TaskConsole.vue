@@ -70,6 +70,6 @@ onUnmounted(() => { if (es) es.close(); });
 <template>
   <div
     ref="consoleRef"
-    style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all;"
+    style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-family:var(--font-mono,monospace); font-size:12px; white-space:pre-wrap; word-break:break-all;"
   >{{ output }}</div>
 </template>

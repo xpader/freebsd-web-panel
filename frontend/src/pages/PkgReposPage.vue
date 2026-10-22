@@ -388,7 +388,7 @@ onMounted(load);
   <div v-if="showRefresh" class="modal-overlay">
     <div class="modal" style="max-width:680px;">
       <h3><span v-if="!refreshDone" class="spinner"></span> {{ t('pkg.repoRefreshing') }}</h3>
-      <div style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all;">{{ refreshOutput }}</div>
+      <div style="max-height:400px; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:12px; font-family:var(--font-mono,monospace); font-size:12px; white-space:pre-wrap; word-break:break-all;">{{ refreshOutput }}</div>
       <div class="modal-actions">
         <button class="btn-secondary" :disabled="!refreshDone" @click="showRefresh = false">{{ t('common.close') }}</button>
       </div>

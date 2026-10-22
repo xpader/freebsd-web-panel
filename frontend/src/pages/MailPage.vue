@@ -436,7 +436,7 @@ onUnmounted(() => {
   overflow: auto;
   padding: 16px 20px;
   margin: 0;
-  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

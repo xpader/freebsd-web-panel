@@ -101,7 +101,7 @@ onMounted(load);
   border-radius: var(--radius);
   background: var(--bg-elev);
   color: var(--text);
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 14px;
   line-height: 1.6;
   resize: vertical;
