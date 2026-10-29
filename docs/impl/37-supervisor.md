@@ -84,10 +84,16 @@ CREATE TABLE supervisor_procs (
 - **每条目两个开关**（v5 表列）：`logging`（记不记日志）、`log_rotate`（要不要轮转），创建/编辑表单可改，默认全开；**日志文件路径可配置**（`log_file` 列，空 = 默认 `<dir>/<name>.log`，自定义绝对路径时 `-o`/读取/清空/轮转全部跟随该路径，且文件永不自动删除）
 
 - `logging=0`：daemon 不带 `-o/-H`，子进程输出由 supervisor 读出后丢弃（无文件、不阻塞；日志 API 幂等返回空，前端日志按钮禁用）
-- `log_rotate=0`：调度器跳过该条目（日志无限增长，由用户自担——表单帮助文案说明）
+- `log_rotate=0`：不生成 newsyslog 轮转条目（日志无限增长，由用户自担——表单帮助文案说明）
 - 读取：只读文件末尾 1 MiB，取最后 N 行（默认 200，上限 2000）
 - 清理：**rename + 删除 + SIGHUP supervisor**（`-H` 重开新文件）——直接 truncate 会留下守护进程 fd 偏移超 EOF 的稀疏空洞
-- 轮转：调度器任务 `supervisor-log-rotate`（每小时，首次延迟 10 分钟），`logging=1 && log_rotate=1` 且单文件 >10 MiB → rename `.log.old`（覆盖旧轮转）→ SIGHUP supervisor 重开
+- 轮转（v5.1 起改为 **newsyslog 托管**，取代旧的调度器 rename→`.log.old` 任务）：fwp 生成 `/usr/local/etc/newsyslog.conf.d/fwp.conf`（原子写，`[fwp 生成]` 头注释），每条 `logging=1 && log_rotate=1` 的条目一行：
+
+  ```text
+  <logfile> 600 3 10240 * JC <dir>/<name>.sup.pid
+  ```
+
+  系统 cron 每小时跑 `newsyslog`（与面板存活与否无关）→ >10 MiB 轮转、bzip2 压缩保留 3 代 → 按行尾 pidfile 列对 daemon(8) supervisor 发 SIGHUP → 因启动时带 `-H`，supervisor 关闭并重开 `-o` 日志，输出落入新文件（不会漏写进被 rename 的旧 inode）。**去重**：若日志路径已出现在 `/etc/newsyslog.conf` 或其 `<include>` 文件的活动行首字段（如自定义 `log_file` 指向系统日志），跳过该条目并 `tracing::warn`——同一文件两行会被轮转两次（newsyslog.conf(5) CAVEATS）。**同步时机**：`supervisor::startup()`（main 在 listener bind 之后调用一次，含运行目录确保与 autostart 拉起）+ 每次 create/update/delete 后（`sync_rotation`；DB 为唯一真相，全量重生成，脏行无法存活）。**注意**：手工为 fwp 日志路径在 `/etc/newsyslog.conf` 加的行会造成去重跳过——应删除手工行，交由面板生成
 
 ### 2.8 前端
 

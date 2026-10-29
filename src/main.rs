@@ -87,10 +87,6 @@ async fn main() -> anyhow::Result<()> {
         crate::db::user_count(&conn)?
     };
 
-    // Ensure the supervisor runtime dir exists (pidfiles + logs).
-    if let Err(e) = std::fs::create_dir_all(&state.config.paths.supervisor) {
-        tracing::warn!(error = %e, "cannot create supervisor dir; continuing");
-    }
     if user_count == 0 {
         tracing::warn!("no users yet — first-run setup required via the web UI");
     }
@@ -127,8 +123,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "FWP listening (HTTP)");
 
-    // Pull up autostart-guarded entries (best effort; logged, never fatal).
-    tokio::spawn(crate::supervisor::autostart(state.clone()));
+    // Supervisor subsystem: runtime dir, newsyslog rotation sync, autostart
+    // (best effort; logged, never fatal). Runs after the bind so a taken
+    // port leaves no side effects behind.
+    crate::supervisor::startup(&state).await;
 
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())

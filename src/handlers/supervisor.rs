@@ -114,6 +114,7 @@ pub async fn create(
         }
         supervisor::create_proc(&conn, &input, now)?
     };
+    supervisor::sync_rotation(&state).await?;
     audit::record(
         &state,
         Some(&user.username),
@@ -176,6 +177,7 @@ pub async fn update(
         let dir = state.config.paths.supervisor.clone();
         run_blocking(move || Ok(supervisor::remove_runtime_files(&dir, &old))).await?;
     }
+    supervisor::sync_rotation(&state).await?;
     audit::record(
         &state,
         Some(&user.username),
@@ -219,6 +221,7 @@ pub async fn delete(
     let dir = state.config.paths.supervisor.clone();
     let del_name = def.name.clone();
     run_blocking(move || Ok(supervisor::remove_runtime_files(&dir, &del_name))).await?;
+    supervisor::sync_rotation(&state).await?;
     audit::record(
         &state,
         Some(&user.username),
