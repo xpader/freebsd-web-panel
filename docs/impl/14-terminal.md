@@ -110,34 +110,28 @@
 
 ### 前端
 
-两个终端页面共用相同的 xterm.js 集成模式：
+三个终端页面共用组件 **`components/ui/TermView.vue`**（封装 xterm 完整生命周期：Terminal/FitAddon 构造、WS 连接与协议、ResizeObserver 防抖自适应、状态徽标、重连、独立窗口弹开、`onUnmounted` 清理、主题联动），页面只声明差异（`query` 参数、`back` 返回链接、`#title` 插槽）：
 
-- **`ShellPage.vue`**（路由 `/shell`）— 宿主终端，WS URL 不含 `jail` 参数。
-- **`JailTerminalPage.vue`**（路由 `/jails/terminal/:name`）— Jail 终端，WS URL 附加 `&jail=<name>`，标题显示「容器终端: <name>」，返回按钮指向 Jail 详情页。
-- 使用 `@xterm/xterm` Terminal 核心 + `@xterm/addon-fit` 自适应尺寸。
-- `term.onData` → 发 `{type:input}`；`ws.onmessage` output → `term.write`。
-- `ResizeObserver` 监听容器尺寸 → `fitAddon.fit()` → `term.onResize` 发 `{type:resize}`。
-- 工具栏：连接状态徽标 + 「重新连接」按钮（断开后启用）。
-- **生命周期清理**：`onUnmounted` 调用 `cleanup()`（关闭 WS、`term.dispose()`、断开 observer），触发服务端清理。
+- **`ShellPage.vue`**（路由 `/shell`）— 宿主终端，无额外 WS 参数、无返回按钮
+- **`JailTerminalPage.vue`**（路由 `/jails/terminal/:name`）— `:query="{ jail: name }"`，返回按钮指向 Jail 详情页
+- **`BhyveConsolePage.vue`**（路由 `/bhyve/console/:name`）— `:query="{ vm: name }"`，返回按钮指向 VM 详情页
+- 协议：`term.onData` → 发 `{type:input}`；`ws.onmessage` output → `term.write`；`ResizeObserver` 防抖 80ms → `fitAddon.fit()` → `term.onResize` 发 `{type:resize}`
+- 等宽字体：`TERM_FONT`（`lib/term-theme.js`）读取 `:root` 的 `--font-mono` 计算值传入 `fontFamily` 选项——xterm 选项不解析 CSS `var()`，不能直接写变量名
+- 生命周期清理：`onUnmounted` 调用 `cleanup()`（关闭 WS、`term.dispose()`、断开 observer），触发服务端清理
 
 **入口**：
 - Jail 详情页（`JailDetailPage.vue`）头部 — 仅当 `running`（jid > 0）时显示「终端」按钮。
 - Jail 列表页（`JailsListPage.vue`）操作列 — 仅当 `jid > 0` 时显示终端图标按钮。
 
-### 第三方库（vendor）
+### 第三方库
 
-`web/vendor/xterm/` 下本地副本（无构建步骤，随二进制内嵌）：
-
-| 文件 | 来源 |
-|---|---|
-| `xterm.js` | `@xterm/xterm@5.5.0`（UMD，暴露 `window.Terminal`） |
-| `xterm.css` | `@xterm/xterm@5.5.0` |
-| `xterm-addon-fit.js` | `@xterm/addon-fit@0.10.0`（暴露 `window.FitAddon.FitAddon`） |
+npm 包，经 Vite 打包随二进制内嵌：`@xterm/xterm@5.5.0`（Terminal 核心）+ `@xterm/addon-fit@0.10.0`（自适应尺寸）。
 
 ### 菜单与路由
 
 - 宿主终端菜单：概览 → 终端（`fa-solid fa-terminal`），路由 `/shell`
 - Jail 终端路由：`/jails/terminal/:name`（不在侧栏菜单，从 Jail 详情页/列表页入口进入）
+- Bhyve 控制台路由：`/bhyve/console/:name`（不在侧栏菜单，从 Bhyve 详情页/列表页操作列进入）
 - 侧栏高亮：`/jails/terminal/*` 以 `/jails/` 前缀匹配 virtualization 组
 
 ## API
@@ -146,6 +140,7 @@
 |---|---|---|---|
 | GET（Upgrade） | `/api/term/ws?token=<token>` | 查询参数 token | 升级为 WebSocket，开始宿主终端会话 |
 | GET（Upgrade） | `/api/term/ws?token=<token>&jail=<name>` | 查询参数 token | 升级为 WebSocket，进入指定 Jail 的 root 终端会话（Jail 必须运行中） |
+| GET（Upgrade） | `/api/term/ws?token=<token>&vm=<name>` | 查询参数 token | 升级为 WebSocket，连接指定 Bhyve 虚拟机控制台 |
 
 ## 外部依赖
 

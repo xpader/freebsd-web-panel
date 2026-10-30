@@ -57,3 +57,7 @@ const LIGHT = {
 export function termTheme(effective) {
   return effective === 'light' ? LIGHT : DARK;
 }
+
+// Terminal monospace font — mirrors the global --font-mono (app.css).
+// xterm options don't resolve CSS var(); read the computed value once instead.
+export const TERM_FONT = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() || 'monospace';
