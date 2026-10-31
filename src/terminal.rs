@@ -23,6 +23,26 @@ use crate::AppState;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
+/// Frame opcodes — one WS message = 1 printable opcode char + payload (see
+/// docs/impl/14-terminal.md). WebSocket message boundaries delimit frames,
+/// so there is no length prefix. Opcodes are ASCII letters (ttyd precedent)
+/// so hexdump/tcpdump/wireshark captures are self-describing without a
+/// lookup table; c→s ('i'/'r') and s→c ('o'/'x'/'e') never share a letter,
+/// so misrouted frames are immediately visible. Unknown opcodes and
+/// malformed frames are dropped (logged at debug).
+mod op {
+    /// c→s: payload = raw bytes to write to the PTY (keystrokes / paste).
+    pub const INPUT: u8 = b'i';
+    /// c→s: payload = "<cols>,<rows>" ASCII decimal, e.g. "100,30".
+    pub const RESIZE: u8 = b'r';
+    /// s→c: payload = raw PTY output bytes, passed through unmodified.
+    pub const OUTPUT: u8 = b'o';
+    /// s→c: shell exited (no payload).
+    pub const EXIT: u8 = b'x';
+    /// s→c: payload = UTF-8 session-setup error message.
+    pub const ERROR: u8 = b'e';
+}
+
 /// What process the terminal session runs.
 enum SpawnTarget {
     /// A login shell on the host.
@@ -110,7 +130,7 @@ async fn run_session(mut socket: WebSocket, user: AuthUser, target: SpawnTarget)
     let (master, _slave_path, shell) = match setup_pty(&target) {
         Ok(v) => v,
         Err(e) => {
-            send_text(&mut socket, "error", &e).await;
+            send_frame(&mut socket, op::ERROR, e.as_bytes()).await;
             return;
         }
     };
@@ -150,40 +170,51 @@ async fn run_session(mut socket: WebSocket, user: AuthUser, target: SpawnTarget)
         tokio::select! {
             msg = out_rx.recv() => match msg {
                 Some(data) => {
-                    let text = String::from_utf8_lossy(&data).into_owned();
-                    let payload = serde_json::json!({ "type": "output", "data": text }).to_string();
-                    if ws_sender.send(Message::Text(payload.into())).await.is_err() {
+                    // Raw PTY bytes — no server-side UTF-8 conversion; xterm's
+                    // internal decoder handles encoding client-side.
+                    tracing::trace!(len = data.len(), "output");
+                    let mut frame = Vec::with_capacity(1 + data.len());
+                    frame.push(op::OUTPUT);
+                    frame.extend_from_slice(&data);
+                    if ws_sender.send(Message::Binary(frame.into())).await.is_err() {
                         break;
                     }
                 }
                 None => {
                     // PTY reader ended → shell exited.
-                    let payload = serde_json::json!({ "type": "exit" }).to_string();
-                    let _ = ws_sender.send(Message::Text(payload.into())).await;
+                    tracing::debug!("shell exited, closing session");
+                    let _ = ws_sender
+                        .send(Message::Binary(vec![op::EXIT].into()))
+                        .await;
                     break;
                 }
             },
             msg = ws_receiver.next() => match msg {
-                Some(Ok(Message::Text(t))) => {
-                    if let Some(action) = parse_control(t.as_str()) {
-                        match action {
-                            Action::Input(bytes) => {
-                                if in_tx.send(bytes).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Action::Resize(cols, rows) => {
-                                let _ = set_winsize(master, cols, rows);
-                            }
+                Some(Ok(Message::Binary(v))) => match v.split_first() {
+                    Some((&op::INPUT, payload)) => {
+                        tracing::trace!(len = payload.len(), "input");
+                        if in_tx.send(payload.to_vec()).await.is_err() {
+                            break;
                         }
                     }
-                }
-                Some(Ok(Message::Binary(b))) => {
-                    // Allow raw binary input for low-latency keystrokes.
-                    if in_tx.send(b.to_vec()).await.is_err() {
-                        break;
+                    Some((&op::RESIZE, payload)) => match parse_resize(payload) {
+                        Some((cols, rows)) => {
+                            tracing::debug!(cols, rows, "resize");
+                            let _ = set_winsize(master, cols, rows);
+                        }
+                        None => tracing::debug!(
+                            payload = %String::from_utf8_lossy(payload),
+                            "dropped malformed resize frame"
+                        ),
+                    },
+                    Some((&opcode, _)) => {
+                        tracing::debug!("ignored unknown opcode {:?}", opcode as char);
                     }
-                }
+                    None => tracing::debug!("ignored empty frame"),
+                },
+                // Text frames are not part of the protocol (hard cut: client
+                // ships in the same binary, so there is no compat window).
+                Some(Ok(Message::Text(_))) => {}
                 Some(Ok(Message::Close(_))) | None => break,
                 _ => {}
             }
@@ -205,30 +236,25 @@ async fn run_session(mut socket: WebSocket, user: AuthUser, target: SpawnTarget)
     let _ = user; // retained so the session is bound to an identity
 }
 
-enum Action {
-    Input(Vec<u8>),
-    Resize(u16, u16),
+/// Parse an 'r' payload: `"<cols>,<rows>"` ASCII decimal (e.g. `"100,30"`).
+/// Returns None for malformed input — the frame is then dropped. Zero
+/// cols/rows are rejected: the kernel accepts them but fullscreen programs
+/// misbehave with a zero-sized window.
+fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {
+    let text = std::str::from_utf8(payload).ok()?;
+    let (cols, rows) = text.split_once(',')?;
+    let cols: u16 = cols.trim().parse().ok()?;
+    let rows: u16 = rows.trim().parse().ok()?;
+    (cols > 0 && rows > 0).then_some((cols, rows))
 }
 
-fn parse_control(text: &str) -> Option<Action> {
-    let v: serde_json::Value = serde_json::from_str(text).ok()?;
-    match v.get("type")?.as_str()? {
-        "input" => {
-            let s = v.get("data")?.as_str()?;
-            Some(Action::Input(s.as_bytes().to_vec()))
-        }
-        "resize" => {
-            let cols = v.get("cols").and_then(|x| x.as_u64()).unwrap_or(DEFAULT_COLS as u64) as u16;
-            let rows = v.get("rows").and_then(|x| x.as_u64()).unwrap_or(DEFAULT_ROWS as u64) as u16;
-            Some(Action::Resize(cols, rows))
-        }
-        _ => None,
-    }
-}
-
-async fn send_text(socket: &mut WebSocket, kind: &str, msg: &str) {
-    let payload = serde_json::json!({ "type": kind, "data": msg }).to_string();
-    let _ = socket.send(Message::Text(payload.into())).await;
+/// Send one binary control frame (opcode + payload), then close the socket.
+/// Only used for the pre-session setup-error path.
+async fn send_frame(socket: &mut WebSocket, opcode: u8, payload: &[u8]) {
+    let mut frame = Vec::with_capacity(1 + payload.len());
+    frame.push(opcode);
+    frame.extend_from_slice(payload);
+    let _ = socket.send(Message::Binary(frame.into())).await;
     let _ = socket.send(Message::Close(None)).await;
 }
 

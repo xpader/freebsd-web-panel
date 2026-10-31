@@ -89,24 +89,26 @@
 
 > PTY master 写入在 slave 关闭后返回 `EIO`（非 SIGPIPE），`write_all_fd()` 据此返回 `false` 让 writer 安全退出，不会误杀服务进程。
 
-### 协议（JSON over WebSocket 文本帧）
+### 协议（二进制帧）
+
+每条 WS 消息 = **1 个可打印 ASCII 操作码字符 + 负载**，协议全形状人读。WebSocket 消息边界即帧边界，无需长度前缀；帧大小由服务端 8192B PTY read 缓冲自然约束。操作码用 ASCII 字母（ttyd 惯例）——hexdump/tcpdump/wireshark 抓包首字节即语义，无需查表；c→s（`i`/`r`）与 s→c（`o`/`x`/`e`）字母不重合，错向帧立即可辨；未知操作码或畸形帧丢弃并记 debug 日志。无版本协商——前端内嵌于同一二进制，两端原子部署，不存在新旧共存窗口（硬切，旧 JSON 文本帧直接忽略）。
 
 客户端 → 服务端：
 
-| type | 字段 | 说明 |
+| 操作码 | 帧义 | 负载 |
 |---|---|---|
-| `input` | `data: string` | 发往 shell 的按键 / 粘贴内容 |
-| `resize` | `cols, rows: number` | 更新 PTY 窗口尺寸 |
-
-（也接受二进制帧作为原始输入，便于低延迟按键直传。）
+| `i` (0x69) | `INPUT` | 写入 shell 的按键/粘贴，任意字节（`term.onData` 前缀 `'i'` 后整体 TextEncoder；`term.onBinary` 的非 UTF-8 输入如 X10 鼠标上报按 charCode 逐字节直传） |
+| `r` (0x72) | `RESIZE` | `"<cols>,<rows>"` ASCII 十进制（如 `"100,30"`）；解析失败（非 UTF-8/非数字/含 0）整帧丢弃 |
 
 服务端 → 客户端：
 
-| type | 字段 | 说明 |
+| 操作码 | 帧义 | 负载 |
 |---|---|---|
-| `output` | `data: string` | shell 的输出（`String::from_utf8_lossy` 转码） |
-| `exit` | — | shell 已退出 |
-| `error` | `data: string` | 会话初始化失败原因 |
+| `o` (0x6F) | `OUTPUT` | PTY 原始输出字节，服务端零转换透传（UTF-8 解码由 xterm.js 内置解码器完成） |
+| `x` (0x78) | `EXIT` | 空（shell 已退出） |
+| `e` (0x65) | `ERROR` | UTF-8 会话初始化失败消息 |
+
+> 历史：2026-06 初版为 JSON 文本帧协议（`{"type":"output","data":"..."}`）。2026-10 改为二进制帧（`0x01/0x02/0x10/0x11/0x12`）：消除 ESC/换行的 JSON 转义膨胀（ANSI 密集输出实测约 1.6×）、每帧 serde 序列化 + `JSON.parse` 开销，并修复服务端 `from_utf8_lossy` 吞非 UTF-8 字节的限制。随后操作码改为可打印 ASCII 字母并对齐 ttyd 惯例、resize 负载文本化——协议形状全人读，抓包自描述。观测配套：服务端每帧 trace/debug 日志（`RUST_LOG=fwp::terminal=trace`，resize/未知操作码/会话退出在 debug 级）。
 
 ### 前端
 
@@ -115,7 +117,8 @@
 - **`ShellPage.vue`**（路由 `/shell`）— 宿主终端，无额外 WS 参数、无返回按钮
 - **`JailTerminalPage.vue`**（路由 `/jails/terminal/:name`）— `:query="{ jail: name }"`，返回按钮指向 Jail 详情页
 - **`BhyveConsolePage.vue`**（路由 `/bhyve/console/:name`）— `:query="{ vm: name }"`，返回按钮指向 VM 详情页
-- 协议：`term.onData` → 发 `{type:input}`；`ws.onmessage` output → `term.write`；`ResizeObserver` 防抖 80ms → `fitAddon.fit()` → `term.onResize` 发 `{type:resize}`
+- 协议（ASCII 操作码帧，见上文）：`term.onData` → 发 `'i'`+字节；`ws.onmessage` `'o'` → `term.write(Uint8Array)`；`ResizeObserver` 防抖 80ms → `fitAddon.fit()` → `term.onResize` 发 `'r'`+`"cols,rows"` 文本
+- 剪贴板（xterm.js 核心将三条剪贴板通路全部留给宿主应用）：① 粘贴——按键处理器对 Ctrl/Cmd/Ctrl+Shift+V 返回 `false`（不 preventDefault），浏览器原生粘贴落在 xterm 隐藏 textarea 上，走与右键菜单相同的 DOM `paste` 事件通路（无 clipboard API、无 HTTPS 要求）；② 复制（Windows Terminal 语义）——有选中时 Ctrl+C / Cmd+C 返回 `false` 放行原生 `copy` 事件（xterm copyHandler 写入选中文本），无选中时 Ctrl+C 照发 `^C`（SIGINT）、Cmd+C 吞掉以防空选中的原生 copy 清空剪贴板，Ctrl+Shift+C 走 `copyToClipboard`；③ OSC 52——`term.parser.registerOscHandler(52, …)` 解码 base64 后复制，`?` 查询形式忽略（防剪贴板经终端回读）。**复制降级链**（`copyToClipboard`）：1) `navigator.clipboard.writeText`（仅安全上下文）→ 2) 离屏 textarea + `document.execCommand('copy')`——不需安全上下文，只需 transient user activation，而触发 yank 的按键/鼠标事件本身就授予激活（OSC 52 通常在触发后几十毫秒内到达，落在激活窗口内），**纯 HTTP 下 vim/tmux yank 也能直接成功**→ 两级都失败（无激活，如程序在用户最后一次交互很久后自发写剪贴板）仅 `console.warn` 记录原因（含字节数、protocol、isSecureContext/错误对象），不弹窗。降级到第 2 级用 `console.debug`。代价：键盘无法再向 shell 发送 `^V`（quoted-insert，极少用）
 - 等宽字体：`TERM_FONT`（`lib/term-theme.js`）读取 `:root` 的 `--font-mono` 计算值传入 `fontFamily` 选项——xterm 选项不解析 CSS `var()`，不能直接写变量名
 - 生命周期清理：`onUnmounted` 调用 `cleanup()`（关闭 WS、`term.dispose()`、断开 observer），触发服务端清理
 
@@ -155,7 +158,7 @@ npm 包，经 Vite 打包随二进制内嵌：`@xterm/xterm@5.5.0`（Terminal �
 ## 已知限制 / 安全
 
 - **继承进程身份**：宿主终端以 fwp 进程的有效用户身份运行（通常为 root，但若以普通用户启动 fwp 则为该用户）。Jail 终端始终以容器内 root 身份运行（`login -f root`）。任何通过认证的面板用户都能获得终端。当前无按角色限制（与其它模块一致的「已登录即可用」模型）。如需收紧，可在 `ws_handler` 中按 `user.role` 拦截。
-- **输出编码**：PTY 字节流用 `from_utf8_lossy` 转为字符串，遇到非 UTF-8 字节会被替换字符吞掉（对正常 shell 使用无影响）。
+- **输出编码**：PTY 字节原样透传（服务端零转换），UTF-8 解码由 xterm.js 内置解码器完成；无效 UTF-8 序列在显示层替换为 U+FFFD——字节在帧内不丢失，仅显示时替换。
 - **会话数无上限**：未限制并发终端会话数；大量会话会占阻塞线程池（每会话 2 个 `spawn_blocking`）与内存。
 - **无录屏/回放**：会话内容不落盘（仅审计日志记录「会话开启」事件，Jail 模式含 Jail 名称）。
 - **Jail 停止时**：Jail 终端会话期间若 Jail 被停止，`jexec` 子进程被终止，PTY reader 收到 EOF，会话自动结束（客户端显示「会话已结束」并允许重连）。
